@@ -120,6 +120,8 @@ class Space:
     space_id: str
     space_name: str
     instructions: str = ""
+    # 所属项目：建空间时取自请求，之后不变
+    project_id: str = ""
     domains: list[Domain] = field(default_factory=list)
     # 清空主题时加 1；受理时记下，整理写库前核对，清空前提交的任务不再写回（PRD）
     epoch: int = 0
@@ -132,6 +134,7 @@ class Space:
     def to_props(self) -> dict[str, Any]:
         return {
             "space_id": self.space_id,
+            "project_id": self.project_id,
             "space_name": self.space_name,
             "instructions": self.instructions,
             "domains": [asdict(d) for d in self.domains],
@@ -146,6 +149,7 @@ class Space:
             space_id=p.get("space_id", ""),
             space_name=p.get("space_name", ""),
             instructions=p.get("instructions", "") or "",
+            project_id=p.get("project_id", "") or "",
             domains=[Domain(**d) for d in p.get("domains") or []],
             epoch=int(p.get("epoch") or 0),
             create_time=p.get("create_time") or now_iso(),

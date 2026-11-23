@@ -32,7 +32,7 @@ python3 docker/project-memory/smoke.py \
 
 | 用途 | 关键配置与默认值 |
 | --- | --- |
-| 本地项目身份 | `PROJECT_MEMORY_PROJECT_ID=local-project`。两个实例使用相同值。 |
+| 项目身份 | 不通过环境变量配置：`create_space` 和项目记忆的 `add` 请求必须带 `project_id`，云端由网关鉴权后填入。 |
 | 项目数据库 | `PROJECT_MEMORY_GRAPH_DB=postgres`，`PROJECT_MEMORY_POSTGRES_SCHEMA=project_memory`。数据库通过 `127.0.0.1:5433` 从本机访问。 |
 | Redis Streams | `MEMSCHEDULER_USE_REDIS_QUEUE=true`。`REDIS_*` 和 `MEMSCHEDULER_REDIS_*` 都指向 `redis:6379`。可通过 `docker compose -f docker/project-memory/docker-compose.yml exec redis redis-cli` 从容器内查看。 |
 | 模型 | `PROJECT_MEMORY_LLM_*`、`PROJECT_MEMORY_JUDGE_LLM_*` 和 `PROJECT_MEMORY_EMBEDDER_*`。 |

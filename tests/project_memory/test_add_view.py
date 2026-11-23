@@ -13,7 +13,14 @@ add_store = test_add_store.add_store
 
 def test_preserves_domain_identity_and_topic_reads(add_store):
     view = RelationalProjectView(add_store)
-    view.put_space(Space(space_id="space", space_name="A", domains=[Domain("development")]))
+    view.put_space(
+        Space(
+            space_id="space",
+            project_id="project-a",
+            space_name="A",
+            domains=[Domain("development")],
+        )
+    )
     with add_store.transaction() as cursor:
         cursor.execute("SELECT id FROM domains WHERE space_id = 'space'")
         domain_id = cursor.fetchone()["id"]
@@ -38,10 +45,18 @@ def test_preserves_domain_identity_and_topic_reads(add_store):
 
 def test_clear_fences_open_episodes(add_store):
     view = RelationalProjectView(add_store)
-    view.put_space(Space(space_id="space", space_name="A", domains=[Domain("development")]))
+    view.put_space(
+        Space(
+            space_id="space",
+            project_id="project-a",
+            space_name="A",
+            domains=[Domain("development")],
+        )
+    )
     accept = AddAcceptance(add_store)
     accept.accept(
         SimpleNamespace(
+            project_id="project-a",
             user_id="member",
             space_ids=["space"],
             conversation_id="chat",
@@ -58,3 +73,20 @@ def test_clear_fences_open_episodes(add_store):
     assert episode["closed_at"] == episode["cleared_at"]
     assert episode["outcome"] == "failed"
     assert episode["error"]["reason"] == "SPACE_CLEARED"
+
+
+def test_spaces_keep_the_project_they_were_created_in(add_store):
+    """create_space writes the request's project; later edits keep it, and each Space reads back."""
+    from memos.project_memory.judge import ModelHub
+    from memos.project_memory.service import ProjectMemoryService
+
+    service = ProjectMemoryService(RelationalProjectView(add_store), ModelHub(llm=None))
+    a = service.create_space("project-a", "A", "", [{"name": "development"}])
+    b = service.create_space("project-b", "B")
+    service.update_space(a.space_id, space_name="A2")
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT id, project_id, space_name FROM spaces ORDER BY space_name")
+        rows = [(r["id"], r["project_id"], r["space_name"]) for r in cursor.fetchall()]
+    assert rows == [(a.space_id, "project-a", "A2"), (b.space_id, "project-b", "B")]
+    assert service.get_space(b.space_id).project_id == "project-b"
+    assert service.list_domains(a.space_id) == [{"name": "development", "description": ""}]

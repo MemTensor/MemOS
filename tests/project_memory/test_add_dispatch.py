@@ -22,7 +22,6 @@ def database():
         pytest.skip("PG_TEST_DSN is required")
     store = PostgresAddStore(
         {"dsn": dsn, "schema_name": f"dispatch_{uuid4().hex}", "embedding_dimension": 3},
-        project_id="sample",
     )
     yield store
     with store.transaction() as cursor:

@@ -20,6 +20,7 @@ REASONS: list[tuple[str, int, str]] = [
     ("每个 Space 最多", 400, "DOMAIN_LIMIT_EXCEEDED"),
     ("领域改名冲突", 400, "DOMAIN_RENAME_CONFLICT"),
     ("领域仍被主题引用", 400, "DOMAIN_IN_USE"),
+    ("project_id 不能为空", 400, "FIELD_EMPTY"),
     ("space_name 不能为空", 400, "FIELD_EMPTY"),
     ("领域名称不能为空", 400, "FIELD_EMPTY"),
     ("filter", 400, "INVALID_FILTER"),

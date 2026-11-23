@@ -22,9 +22,12 @@ def json_value(value: Any) -> Any:
 
 
 class PostgresAddStore:
-    """A connection pool with an explicit project scope for each store instance."""
+    """A connection pool over the shared project memory schema.
 
-    def __init__(self, config: dict[str, Any], *, project_id: str, pool: Any | None = None) -> None:
+    The store serves every project: a row's project comes from the request or from the Space
+    that owns it, never from the process environment."""
+
+    def __init__(self, config: dict[str, Any], *, pool: Any | None = None) -> None:
         try:
             from psycopg2 import sql
             from psycopg2.extras import RealDictCursor
@@ -32,9 +35,6 @@ class PostgresAddStore:
         except ImportError as exc:
             raise ImportError("Project memory Add requires the psycopg2 PostgreSQL driver") from exc
 
-        if not project_id.strip():
-            raise ValueError("Project memory Add requires a trusted project ID")
-        self.project_id = project_id
         self.schema_name = config.get("schema_name") or "project_memory"
         self.dim = int(config.get("embedding_dimension") or 1024)
         self.retrieval_index = bool(config.get("retrieval_index"))
@@ -149,8 +149,8 @@ class PostgresAddStore:
             cursor.execute(
                 f"""SELECT s.*, {SPACE_STATE} FROM spaces s
                       LEFT JOIN add_space_state st ON st.space_id = s.id
-                    WHERE s.project_id = %s AND s.id = %s""",
-                (self.project_id, space_id),
+                    WHERE s.id = %s""",
+                (space_id,),
             )
             return cursor.fetchone()
 
@@ -172,25 +172,25 @@ class PostgresAddStore:
                       AS resource_bindings, s.cleared_at
                FROM episodes e JOIN spaces s ON s.id = e.space_id AND s.project_id = e.project_id
                  LEFT JOIN add_space_state st ON st.space_id = s.id
-               WHERE e.project_id = %s AND e.id = %s""",
-            (self.project_id, episode_id),
+               WHERE e.id = %s""",
+            (episode_id,),
         )
         episode = cursor.fetchone()
         if episode is None:
             return None
         cursor.execute(
             """SELECT * FROM episode_turns
-               WHERE project_id = %s AND episode_id = %s ORDER BY turn_seq, turn_id""",
-            (self.project_id, episode_id),
+               WHERE episode_id = %s ORDER BY turn_seq, turn_id""",
+            (episode_id,),
         )
         turns = cursor.fetchall()
         cursor.execute(
             """SELECT m.*, et.task_id AS origin_task_id, et.user_id AS origin_user_id,
                       et.accepted_at AS origin_accepted_at
                FROM episode_turns et JOIN messages m USING (project_id, conversation_key, turn_id)
-               WHERE et.project_id = %s AND et.episode_id = %s
+               WHERE et.episode_id = %s
                ORDER BY et.turn_seq, m.msg_seq, m.message_id""",
-            (self.project_id, episode_id),
+            (episode_id,),
         )
         episode["messages"] = cursor.fetchall()
         episode["turns"] = turns
@@ -207,11 +207,10 @@ class PostgresAddStore:
         with self.transaction(readonly=True) as cursor:
             return load_topics(
                 cursor,
-                """s.project_id = %s AND t.space_id = %s
+                """t.space_id = %s
                    AND (%s::text[] IS NULL OR d.domain = ANY(%s::text[]))
                    AND (%s::text[] IS NULL OR t.id = ANY(%s::text[]))""",
                 (
-                    self.project_id,
                     space_id,
                     None if domains is None else list(domains),
                     None if domains is None else list(domains),
@@ -231,13 +230,13 @@ class PostgresAddStore:
                           ) END AS previous
                    FROM (
                        SELECT * FROM episodes
-                       WHERE project_id = %s AND space_id = %s AND staged_status = 'active'
+                       WHERE space_id = %s AND staged_status = 'active'
                        ORDER BY last_turn_at DESC, id LIMIT %s
                    ) e
                    LEFT JOIN episodes p ON p.id = e.previous_episode_id
                        AND p.project_id = e.project_id AND p.space_id = e.space_id
                        AND p.conversation_key = e.conversation_key
                    ORDER BY e.last_turn_at DESC, e.id""",
-                (self.project_id, space_id, limit),
+                (space_id, limit),
             )
             return cursor.fetchall()

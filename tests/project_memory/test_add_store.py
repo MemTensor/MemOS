@@ -20,9 +20,7 @@ def add_store():
     if not dsn:
         pytest.skip("PG_TEST_DSN is required for the relational project memory tests")
     schema = f"test_add_{uuid.uuid4().hex}"
-    store = PostgresAddStore(
-        {"dsn": dsn, "schema_name": schema, "embedding_dimension": 3}, project_id="project-a"
-    )
+    store = PostgresAddStore({"dsn": dsn, "schema_name": schema, "embedding_dimension": 3})
     try:
         yield store
     finally:
@@ -54,7 +52,8 @@ def test_schema_and_rollback(add_store):
     assert add_store.read_space("space-a") is None
 
 
-def test_reads_stay_in_project_scope(add_store):
+def test_reads_follow_the_space_across_projects(add_store):
+    """One store serves every project: reads go by Space, and each row keeps its own project."""
     with add_store.transaction() as cursor:
         for space, project in [("space-a", "project-a"), ("space-b", "project-b")]:
             cursor.execute(
@@ -72,13 +71,14 @@ def test_reads_stay_in_project_scope(add_store):
                 (f"{space}-topic", space, f"{space}-domain"),
             )
 
-    assert add_store.read_space("space-a")["space_name"] == "space-a"
-    assert add_store.read_space("space-b") is None
+    assert add_store.read_space("space-a")["project_id"] == "project-a"
+    assert add_store.read_space("space-b")["project_id"] == "project-b"
+    assert add_store.read_space("missing") is None
     assert [topic["id"] for topic in add_store.read_topics("space-a", ["development"])] == [
         "space-a-topic"
     ]
     assert add_store.read_topics("space-a", topic_ids=[]) == []
-    assert add_store.read_topics("space-b") == []
+    assert [topic["id"] for topic in add_store.read_topics("space-b")] == ["space-b-topic"]
 
 
 @pytest.mark.parametrize("moved", [False, True], ids=["committed", "moved"])
@@ -102,6 +102,7 @@ def test_formation_recalls_immediate_predecessor_without_changing_task_receipt(a
     def accept(task_id):
         (eid,) = acceptance.accept(
             SimpleNamespace(
+                project_id="project-a",
                 task_id=task_id,
                 user_id="member",
                 space_ids=["space-a"],
@@ -200,9 +201,9 @@ def test_an_installed_zh_configuration_is_used_without_zhparser():
     schema = f"test_add_{uuid.uuid4().hex}"
     config = {"dsn": dsn, "schema_name": schema, "embedding_dimension": 3}
     with pytest.raises(RuntimeError, match="zhparser"):
-        PostgresAddStore({**config, "text_search_parser": "zhparser"}, project_id="p")
-    PostgresAddStore({**config, "text_search_parser": "simple"}, project_id="p").close()
-    store = PostgresAddStore({**config, "text_search_parser": "zhparser"}, project_id="p")
+        PostgresAddStore({**config, "text_search_parser": "zhparser"})
+    PostgresAddStore({**config, "text_search_parser": "simple"}).close()
+    store = PostgresAddStore({**config, "text_search_parser": "zhparser"})
     try:
         with store.transaction(readonly=True) as cursor:
             cursor.execute("SELECT to_regclass(%s) AS present", (f"{schema}.project_entries",))
