@@ -9,6 +9,7 @@ import pytest
 from memos.project_memory.add_dispatch import label_for
 from memos.project_memory.add_runtime import EpisodeAddRuntime, RuntimeSettings
 from memos.project_memory.add_store import PostgresAddStore
+from memos.project_memory.judge import ModelError
 
 
 @pytest.fixture
@@ -267,7 +268,7 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
     assert moved["moved_to_topic_id"] == topic_before["id"]
 
 
-def _staging_hub(formation_ids=None):
+def _staging_hub(formation_ids=None, *, cluster=True, formation_error=False):
     """A hub that stages every Episode and clusters all of them when asked."""
     hub = Mock()
 
@@ -293,6 +294,10 @@ def _staging_hub(formation_ids=None):
                 "assignments": [{"episode_id": r["episode_id"], "action": "stage"} for r in rows]
             }
         if scope == "episode.formation":
+            if formation_error:
+                raise ModelError("Formation down")
+            if not cluster:
+                return {"clusters": []}
             ids = [ep["id"] for ep in inputs["episodes"]]
             return {
                 "clusters": [
@@ -363,6 +368,7 @@ def test_flush_closes_open_episodes_and_forms_the_tail_batch(store):
     assert sorted(formation["moved"].values()) == [topic["id"], topic["id"]]
     assert store.read_staged("test") == []
     assert len(topic["decisions"]) >= 1
+    assert second["staged_remaining"] == 0
     assert runtime.flush("test")["formation"]["reason"] == "NO_STAGED"
 
 
@@ -398,3 +404,55 @@ def test_quiet_space_forms_staged_episodes_only_after_the_interval(store):
     (formed,) = runtime.form_due_spaces()
     assert formed["ran"] is True
     assert store.read_staged("test") == []
+
+
+def _settled_runtime(store, hub, **settings):
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    client = Redis.from_url(redis_url)
+    client.delete(*client.keys("project_formation_*") or ["none"])
+    work = []
+    runtime = EpisodeAddRuntime(store, hub, work.extend, client, RuntimeSettings(**settings))
+    _add(runtime, work, "alice", "Pool size is 8 connections.")
+    _add(runtime, work, "bob", "Keep the pool at 8 connections per worker.")
+    runtime.flush("test")
+    while work:
+        runtime.handle([work.pop(0)])
+    return runtime, client
+
+
+def test_forced_flush_does_not_age_unclustered_episodes(store):
+    runtime, _ = _settled_runtime(store, _staging_hub(cluster=False))
+    for _ in range(4):
+        result = runtime.flush("test")
+        assert result["formation"]["ran"] is True
+    staged = store.read_staged("test")
+    assert len(staged) == 2 and {ep["staged_attempts"] for ep in staged} == {0}
+    assert result["staged_remaining"] == 2
+
+
+def test_failed_quiet_formation_backs_off_but_flush_still_runs(store):
+    from datetime import timedelta
+
+    runtime, client = _settled_runtime(
+        store, _staging_hub(formation_error=True), formation_interval=3600
+    )
+    later = runtime.now() + timedelta(hours=2)
+    runtime.now = lambda: later
+    assert runtime.form_due_spaces() == []
+    assert client.exists(runtime._formation_key("backoff", "test"))
+    assert runtime.form_space("test")["reason"] == "BACKING_OFF"
+    assert runtime.flush("test")["formation"]["reason"] == "FORMATION_MODEL_UNAVAILABLE"
+
+
+def test_concurrent_formation_planning_is_skipped(store):
+    runtime, client = _settled_runtime(store, _staging_hub())
+    client.set(runtime._formation_key("planning", "test"), "other", ex=60)
+    try:
+        assert runtime.flush("test")["formation"]["reason"] == "FORMATION_RUNNING"
+    finally:
+        client.delete(runtime._formation_key("planning", "test"))
+    assert runtime.flush("test")["formation"]["ran"] is True

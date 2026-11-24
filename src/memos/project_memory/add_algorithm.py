@@ -718,7 +718,13 @@ def formation_due(
 
 
 def organize_staged(
-    hub: ModelHub, staged: list[dict], space: dict, topics: list[dict], *, now: datetime
+    hub: ModelHub,
+    staged: list[dict],
+    space: dict,
+    topics: list[dict],
+    *,
+    now: datetime,
+    count_attempt: bool = True,
 ) -> dict:
     """Run Formation over a Space's staged Episodes without a new Episode to carry it."""
     staged = [ep for ep in staged if ep["space_id"] == space["id"]][:50]
@@ -733,7 +739,7 @@ def organize_staged(
     }
     if staged:
         count = int(space.get("staged_since_last_formation") or 0)
-        _form(hub, plan, staged, topics, space, now=now, count=count)
+        _form(hub, plan, staged, topics, space, now=now, count=count, count_attempt=count_attempt)
     return jsonable(plan)
 
 
@@ -748,6 +754,7 @@ def _form(
     count: int,
     carrier: dict | None = None,
     candidates: list[dict] | None = None,
+    count_attempt: bool = True,
 ) -> None:
     """Reassign staged Episodes, cluster the rest and record each Episode's staged update."""
     pending = [carrier] if carrier else []
@@ -778,7 +785,8 @@ def _form(
         target = destinations.get(ep["id"])
         if carrier is not None and ep["id"] == carrier["id"] and not target:
             continue
-        attempts = int(ep.get("staged_attempts") or 0) + 1
+        # A forced run (flush) settles the Space; it must not age Episodes toward archiving.
+        attempts = int(ep.get("staged_attempts") or 0) + (1 if count_attempt else 0)
         aged = ep.get("staged_at") and now.timestamp() - time_key(ep["staged_at"]) >= 7 * 86400
         status = "active"
         if target:
