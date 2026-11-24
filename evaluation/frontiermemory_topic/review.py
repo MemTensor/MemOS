@@ -141,7 +141,7 @@ class Reviewer:
                 reply = self.client.chat.completions.create(
                     model=self.model,
                     temperature=0,
-                    max_tokens=300,
+                    max_tokens=1500,  # Reasoning models spend part of it before answering.
                     messages=[
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
