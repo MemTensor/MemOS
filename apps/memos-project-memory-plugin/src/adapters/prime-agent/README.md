@@ -1,9 +1,9 @@
 # Prime Agent 0.10.5 (Rust)
 
 The native terminal integration installs `memos-project-memory/SKILL.md` and its
-`search.mjs` helper under the host's skills directory. It does not require the
-legacy controlled RPC runner. Existing RPC classes remain for callers already
-using that transport; the normal installer now installs the native Skill.
+`search.mjs` helper under the host's skills directory. The legacy controlled RPC runner has been removed. Update the integration
+in Viewer and restart Prime Agent or run `/reload` to use the native Skills.
+The installer removes unchanged legacy files that it previously owned.
 
 ## Discovery
 

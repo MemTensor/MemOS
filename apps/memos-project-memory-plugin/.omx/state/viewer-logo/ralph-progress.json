@@ -1,9 +1,0 @@
-{
-  "score": 97,
-  "verdict": "pass",
-  "category_match": true,
-  "differences": [],
-  "suggestions": [],
-  "reasoning": "实际运行服务 50539 重启前图标损坏，重启后同地址图标正常显示；响应头已允许内嵌图像。",
-  "next_actions": []
-}

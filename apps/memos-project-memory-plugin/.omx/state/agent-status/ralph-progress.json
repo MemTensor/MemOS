@@ -1,9 +1,0 @@
-{
-  "score": 100,
-  "verdict": "pass",
-  "category_match": true,
-  "differences": [],
-  "suggestions": [],
-  "reasoning": "Codex 显示未适配，已安装 MemOS 接入的 DeepSeek Harness 显示已适配；宿主检测独立保留。标签无溢出。",
-  "next_actions": []
-}

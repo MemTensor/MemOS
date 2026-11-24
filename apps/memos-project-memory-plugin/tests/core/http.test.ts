@@ -12,7 +12,7 @@ test('local API exposes config safely, creates projects, and rejects cross-origi
  const addr=server.address();assert.ok(addr&&typeof addr!=='string');const base=`http://127.0.0.1:${addr.port}`;
  const health=await (await fetch(base+'/api/health')).json() as any;
  assert.equal(health.apiVersion,10);assert.equal(health.pid,process.pid);assert.equal(typeof health.runtimeRevision,'string');assert.ok(health.runtimeRevision.length>0);
- let response=await fetch(base+'/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({apiKey:'private-value'})});const config=await response.json() as any;assert.equal(config.keyConfigured,true);assert.equal(config.apiKey,undefined);
+ let response=await fetch(base+'/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({apiKey:'private-value'})});const config=await response.json() as any;assert.equal(config.keyConfigured,true);assert.equal(config.apiKey,undefined);assert.equal(config.apiKeyLength,13);
  response=await fetch(base+'/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Demo',root:'/demo'})});assert.equal(response.status,200);
  response=await fetch(base+'/api/projects',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://evil.example'},body:JSON.stringify({name:'Other',root:'/other'})});assert.equal(response.status,403);
  const state=await (await fetch(base+'/api/state')).json() as any;assert.equal(state.projects.length,1);

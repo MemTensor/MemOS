@@ -101,7 +101,11 @@ export class ClaudeCapture {
               && typeof row.timestamp === 'string' && typeof raw.occurredAt === 'string' && Date.parse(row.timestamp) >= Date.parse(raw.occurredAt);
           }))) throw new Error('Claude 等待 Stop 完成后的会话落盘');
           const keys = event.event === 'session-end' ? new Set(records.map(record => record.nativeTurnId!)) : new Set([key!]);
-          for (const nativeKey of keys) this.store.finalizeTurn(session.id, nativeKey);
+          for (const nativeKey of keys) {
+            const end = nativeKey === key ? this.store.memory.recordTime(raw)
+              : this.store.memory.recordTime(records.findLast(record => record.nativeTurnId === nativeKey)?.raw);
+            this.store.finalizeTurn(session.id, nativeKey, end);
+          }
         } else if (event.event === 'turn-start' && !records.some(record => record.nativeTurnId === (event.nativeTurnId ?? event.turnKey))) {
           throw new Error('Claude 等待本轮用户输入写入原始会话文件');
         }

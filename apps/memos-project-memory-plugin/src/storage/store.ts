@@ -1,5 +1,6 @@
 import { connectionIdentity, defaultUploadMaxBytes, type Configuration } from '../config/config.ts';
 import { hasTaskContent, compactUploadMessage, uploadValidationError } from '../adapters/_shared/message-content.ts';
+import { topicContent } from '../recall/format.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import { basename, isAbsolute, resolve, sep } from 'node:path';
@@ -104,9 +105,36 @@ CREATE TABLE IF NOT EXISTS diagnostics(id INTEGER PRIMARY KEY AUTOINCREMENT,mess
                 const backup = `${path}.before-project-overviews-${Date.now()}.sqlite`;
                 this.db.prepare('VACUUM INTO ?').run(backup); chmodSync(backup, 0o600);
             }
-            this.db.exec('CREATE TABLE project_overviews(scopeId TEXT NOT NULL,connectionId TEXT NOT NULL,spaceId TEXT NOT NULL,data TEXT,fetchedAt TEXT,PRIMARY KEY(scopeId,connectionId,spaceId))');
+            this.db.exec('CREATE TABLE project_overviews(scopeId TEXT NOT NULL,connectionId TEXT NOT NULL,spaceId TEXT NOT NULL,content TEXT,fetchedAt TEXT,PRIMARY KEY(scopeId,connectionId,spaceId))');
+        } else if (this.rows('PRAGMA table_info(project_overviews)').some(column => column.name === 'data')) {
+            this.migrateOverviewContent(path);
         }
         this.lastBoundAt = Date.parse(String(this.row('SELECT max(boundAt) AS boundAt FROM bindings')?.boundAt)) || 0;
+    }
+    private migrateOverviewContent(path: string) {
+        if (path !== ':memory:' && this.row('SELECT 1 FROM project_overviews LIMIT 1')) {
+            const backup = `${path}.before-overview-content-${Date.now()}.sqlite`;
+            this.db.prepare('VACUUM INTO ?').run(backup);
+            chmodSync(backup, 0o600);
+        }
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+            this.db.exec('ALTER TABLE project_overviews RENAME COLUMN data TO content');
+            const read = this.db.prepare('SELECT content FROM project_overviews WHERE rowid=?');
+            const save = this.db.prepare('UPDATE project_overviews SET content=? WHERE rowid=?');
+            // Hold only row IDs in memory; a legacy response can be large.
+            for (const { rowid } of this.rows('SELECT rowid FROM project_overviews WHERE content IS NOT NULL')) {
+                const id = Number(rowid);
+                const data = JSON.parse(String(read.get(id)!.content));
+                if (!Array.isArray(data?.topic_detail_list)) throw new Error('旧项目概览缺少主题列表');
+                save.run(topicContent(data.topic_detail_list), id);
+            }
+            this.db.exec('COMMIT');
+        } catch (error) {
+            this.db.exec('ROLLBACK');
+            this.db.close();
+            throw error;
+        }
     }
     connectionId(baseUrl = this.config?.value.baseUrl ?? ''): string {
         if (this.config && this.config.value.baseUrl === baseUrl) return connectionIdentity(this.config.value);
@@ -335,33 +363,26 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
         this.db.prepare('INSERT OR IGNORE INTO project_overviews(scopeId,connectionId,spaceId) VALUES(?,?,?)')
             .run(scopeId, binding.connectionId, spaceId);
     }
-    projectOverview(scopeId: string, spaceId: string): { data: Record<string, unknown> | null; fetchedAt: string | null } | undefined {
+    projectOverview(scopeId: string, spaceId: string): { content: string | null; fetchedAt: string | null } | undefined {
         const binding = this.binding(scopeId);
         if (!binding?.spaceIds.includes(spaceId) || !this.matchesConnection(binding.connectionId)) return undefined;
-        const row = this.row('SELECT data,fetchedAt FROM project_overviews WHERE scopeId=? AND connectionId=? AND spaceId=?', scopeId, binding.connectionId, spaceId);
-        return row ? { data: row.data === null ? null : JSON.parse(String(row.data)), fetchedAt: row.fetchedAt === null ? null : String(row.fetchedAt) } : undefined;
+        const row = this.row('SELECT content,fetchedAt FROM project_overviews WHERE scopeId=? AND connectionId=? AND spaceId=?', scopeId, binding.connectionId, spaceId);
+        return row ? { content: row.content === null ? null : String(row.content), fetchedAt: row.fetchedAt === null ? null : String(row.fetchedAt) } : undefined;
     }
-    saveProjectOverview(scopeId: string, connectionId: string, spaceId: string, boundAt: string, data: Record<string, unknown>): boolean {
+    saveProjectOverview(scopeId: string, connectionId: string, spaceId: string, boundAt: string, content: string): boolean {
         if (!this.matchesConnection(connectionId)) return false;
-        const result = this.db.prepare(`UPDATE project_overviews SET data=?,fetchedAt=? WHERE scopeId=? AND connectionId=? AND spaceId=?
+        const result = this.db.prepare(`UPDATE project_overviews SET content=?,fetchedAt=? WHERE scopeId=? AND connectionId=? AND spaceId=?
 AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceId=? AND boundAt=?)`)
-            .run(JSON.stringify(data), now(), scopeId, connectionId, spaceId, scopeId, connectionId, spaceId, boundAt);
+            .run(content, now(), scopeId, connectionId, spaceId, scopeId, connectionId, spaceId, boundAt);
         return !!result.changes;
     }
-    projectOverviewData(scopeId: string): { topic_detail_list: Record<string, unknown>[] } {
-        const binding = this.binding(scopeId), topics = new Map<string, Record<string, unknown>>();
-        if (!binding || !this.matchesConnection(binding.connectionId)) return { topic_detail_list: [] };
-        for (const spaceId of binding.spaceIds) {
-            const data = this.projectOverview(scopeId, spaceId)?.data;
-            if (!Array.isArray(data?.topic_detail_list)) continue;
-            data.topic_detail_list.forEach((topic: unknown, index: number) => {
-                if (!topic || typeof topic !== 'object' || Array.isArray(topic)) return;
-                const item = topic as Record<string, unknown>;
-                const key = JSON.stringify(typeof item.id === 'string' ? ['id', item.id] : ['space', spaceId, index]);
-                topics.set(key, item);
-            });
-        }
-        return { topic_detail_list: [...topics.values()] };
+    projectOverviewContent(scopeId: string): string | null {
+        const binding = this.binding(scopeId);
+        if (!binding || !this.matchesConnection(binding.connectionId)) return null;
+        const rows = this.rows(`SELECT o.content FROM bindings b JOIN project_overviews o
+            ON o.scopeId=b.objectId AND o.connectionId=b.connectionId AND o.spaceId=b.spaceId
+            WHERE b.objectId=? AND b.connectionId=? AND o.content IS NOT NULL ORDER BY b.rowid`, scopeId, binding.connectionId);
+        return rows.length ? rows.map(row => String(row.content)).filter(Boolean).join('\n\n') : null;
     }
     binding(objectId: string): Binding | undefined {
         const rows = this.rows('SELECT * FROM bindings WHERE objectId=? ORDER BY rowid', objectId);
@@ -436,7 +457,6 @@ AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceI
         if (binding) this.db.prepare('UPDATE bindings SET status=?,baseUrl=?,connectionId=? WHERE objectId=? AND spaceId IS NULL').run(status, baseUrl, this.connectionId(baseUrl), objectId);
         else this.db.prepare('INSERT INTO bindings(objectId,spaceId,baseUrl,name,status,connectionId) VALUES(?,NULL,?,?,?,?)').run(objectId, baseUrl, '', status, this.connectionId(baseUrl));
     }
-    setOverview(sessionId: string, overview: string) { this.db.prepare('UPDATE sessions SET overview=? WHERE id=?').run(overview, sessionId); }
     hostContextDelivered(agentType: string, nativeSessionId: string): boolean {
         return this.row('SELECT * FROM create_hosts WHERE agentType=? AND nativeSessionId=?', agentType, nativeSessionId)?.overviewDelivered === 1;
     }
@@ -454,7 +474,7 @@ AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceI
         this.db.prepare('UPDATE create_hosts SET overviewDelivered=1 WHERE agentType=? AND nativeSessionId=?').run(session.agentType, session.nativeSessionId);
         this.db.prepare("UPDATE recalls SET status='delivered-to-host' WHERE sessionId=? AND kind='initial' AND status='prepared'").run(sessionId);
     }
-    capture(sessionId: string, records: TraceInput[]) {
+    capture(sessionId: string, records: TraceInput[], replaceCursorHooks?: ReadonlySet<string>) {
         const session = this.session(sessionId);
         if (!session)
             throw new Error('会话不存在');
@@ -476,9 +496,18 @@ AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceI
                 if (!record.sourceId)
                     throw new Error('原始记录缺少稳定来源标识');
                 if (session.agentType === 'workbuddy' && this.mergeWorkBuddyTrace(session, record)) continue;
-                if (this.row('SELECT id FROM traces WHERE sessionId=? AND sourceId=?', sessionId, record.sourceId)) continue;
                 if (Array.isArray(object(input.raw).bindCallIds)) record.raw = { ...object(record.raw), bindCallIds: object(input.raw).bindCallIds };
                 const message = record.message;
+                if (this.row('SELECT id FROM traces WHERE sessionId=? AND sourceId=?', sessionId, record.sourceId)) {
+                    if (session.agentType === 'cursor-cli' && replaceCursorHooks?.has(record.sourceId)) {
+                        const changed = this.db.prepare(`UPDATE traces SET message=?,raw=? WHERE sessionId=? AND sourceId=? AND batchId IS NULL
+                            AND conversationId=(SELECT id FROM turns WHERE sessionId=? AND nativeKey=? AND completedAt IS NULL)
+                            AND NOT EXISTS(SELECT 1 FROM batch_traces WHERE traceId=traces.id)`)
+                            .run(JSON.stringify(message), JSON.stringify(record.raw), sessionId, record.sourceId, sessionId, record.nativeTurnId!);
+                        if (!changed.changes) throw new Error('Cursor 工具调用已关联投递，无法修改冻结记录');
+                    }
+                    continue;
+                }
                 const turn = record.nativeTurnId ? this.startTurn(sessionId, record.nativeTurnId, false).id : session.currentTurnId;
                 const result = this.db.prepare('INSERT OR IGNORE INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(?,?,?,?,?,?)').run(sessionId, turn ? String(turn) : null, record.sourceId, JSON.stringify(record.raw), JSON.stringify(message), now());
                 added += Number(result.changes);
@@ -575,7 +604,7 @@ AND json_extract(t.raw,'$.status')='completed' AND json_extract(t.message,'$.rol
         if (this.row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='batch_deliveries'"))
             this.db.prepare("UPDATE batch_deliveries SET status=?,error=? WHERE batchId=? AND attempts=0 AND status IN ('pending','blocked')").run(error ? 'blocked' : 'pending', error, String(batch.id));
     }
-    finalizeTurn(sessionId: string, nativeKey?: string) {
+    finalizeTurn(sessionId: string, nativeKey?: string, completedAt?: string) {
         const session = this.session(sessionId);
         if (!session) throw new Error('会话不存在');
         let turn = nativeKey
@@ -602,7 +631,7 @@ AND json_extract(t.raw,'$.status')='completed' AND json_extract(t.message,'$.rol
                 this.db.prepare('INSERT INTO batches(id,sessionId,objectId,conversationId,messages,status,error,createdAt) VALUES(?,?,?,?,?,?,?,?)').run(id, sessionId, session.objectId, String(turn.id), payload, error ? 'blocked' : 'pending', error, now());
                 this.db.prepare('UPDATE traces SET batchId=? WHERE sessionId=? AND conversationId=?').run(id, sessionId, String(turn.id));
             }
-            this.db.prepare('UPDATE turns SET completedAt=? WHERE id=?').run(now(), String(turn.id));
+            this.db.prepare('UPDATE turns SET completedAt=? WHERE id=?').run(completedAt ?? now(), String(turn.id));
             if (own) this.db.exec('COMMIT');
         } catch (error) { if (own) this.db.exec('ROLLBACK'); throw error; }
     }
@@ -623,7 +652,10 @@ AND json_extract(t.raw,'$.status')='completed' AND json_extract(t.message,'$.rol
             throw new Error('非法批次字段');
         this.db.prepare(`UPDATE batches SET ${entries.map(([key]) => `${key}=?`).join(',')} WHERE id=?`).run(...entries.map(([, value]) => Array.isArray(value) ? JSON.stringify(value) : typeof value === 'boolean' ? Number(value) : value ?? null), id);
     }
-    recall(sessionId: string, conversationId: string | null, kind: string, query: string | null, data: unknown, content: string, status: string) { this.db.prepare('INSERT INTO recalls VALUES(?,?,?,?,?,?,?,?,?)').run(randomUUID(), sessionId, conversationId, kind, query, JSON.stringify(data), content, status, now()); }
+    recall(sessionId: string, conversationId: string | null, kind: string, query: string | null, content: string, status: string) {
+        this.db.prepare('INSERT INTO recalls(id,sessionId,conversationId,kind,query,content,status,createdAt) VALUES(?,?,?,?,?,?,?,?)')
+            .run(randomUUID(), sessionId, conversationId, kind, query, content, status, now());
+    }
     diagnostic(message: string) { this.db.prepare('INSERT INTO diagnostics(message,createdAt) VALUES(?,?)').run(message, now()); }
     state() {
         const scope = (objectId: string) => {

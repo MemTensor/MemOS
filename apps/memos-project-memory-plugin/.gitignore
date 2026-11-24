@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.tgz
 .data/
+.omx/

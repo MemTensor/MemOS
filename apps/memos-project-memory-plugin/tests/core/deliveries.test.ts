@@ -55,18 +55,26 @@ test('failed history target retries without resending successful Space or silent
     assert.equal(service.deliveries.historyError(project.scopeId), undefined);
 });
 
-test('failed in-flight request cannot revive a cancelled delivery after unbind and rebind', async t => {
+test('live claims recheck the whole turn when late evidence overlaps a pause, even across multiple pauses', async t => {
     const { service, project, uploads, record } = setup(t);
-    await record('cancel-during-send', '2026-02-01T00:00:00.000Z');
-    let attempts = 0;
-    service.cloud.call = async () => {
-        attempts++;
-        service.store.unbind(project.scopeId, 'A');
-        service.store.bind(project.scopeId, 'A', service.config.value.baseUrl);
-        throw new Error('connection lost');
-    };
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 100 });
+    const item = await record('queued', new Date().toISOString());
+    service.deliveries.queueLive();
+    const [queued] = service.deliveries.pending();
+    assert.ok(queued);
+    t.mock.timers.tick(100);
+    service.configure({ paused: true });
+    const lateTime = new Date().toISOString();
+    t.mock.timers.tick(100);
+    service.configure({ paused: false });
+    t.mock.timers.tick(100);
+    service.configure({ paused: true });
+    t.mock.timers.tick(100);
+    service.configure({ paused: false });
+    service.store.capture(item.context.sessionId, [{ sourceId: 'late', nativeTurnId: 'queued',
+        raw: { timestamp: lateTime, role: 'assistant', content: 'late answer' } }]);
+    assert.equal(service.deliveries.ready(queued), undefined);
     await service.sync();
-    assert.equal(attempts, 1); assert.equal(uploads.length, 0);
-    assert.equal(service.store.row('SELECT status FROM batch_deliveries')?.status, 'cancelled');
-    await service.sync(); assert.equal(attempts, 1);
+    assert.equal(uploads.length, 0);
+    assert.equal(service.deliveries.historyPending(project.scopeId, [item, { ...item, sourceId: 'late' }]), 2);
 });

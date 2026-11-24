@@ -100,10 +100,16 @@ export function uploadMessages(message: Message): Message[] {
 
 /** Report a batch blocker rather than throwing away invalid task evidence. */
 export function uploadValidationError(messages: Message[]): string | null {
-  for (const message of messages) {
+  const ids = new Map<string, number>();
+  for (const [index, message] of messages.entries()) {
     if (!['user', 'assistant', 'tool'].includes(message.role)) return '上传消息 role 无效';
     if (typeof message.content !== 'string' && !Array.isArray(message.content)) return '上传消息 content 必须为文本或消息块数组';
     if (message.id !== undefined && (typeof message.id !== 'string' || !message.id.trim())) return '上传消息 id 无效';
+    if (typeof message.id === 'string') {
+      const previous = ids.get(message.id);
+      if (previous !== undefined) return `上传消息 id 重复：${message.id}（第 ${previous + 1}、${index + 1} 条）`;
+      ids.set(message.id, index);
+    }
     if (message.chat_time !== undefined && (typeof message.chat_time !== 'string' || !Number.isFinite(Date.parse(message.chat_time)))) return '上传消息 chat_time 无效';
     if (message.role_id !== undefined && (typeof message.role_id !== 'string' || !message.role_id.trim())) return '上传消息 role_id 无效';
     if (message.role_name !== undefined && (typeof message.role_name !== 'string' || !message.role_id)) return '上传消息 role_name 需要有效 role_id';
@@ -112,7 +118,10 @@ export function uploadValidationError(messages: Message[]): string | null {
       if (!Array.isArray(message.tool_calls)) return '工具调用 tool_calls 必须为数组';
       for (const value of message.tool_calls) {
         const call = object(value), fn = object(call.function);
-        if (typeof call.id !== 'string' || !call.id.trim()) return '工具调用缺少可靠 id';
+        if (typeof call.id !== 'string' || !call.id.trim()) {
+          const tool = typeof fn.name === 'string' && fn.name.trim() ? `，${fn.name}` : '';
+          return `工具调用缺少可靠 id（第 ${index + 1} 条消息${tool}）`;
+        }
         if (call.type !== 'function') return '工具调用 type 必须为 function';
         if (typeof fn.name !== 'string' || !fn.name.trim()) return '工具调用缺少 function.name';
         if (typeof fn.arguments !== 'string') return '工具调用缺少字符串 function.arguments';

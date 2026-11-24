@@ -1,9 +1,0 @@
-{
-  "score": 96,
-  "verdict": "pass",
-  "category_match": true,
-  "differences": [],
-  "suggestions": [],
-  "reasoning": "保持白色轮次侧栏和折叠框；实测 user、thinking、answer 分别成框，单独展开 answer 时 thinking 保持收起。内容和时间保持原顺序，浏览器无错误。",
-  "next_actions": []
-}

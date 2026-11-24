@@ -11,6 +11,12 @@ const parse = (value: unknown): unknown => { if (typeof value !== 'string') retu
 const scope = (row: Trace) => JSON.stringify([row.originSessionId ?? row.nativeSessionId ?? row.sessionId ?? '', row.nativeTurnId ?? row.conversationId ?? '']);
 const key = (row: Trace, id: string) => scope(row) + '\0' + id;
 
+/** Stable across retries and independent of upload destinations and batch boundaries. */
+export function sourceMessageId(row: Trace): string | undefined {
+    if (typeof row.sourceId !== 'string' || !row.sourceId) return undefined;
+    return 'memos:' + createHash('sha256').update(JSON.stringify([row.originSessionId ?? row.sessionId ?? row.nativeSessionId ?? '', row.sourceId])).digest('hex');
+}
+
 function calls(message: Message): Call[] {
     return [...(Array.isArray(message.tool_calls) ? message.tool_calls : []), ...(Array.isArray(message.content) ? message.content.filter(value => ['tool-call', 'tool_use', 'function_call'].includes(String(object(value).type))) : [])]
         .flatMap(value => {
@@ -38,7 +44,7 @@ function executionCommands(code: string): string[] {
 /** Upload-only projection. Original rows, visible thinking and business bodies are never modified. */
 export function filterUploadTraces<T extends Trace>(rows: T[]): T[] {
     const omitted = new Set<string>(), results = new Map<string, number>();
-    const messages = rows.map(row => normalizeTaskTrace('', { sourceId: '', raw: row.raw, message: object(row.message) as Message })?.message ?? { role: '', content: '' });
+    const messages = rows.map(row => normalizeTaskTrace('', { sourceId: '', raw: parse(row.raw), message: object(row.message) as Message })?.message ?? { role: '', content: '' });
     for (let index = 0; index < rows.length; index++) {
         const message = messages[index]!, row = rows[index]!;
         if (message.role === 'tool' && typeof message.tool_call_id === 'string') results.set(key(row, message.tool_call_id), index);
@@ -93,8 +99,8 @@ export function filterUploadTraces<T extends Trace>(rows: T[]): T[] {
         const changed = toolCalls?.length !== message.tool_calls?.length || Array.isArray(content) && content.length !== (message.content as unknown[]).length;
         if (message.role === 'assistant' && (toolCalls === undefined || Array.isArray(toolCalls) && !toolCalls.length) && (!content || Array.isArray(content) && !content.length) && !message.thinking && !message.reasoning && !message.reasoning_content) return [];
         const normalized = changed ? { ...message, content, ...(toolCalls ? { tool_calls: toolCalls } : {}) } : message;
-        const sourceId = typeof row.sourceId === 'string' && row.sourceId ? row.sourceId : undefined;
-        const identified = normalized.id === undefined && sourceId ? { ...normalized, id: 'memos:' + createHash('sha256').update(JSON.stringify([row.originSessionId ?? row.sessionId ?? row.nativeSessionId ?? '', sourceId])).digest('hex') } : normalized;
+        const id = normalized.id === undefined ? sourceMessageId(row) : undefined;
+        const identified = id ? { ...normalized, id } : normalized;
         return uploadMessages(identified).map(projected => ({ ...row, message: projected }));
     });
 }

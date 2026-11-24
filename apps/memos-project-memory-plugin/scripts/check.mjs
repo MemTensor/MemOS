@@ -13,4 +13,4 @@ async function check(dir) {
   if (result.status) { process.stderr.write(result.stderr); process.exitCode = 1; }
  }
 }
-for (const dir of ['src', 'viewer', 'dev', 'scripts']) await check(dir);
+for (const dir of ['src', 'viewer', 'scripts']) await check(dir);

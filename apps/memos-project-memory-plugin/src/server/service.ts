@@ -10,7 +10,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { Configuration, connectionError, connectionIdentity } from '../config/config.ts';
 import { Store, type Session } from '../storage/store.ts';
 import { CloudClient, type CloudContext } from '../cloud/client.ts';
-import { publicTopics, overviewText, identifiers } from '../recall/format.ts';
+import { topicContent, overviewText, identifiers } from '../recall/format.ts';
 import type { AgentEvent, EventResult } from '../adapters/types.ts';
 import { CodexCapture, type CodexCaptureOptions } from './codex-capture.ts';
 import { HistoryService } from './history.ts';
@@ -23,9 +23,7 @@ export type SearchStatus = 'FOUND' | 'EMPTY' | 'INVALID_QUERY' | 'CONTEXT_MISSIN
 export interface SearchResult {
     ok: boolean;
     status: SearchStatus;
-    data: {
-        topics: ReturnType<typeof publicTopics>;
-    } | null;
+    data: { content: string } | null;
     error: {
         message: string;
     } | null;
@@ -317,7 +315,9 @@ export class PluginService {
                 const spaceId = error instanceof Error && 'spaceId' in error && typeof error.spaceId === 'string' ? error.spaceId : undefined;
                 result = fail(spaceId ? 'BINDING_FAILED' : 'CREATE_UNCERTAIN', this.error(error), spaceId);
             }
-            this.store.db.prepare('UPDATE create_contexts SET state=?,result=? WHERE token=?').run(result.status, JSON.stringify(result), context.token);
+            // Replays read the overview from the current bindings.
+            const receipt = result.data ? { ...result, data: { ...result.data, overview: null } } : result;
+            this.store.db.prepare('UPDATE create_contexts SET state=?,result=? WHERE token=?').run(result.status, JSON.stringify(receipt), context.token);
             return result;
         })();
         this.creations.set(context.token, work);
@@ -452,8 +452,8 @@ export class PluginService {
             const keys = new Set(records?.map(record => record.nativeTurnId).filter((key): key is string => !!key));
             if (turnKey) keys.add(turnKey);
             if (event.event === 'session-end') for (const turn of this.store.rows('SELECT nativeKey FROM turns WHERE sessionId=? AND completedAt IS NULL', session.id)) keys.add(String(turn.nativeKey));
-            for (const key of keys) this.store.finalizeTurn(session.id, key);
-            if (!turnKey || event.event === 'session-end') this.store.finalizeTurn(session.id);
+            for (const key of keys) this.store.finalizeTurn(session.id, key, key === turnKey ? this.store.memory.recordTime(event.raw) : undefined);
+            if (!turnKey || event.event === 'session-end') this.store.finalizeTurn(session.id, undefined, this.store.memory.recordTime(event.raw));
         }
         const current = this.store.session(session.id)!;
         const overview = await this.overview(current);
@@ -466,10 +466,8 @@ export class PluginService {
     }
     private cachedOverview(scopeId: string): string | null {
         if (this.closed) return null;
-        const scope = this.store.memory.get(scopeId);
-        if (!scope?.spaceIds.length || !this.store.matchesConnection(scope.connectionId)) return null;
-        if (!scope.spaceIds.some(spaceId => this.store.projectOverview(scopeId, spaceId)?.data != null)) return null;
-        return overviewText(scope.name, this.store.projectOverviewData(scopeId));
+        const content = this.store.projectOverviewContent(scopeId);
+        return content === null ? null : overviewText(content);
     }
     private async refreshOverview(scopeId: string, spaceId: string): Promise<void> {
         if (this.closed) return;
@@ -487,7 +485,7 @@ export class PluginService {
                 const data = await this.cloud.call<{ topic_detail_list: Record<string, unknown>[] }>('get/memory', { space_id: spaceId, page: 1, size: 10 }, this.cloudContext(undefined, { scopeId, spaceId }));
                 if (this.closed || this.config.revision !== revision) return;
                 if (!Array.isArray(data.topic_detail_list)) throw new Error('云端概览缺少主题列表');
-                this.store.saveProjectOverview(scopeId, scope.connectionId, spaceId, String(binding.boundAt), data);
+                this.store.saveProjectOverview(scopeId, scope.connectionId, spaceId, String(binding.boundAt), topicContent(data.topic_detail_list));
             } catch (error) {
                 if (!this.closed) this.store.diagnostic(this.error(error));
             }
@@ -576,15 +574,14 @@ export class PluginService {
             if (this.store.memory.forSession(session)?.enabledAt !== scope.enabledAt) return fail('UNAVAILABLE', '当前 Agent 与项目绑定已变更');
             if (current?.connectionId !== binding.connectionId || JSON.stringify(current.spaceIds) !== JSON.stringify(binding.spaceIds))
                 throw new Error('检索期间空间关联已变更');
-            const topics = publicTopics(data), status = topics.length ? 'FOUND' : 'EMPTY';
-            const result: SearchResult = { ok: true, status, data: { topics }, error: null };
-            this.store.recall(session.id, input.conversationId, 'search', input.query, data, JSON.stringify(result), 'returned');
-            return result;
+            const content = topicContent(data.topic_detail_list);
+            this.store.recall(session.id, input.conversationId, 'search', input.query, content, 'returned');
+            return { ok: true, status: content ? 'FOUND' : 'EMPTY', data: { content }, error: null };
         }
         catch (error) {
             if (this.store.memory.forSession(session)?.enabledAt !== scope.enabledAt) return fail('UNAVAILABLE', '当前 Agent 与项目未启用记忆');
             this.store.diagnostic(this.error(error));
-            this.store.recall(session.id, input.conversationId, 'search', input.query, null, '', 'failed');
+            this.store.recall(session.id, input.conversationId, 'search', input.query, '', 'failed');
             return fail('UNAVAILABLE', '项目记忆暂不可用');
         }
     }

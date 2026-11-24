@@ -22,9 +22,9 @@ export async function installNative(profile:AdapterProfile,options:Options):Prom
   const other=profile.id==='opencode-v1'?'opencode-v2':'opencode-v1';
   if(await read(join(options.home,'.memos-project-memory','adapters',`${other}.json`)))throw new Error('Uninstall the other OpenCode version profile first');
  }
- const entry=new URL(`../${profile.id}/${profile.kind==='rpc'?'rpc/runner':'extension/index'}.${suffix}`,import.meta.url).href;
+ const entry=new URL(`../${profile.id}/extension/index.${suffix}`,import.meta.url).href;
  const wrapper=join(options.home,directories[profile.id]!,`memos-project-memory.${profile.id==='cline-cli'?'ts':suffix}`);
- const text=profile.id==='deepseek-harness'?`export {name,inject,apply} from ${JSON.stringify(entry)};\n`:profile.kind==='rpc'?`await import(${JSON.stringify(entry)});\n`:`export {default} from ${JSON.stringify(entry)};\n`;
+ const text=profile.id==='deepseek-harness'?`export {name,inject,apply} from ${JSON.stringify(entry)};\n`:`export {default} from ${JSON.stringify(entry)};\n`;
  const dshHome=options.dshHome??join(options.home,'.dsh');
  const skillRoot=profile.id==='deepseek-harness'?join(dshHome,'skills'):join(options.home,profile.skillPath);
  const writes=[{path:wrapper,text}];

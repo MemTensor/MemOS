@@ -1,12 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
 import { mkdtemp, writeFile, appendFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginService } from '../../src/server/service.ts';
 import { processHook } from '../../src/adapters/_shared/hooks.ts';
-import { createMockServer, getMockState } from '../../dev/memos-mock/server.ts';
+import { captureUploads } from '../helpers/capture-uploads.ts';
 
 const line = (row: unknown) => JSON.stringify({ timestamp: new Date(Date.now() + 2).toISOString(), ...row as object }) + '\n';
 const user = (id: string, prompt: string, content = 'same question') => ({ uuid: id, promptId: prompt, type: 'user', message: { role: 'user', content } });
@@ -15,21 +14,20 @@ const end = () => ({ type: 'system', subtype: 'stop_hook_summary', timestamp: ne
 
 async function setup(t: import('node:test').TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'pm-claude-'));
-  const mock = createMockServer(); mock.listen(0, '127.0.0.1'); await once(mock, 'listening');
-  const address = mock.address(); assert.ok(address && typeof address !== 'string');
+  const { uploads, call } = captureUploads();
   let service = new PluginService(dir, { home: dir, codexRoots: [] });
-  t.after(async () => { service.close(); await new Promise<void>(resolve => mock.close(() => resolve())); await rm(dir, { recursive: true, force: true }); });
-  service.configure({ baseUrl: `http://127.0.0.1:${address.port}/api/openmem/v1`, apiKey: 'mock-key' });
-  const space = await service.cloud.call<{ space_id: string }>('create/space', { space_name: 'Claude independent', domains: [{ domain: '编程' }] });
-  service.store.bindProject('Claude', dir, space.space_id, service.config.value.baseUrl, 'claude-code');
+  t.after(async () => { service.close(); await rm(dir, { recursive: true, force: true }); });
+  service.cloud.call = call;
+  service.configure({ authMode: 'none' });
+  service.store.bindProject('Claude', dir, 'space', service.config.value.baseUrl, 'claude-code');
   const path = join(dir, 'main.jsonl');
   const hook = async (name: string, extra: Record<string, unknown> = {}) => processHook('claude-code', {
     session_id: 'main', cwd: dir, prompt_id: 'p1', hook_event_name: name, transcript_path: path, ...extra,
   }, { request: event => service.event(event) });
-  return { dir, path, mock, space, hook, get service() { return service; }, restart() { service.close(); service = new PluginService(dir, { home: dir, codexRoots: [] }); } };
+  return { path, uploads, hook, get service() { return service; }, restart() { service.close(); service = new PluginService(dir, { home: dir, codexRoots: [] }); service.cloud.call = call; } };
 }
 
-test('Claude captures each native message once, waits for Stop flush and retains task Skill and search operations through Mock', async t => {
+test('Claude captures each native message once, waits for Stop flush and retains task Skill and search operations in the upload', async t => {
   const s = await setup(t);
   await s.hook('UserPromptSubmit', { prompt: 'same question' });
   await writeFile(s.path, line(user('u1', 'p1')));
@@ -52,7 +50,8 @@ test('Claude captures each native message once, waits for Stop flush and retains
   await s.service.sync();
   const batch = s.service.store.batches()[0]!;
   assert.equal(batch.status, 'completed'); assert.equal(batch.attempts, 1);
-  assert.deepEqual(getMockState(s.mock).uploads.get(s.space.space_id)?.[0]?.body.messages, batch.messages);
+  assert.deepEqual(s.uploads[0]?.space_ids, ['space']);
+  assert.deepEqual(s.uploads[0]?.messages, batch.messages);
   const raw = s.service.store.rows('SELECT id,sourceId,raw,message FROM traces ORDER BY id');
   assert.equal(raw.length, 8); assert.equal(new Set(raw.map(r => r.sourceId)).size, 8);
   assert.equal(batch.messages.filter(m => m.role === 'user').length, 1);
@@ -61,7 +60,7 @@ test('Claude captures each native message once, waits for Stop flush and retains
   assert.doesNotMatch(JSON.stringify({ raw, messages: batch.messages }), /SKILL_BODY/);
   await s.hook('Stop', { last_assistant_message: 'finished' }); await s.service.sync();
   assert.equal(s.service.store.rows('SELECT * FROM claude_receipts').length, 0);
-  assert.equal(s.service.store.batches().length, 1); assert.equal(getMockState(s.mock).uploads.get(s.space.space_id)?.length, 1);
+  assert.equal(s.service.store.batches().length, 1); assert.equal(s.uploads.length, 1);
   assert.deepEqual(s.service.store.rows('SELECT id,sourceId,raw,message FROM traces ORDER BY id'), raw);
   await s.hook('UserPromptSubmit', { prompt_id: 'p2', prompt: 'same question' });
   await appendFile(s.path, line(user('u2', 'p2')) + line(assistant('final2', [{ type: 'text', text: 'second reply' }])));

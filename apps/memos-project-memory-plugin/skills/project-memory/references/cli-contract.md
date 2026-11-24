@@ -17,18 +17,18 @@ stdout contains only JSON; stderr may contain a short diagnostic. A successful r
   "ok": true,
   "status": "FOUND",
   "data": {
-    "topics": []
+    "content": "- Keep build reports for 14 days.\n  Update the report index after every successful build."
   },
   "error": null
 }
 ```
 
-The empty array above illustrates the schema, not an actual match. Topics may include decisions, experiences, a timeline, and history or conflicts attached to particular decisions. Preserve these relationships rather than flattening multiple conclusions into a single fact. Cite only authors and timestamps actually returned; do not invent provenance.
+Each entry contains the returned summary followed by its indented description when available. Entries appear in cloud response order, separated by a blank line. A successful search with no usable text returns `EMPTY` and `data.content` is an empty string.
 
 | status | Exit code | Handling |
 |---|---:|---|
 | FOUND | 0 | Matches were returned; check applicability before using them |
-| EMPTY | 0 | The search succeeded without matching results |
+| EMPTY | 0 | No usable summary or description was returned |
 | UNAVAILABLE | Nonzero | Search is unavailable; do not present this as absence of memory |
 | INVALID_QUERY | Nonzero | query is missing or blank; correct it |
 | CONTEXT_MISSING | Nonzero | Identifiers are missing, unknown, mismatched, or expired; use the current adapter-supplied identifiers |

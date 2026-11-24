@@ -255,7 +255,8 @@ export function codexRecordRaw(raw: unknown, message: Message): Record<string, u
     } else if(payload.type==='function_call_output'){
       clean.call_id=message.tool_call_id??payload.call_id;
       clean.output=message.content;
-    } else if(payload.item)clean.item={...identity(item),...cleanMessage};
+    } else if(payload.item)clean.item=['UserMessage','AgentMessage'].includes(String(item.type))
+      ? {...identity(item),...cleanMessage} : {...identity(item),message:cleanMessage};
     else if((payload.type==='user_message'||payload.type==='agent_message'))clean.message=message.content;
     else Object.assign(clean,cleanMessage);
     out.payload=clean;

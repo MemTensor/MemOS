@@ -51,7 +51,7 @@ test('OpenCode V1 filters before SQLite and uploads task content with source met
       { role: 'tool', content: 'tool-catalog is legitimate tool output', tool_call_id: 'call' },
       { role: 'assistant', content: 'answer' },
     ]);
-    assert.equal(messages[0].id, 'u'); assert.equal(messages[3].id, 'a');
+    assert.equal(messages[0].id, 'u'); assert.equal(messages[3].id, 'a:part:text:text');
     assert.equal(messages[0].chat_time, '1970-01-01T00:16:40.000Z');
     assert.equal(messages[3].chat_time, '1970-01-01T00:33:20.000Z');
     for (const message of messages) assert.ok(Number.isFinite(Date.parse(message.chat_time)));

@@ -3,6 +3,8 @@ import { requestBodyBytes } from '../cloud/protocol.ts';
 import { uploadMessages, uploadValidationError } from '../adapters/_shared/message-content.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
+import { object } from '../adapters/_shared/transcript.ts';
 import type { Message } from '../adapters/types.ts';
 import type { Store, Batch } from './store.ts';
 import { filterUploadTraces } from './upload-filter.ts';
@@ -75,10 +77,19 @@ ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, batch.session
             const at = rows.findIndex((row, index) => {
                 if (used.has(index)) return false;
                 const candidate = { ...row.message };
+                const expected = { ...frozen };
+                const raw = object(typeof row.raw === 'string' ? JSON.parse(row.raw) : row.raw);
+                const originalId = object(raw.message).id ?? object(object(raw.payload).item).id;
+                // A receipt stays attached to the same source occurrence when a
+                // legacy source ID was mistaken for its transport message ID.
+                if (candidate.id !== expected.id && typeof originalId === 'string'
+                    && (expected.id === originalId || typeof expected.id === 'string' && expected.id.startsWith(`${originalId}:part:`))) {
+                    delete candidate.id; delete expected.id;
+                }
                 // Old accepted snapshots omitted business metadata. Compare only
                 // fields actually present in that request, preserving occurrence order.
                 for (const key of ['id', 'chat_time', 'role_id', 'role_name']) if (!(key in frozen)) delete candidate[key];
-                return JSON.stringify(candidate) === JSON.stringify(frozen);
+                return isDeepStrictEqual(candidate, expected);
             });
             if (at >= 0) used.add(at);
         }
@@ -116,9 +127,9 @@ ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, batch.session
             this.store.db.exec('PRAGMA user_version=4; COMMIT');
         } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
     }
-    private indexBatch(batch: Batch) {
+    private indexBatch(batch: Batch, rows?: Row[]) {
         if (this.store.row('SELECT 1 FROM batch_traces WHERE batchId=? LIMIT 1', batch.id)) return;
-        for (const row of this.rowsForBatch(batch)) this.store.db.prepare('INSERT OR IGNORE INTO batch_traces VALUES(?,?)').run(batch.id, Number(row.id));
+        for (const row of rows ?? this.rowsForBatch(batch)) this.store.db.prepare('INSERT OR IGNORE INTO batch_traces VALUES(?,?)').run(batch.id, Number(row.id));
     }
     private covered(traceId: number, baseUrl: string, spaceId: string, includeQueued: boolean, acceptedOnly = false, projection?: Row[]) {
         const messages = this.receiptMessages(traceId, baseUrl, spaceId, includeQueued, acceptedOnly);
@@ -160,6 +171,34 @@ WHERE t.traceId=? AND d.baseUrl=? AND d.connectionId=(SELECT connectionId FROM b
         if (row.occurredAt) return String(row.occurredAt);
         return this.store.memory.recordTime(JSON.parse(row.raw)) ?? String(row.createdAt);
     }
+    /** Check the whole source turn even when this destination received only a subset of its traces. */
+    private overlapsUploadPause(batch: Batch, rows: Row[]) {
+        const pauses = this.store.config?.value.uploadPauses;
+        if (!pauses?.length) return false;
+        const overlaps = (first: number, last: number) =>
+            pauses.some(({ start, end }) => last >= start && (end === undefined || first < end));
+        const turns = new Set(rows.map(row => row.conversationId).filter(Boolean));
+        if (batch.conversationId) turns.add(batch.conversationId);
+        for (const id of turns) {
+            const turn = this.store.row('SELECT createdAt,completedAt FROM turns WHERE id=?', id);
+            if (!turn) return true;
+            let first = Date.parse(String(turn.createdAt));
+            let last = Date.parse(String(turn.completedAt ?? turn.createdAt));
+            const sources = this.store.rows(`SELECT t.createdAt,t.raw,m.occurredAt FROM traces t
+                LEFT JOIN codex_event_meta m ON m.traceId=t.id WHERE t.sessionId=? AND t.conversationId=?`, batch.sessionId, id);
+            for (const source of sources) {
+                const time = Date.parse(this.time(source));
+                first = Math.min(first, time);
+                last = Math.max(last, time);
+            }
+            if (!Number.isFinite(first) || !Number.isFinite(last) || overlaps(first, last)) return true;
+        }
+        return rows.some(row => {
+            if (row.conversationId) return false;
+            const time = Date.parse(this.time(row));
+            return !Number.isFinite(time) || overlaps(time, time);
+        });
+    }
     queueLive() {
         for (const batch of this.store.batches('pending')) {
             const session = this.store.session(batch.sessionId);
@@ -167,8 +206,13 @@ WHERE t.traceId=? AND d.baseUrl=? AND d.connectionId=(SELECT connectionId FROM b
             if (!scope || batch.connectionId !== scope.connectionId || batch.attempts || batch.uploaded) continue;
             if (batch.conversationId && this.store.creation.turnExcluded(batch.sessionId, batch.conversationId)) continue;
             if (this.store.row("SELECT 1 FROM batch_deliveries WHERE batchId=? AND kind='history'", batch.id)) continue;
-            this.indexBatch(batch);
             const rows = this.rowsForBatch(batch);
+            if (this.overlapsUploadPause(batch, rows)) {
+                if (!this.store.row('SELECT 1 FROM batch_deliveries WHERE batchId=?', batch.id))
+                    this.store.updateBatch(batch.id, { status: 'manual' });
+                continue;
+            }
+            this.indexBatch(batch, rows);
             for (const spaceId of scope.spaceIds) {
                 if (!this.store.creation.liveRowsAllowed(batch.sessionId, spaceId, scope.baseUrl, rows)) continue;
                 // A newly attached Space receives old content only after the user asks.
@@ -320,27 +364,30 @@ WHERE d.batchId=? AND d.connectionId=? AND d.spaceId=? AND d.status='pending'`, 
         const row = this.store.row('SELECT * FROM batches WHERE id=?', current.batchId)!;
         const batch = { ...row, messages: JSON.parse(String(row.messages)), uploaded: !!row.uploaded } as Batch;
         if (batch.connectionId !== current.connectionId) return undefined;
+        const rows = this.rowsForBatch(batch);
+        if (current.kind === 'live' && this.overlapsUploadPause(batch, rows)) {
+            this.update(current, { status: 'cancelled' });
+            return undefined;
+        }
         if (!this.fits(String(current.sessionId), String(current.spaceId), batch.messages)) {
             if (current.kind !== 'history' || Number(current.attempts) > 0) {
                 this.update(current, {status:'blocked',error:Number(current.attempts) > 0 ? '当前配置容量小于已尝试请求；保留原快照，请恢复容量后核对' : '整轮轨迹超出保守上传容量；完整内容已保留'});
                 return undefined;
             }
             this.update(current, {status:'cancelled',error:null});
-            const rows = this.rowsForBatch(batch);
             this.queueHistory(String(current.objectId), [String(current.spaceId)], rows.map(row => ({nativeSessionId:String(row.nativeSessionId),sourceId:String(row.sourceId)})));
             const replacement = this.pending().find(row => row.objectId === current.objectId && row.spaceId === current.spaceId);
             return replacement ? this.ready(replacement) : undefined;
         }
-        if (this.rowsForBatch(batch).some(row => row.conversationId && this.store.creation.turnExcluded(String(row.sessionId), String(row.conversationId)))) {
+        if (rows.some(row => row.conversationId && this.store.creation.turnExcluded(String(row.sessionId), String(row.conversationId)))) {
             this.update(current, { status: 'cancelled' }); return undefined;
         }
-        if (current.kind === 'live' && !this.store.creation.liveRowsAllowed(batch.sessionId, String(current.spaceId), String(current.baseUrl), this.rowsForBatch(batch))) {
+        if (current.kind === 'live' && !this.store.creation.liveRowsAllowed(batch.sessionId, String(current.spaceId), String(current.baseUrl), rows)) {
             this.update(current, { status: 'cancelled' }); return undefined;
         }
         if (current.kind === 'live' && !batch.attempts && batch.conversationId) {
             // A different request may have appended content while an earlier upload awaited.
             // Claim the latest body only at the first attempt; retries keep that body frozen.
-            const rows = this.rowsForBatch(batch);
             const binding = this.store.row('SELECT boundAt FROM bindings WHERE objectId=? AND spaceId=? AND baseUrl=?', current.objectId, current.spaceId, current.baseUrl);
             const eligible = rows.filter(row => binding && this.store.memory.allows(String(current.objectId), this.time(row)) && this.time(row) >= String(binding.boundAt));
             if (eligible.length !== rows.length || !eligible.length) {
@@ -351,7 +398,7 @@ WHERE d.batchId=? AND d.connectionId=? AND d.spaceId=? AND d.status='pending'`, 
                 return this.ready({ ...current, batchId });
             }
             this.store.db.prepare('DELETE FROM batch_traces WHERE batchId=?').run(batch.id);
-            this.indexBatch(batch);
+            this.indexBatch(batch, rows);
         }
         return current;
     }

@@ -2,11 +2,11 @@
 
 ## 项目概览按 Space 缓存（2026-11-24）
 
-概览唯一来源改为 SQLite `project_overviews(scopeId,connectionId,spaceId,data,fetchedAt)`。新建／绑定立即拉取；session-start 仅对未获取或超过6小时的项刷新，宿主能力决定等待还是返回旧缓存。普通事件不读取云概览，无定时器／新路由／等待参数。解绑同事务删缓存，在途结果复核原绑定时间和连接；旧 sessions.overview 不反拆、不作为缓存读取。中途对话创建／绑定的原响应携带 overview，具体规则见 [概览缓存](overview-cache.md)。
+概览唯一来源改为 SQLite `project_overviews(scopeId,connectionId,spaceId,content,fetchedAt)`。新建／绑定立即拉取；session-start 仅对未获取或超过6小时的项刷新，宿主能力决定等待还是返回旧缓存。普通事件不读取云概览，无定时器／新路由／等待参数。解绑同事务删缓存，在途结果复核原绑定时间和连接；旧 sessions.overview 不反拆、不作为缓存读取。中途对话创建／绑定的原响应携带 overview，具体规则见 [概览缓存](overview-cache.md)。
 
 ## 双协议云连接（2026-11-23）
 
-连接显式配置 apiMode、baseUrl、authMode、cloudProjectId，地址由 Viewer「MemOS API 基址」展示和编辑。工程旧配置默认 engineering/token；算法使用配置的 project_id 创建/写入，默认无需鉴权。协议映射、连接归属、只读测试与开放 Episode 语义见 [云服务访问配置](cloud-access.md)。原有工程 Mock 链路保留，不因算法接入移除。检索响应若标记 degraded 含 project，即使 HTTP 成功也视为不可用，不返回 EMPTY。
+连接显式配置 apiMode、baseUrl、authMode、cloudProjectId，接口类型和地址由本地服务配置管理。工程旧配置默认 engineering/token；Viewer 保存时两种接口默认使用 Token；算法创建和写入的 cloudProjectId 默认使用当前接口要求的 `test1`；配置缺失或空值在加载时补齐默认值，切换协议保留已有自定义项目 ID。协议映射、连接归属、只读测试与开放 Episode 语义见 [云服务访问配置](cloud-access.md)。检索响应若标记 degraded 含 project，即使 HTTP 成功也视为不可用，不返回 EMPTY。
 
 ## 历史容量组批与独立轨迹确认（2026-11-23）
 
@@ -22,7 +22,7 @@
 
 ## 对话解绑项目空间（2026-11-23）
 
-第五个 Skill `memos-unbind-project-space` 处理用户明确要求取消当前项目关联并给出 Space ID 的意图；缺 ID 只询问 ID，不凭名称猜测。CLI `memos-pm unbind --space-id` 不接收身份路由参数，复用 projectContext、原生宿主环境和同一本轮专属入口，不新增环境变量、目录、表、缓存或依赖。
+解绑 Skill `memos-unbind-project-space` 处理用户明确要求取消当前项目关联并给出 Space ID 的意图；缺 ID 只询问 ID，不凭名称猜测。CLI `memos-pm unbind --space-id` 不接收身份路由参数，复用 projectContext、原生宿主环境和同一本轮专属入口，不新增环境变量、目录、表、缓存或依赖。
 
 `POST /api/unbind-project {context,spaceId}` 复用当前项目查询的准确 Agent＋项目定位，随后调用 Store.unbind 原事务。只删除指定本地关联、取消该目标未完成投递，最后一个空间关闭采集窗口；无 Key、暂停或更换云配置不阻止本地解绑，不访问云端。其他 Space 和其他 Agent／项目保留。返回缓存名称和剩余 spaces；未绑定为成功 NOT_BOUND 且不创建新项目／绑定记录。已发送请求无法撤回，按现有逻辑保存真实结果，不复活取消队列。
 
@@ -30,7 +30,7 @@
 
 ## 对话查看本地项目空间（2026-11-23）
 
-第四个 Skill `memos-list-project-spaces` 根据当前上下文中的绑定查询意图触发，覆盖“项目、空间、组织、关联到哪里”等表达，不新增同义词匹配代码。`memos-pm spaces` 零参数，复用绑定的宿主身份解析、冲突校验和本轮专属入口；不会按工具目录或最近会话推断目标，创建、绑定入口契约保持兼容。
+查看空间 Skill `memos-list-project-spaces` 根据当前上下文中的绑定查询意图触发，覆盖“项目、空间、组织、关联到哪里”等表达，不新增同义词匹配代码。`memos-pm spaces` 零参数，复用绑定的宿主身份解析、冲突校验和本轮专属入口；不会按工具目录或最近会话推断目标，创建、绑定入口契约保持兼容。
 
 本地 `POST /api/project-spaces` 按有效当前轮身份，优先固定会话项目，否则按最长目录匹配。只调用 `Store.spaces` 返回本地名称和 ID，零云请求、不要求 Key。未登记或已解绑为 EMPTY，身份缺失为 CONTEXT_MISSING，不混淆。名称缺失保持空值，Skill 解释为名称未缓存。更换云连接不影响读取已有本地关联；查询不刷新名称、不更改绑定或上传状态。现有 Viewer 云端刷新名称接口不复用。
 
@@ -86,6 +86,7 @@
 - `add/message` 始终省略 `domains`，由服务端使用目标 Space 的全部已登记领域作为候选；上传不读取领域映射、不调用 `list/domains`，也不因本地缺映射而阻塞。`space_domains` 按 `(baseUrl,spaceId)` 保存领域名列表，仅供空间绑定校验：新建时保存选择，绑定已有空间时缺失或为空才调用 `list/domains`，空领域不能完成新绑定。外部领域不受本机自定义名称的 24 字限制。上传不传 `session_id` 或任务状态，不添加未经确认的幂等头。
 - 不再创建、冻结或读取投递领域快照；旧数据库已有的 `batch_deliveries.domains` 列保留兼容但不使用，不为此清库。实时上传和历史补传均使用同一消息快照，重试不受映射变化影响。旧已尝试且尚未确认的请求在上传投影升级时停止自动重试，保留原消息、次数及回执，避免变更请求后自动重发；成功回执不改写。解绑取消未发送的阻塞投递，重绑不恢复原队列。
 - `40089` 沿用普通发送失败处理及既有次数上限，不触发上传侧领域补查、缓存刷新或专属恢复。
+- 暂停期间继续本地采集。与暂停时段有重叠的整轮对话通过项目页手动上传历史，恢复后新开始的轮次自动上传。暂停时段保存在本地，适用于服务重启和延迟补读。
 - 每批每个 Space 最多发送两次，发前持久化次数。接收必须 `success:true` 且含 `task_id`，随后 `uploaded=true`。处理失败保留此确认；两次失败终止，重启/暂停恢复不重置。
 - 首次发送持久化目标列表；重试仅保留快照内仍绑定的目标，不向已解绑空间发送。不因后来新增 Space 而重发已接收批次。
 - 采集只写入轨迹，不创建上传任务。宿主明确结束整轮任务后，按 `conversationId` 读取完整有序消息，生成一次不可变上传快照；上传端直接使用该快照，不再次拼接。重复结束通知、重复回放和服务重启不重复建任务。
@@ -108,14 +109,14 @@
 
 ## CLI JSON
 
-成功：`{ok:true,status:"FOUND"|"EMPTY",data:{topics:Topic[]},error:null}`。
+成功：`{ok:true,status:"FOUND"|"EMPTY",data:{content:string},error:null}`。
 失败：`{ok:false,status:"INVALID_QUERY"|"CONTEXT_MISSING"|"UNAVAILABLE",data:null,error:{message:string}}`。
 
-Topic 投影：`id,title,summary,description,decisions,experiences,timeline,relativity,updateTime`。决策/经验的作者、时间、history/conflicts 保留原始嵌套归属，不提升到全局混合列表。不返回 Space 路由字段、sources、云端诊断或配置 Key。
+`data.content` 与概览共用条目格式，只包含云端返回的 `topic_summary` 和 `topic_description`。检索直接返回条目正文；没有有效文案时返回 `EMPTY` 和空字符串。新的成功检索记录只在 `recalls.content` 保存这份正文。
 
 ## 云端待核对
 
-七个云接口（新增 `list/domains`）当前共用 POST JSON 与 `{code:0,data}` 响应封装。`add/message` 文档参考已核对，其余未完整明确的方法/字段按接口清单的暂定契约实现，Mock 验证不构成生产接口证明。
+工程协议的七个云接口使用 POST JSON 与 `{code:0,data}` 响应封装。`add/message` 文档参考已核对，其余未完整明确的方法/字段按接口清单的暂定契约实现，生产环境兼容性需单独核对。
 
 1. 写入时省略 domains 合法，使用目标 Space 的全部已登记领域；接口评审文档明确空领域 Space 写入返回 40088。本插件新建时登记所选领域，真实云端行为仍待联调。
 2. 工具返回、特殊事件、结构化多模态内容及工具关联字段的真实服务接收/保留能力未证实。不能以本地原文完整推断云端完整。

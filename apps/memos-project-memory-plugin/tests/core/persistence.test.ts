@@ -37,6 +37,8 @@ test('uncertain uploads stop after one send across restart; new batches continue
  const next=await service.event({...input,nativeSessionId:'native2'});assert.match(next.overview,/Full overview/);assert.equal(reads,1);assert.equal(next.overviewDelivered,false);
  service.store.markContextDelivered(next.sessionId);service.close();service=new PluginService(directory);
  const restored=await service.event({...input,nativeSessionId:'native2',turnKey:'input2'});assert.equal(reads,1);assert.equal(restored.overviewDelivered,true);assert.equal(restored.overview,next.overview);
+ t.mock.timers.enable({apis:['Date'],now:Date.now()+10});
  service.configure({paused:true});await service.event({...input,turnKey:'input3'});await service.event({...input,turnKey:'input3',event:'turn-end',records:[{sourceId:'source3',raw:{timestamp:new Date().toISOString(),role:'assistant',content:'paused'}}]});await service.sync();assert.equal(sends,2);assert.equal(service.store.batches()[2]!.status,'pending');
- service.configure({paused:false});await service.sync();assert.equal(sends,3);
+ t.mock.timers.tick(10);
+ service.configure({paused:false});await service.sync();assert.equal(sends,2);
 });

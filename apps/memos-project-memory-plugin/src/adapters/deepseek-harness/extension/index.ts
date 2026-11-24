@@ -186,7 +186,7 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
     const decision = await next();
     if (isCurrent() && decision.kind === 'enter' && overviewText && !state.overview?.committed) {
       state.overview ??= {
-        message: { id: randomUUID(), role: 'user', source: { kind: name, form: 'instructions' }, content: [{ type: 'text', text: `项目记忆初始概览（背景资料）\n${overviewText}` }] },
+        message: { id: randomUUID(), role: 'user', source: { kind: name, form: 'instructions' }, content: [{ type: 'text', text: overviewText }] },
         localSessionId, committed: false, acknowledged: false,
       };
       if (!decision.messages.some((item: Data) => item.id === state.overview!.message.id)) decision.messages.push(state.overview.message);

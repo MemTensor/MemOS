@@ -1,12 +1,14 @@
 # Local API implementation contract
 
-## Project overview cache (API 10)
+Current local API version: **10** (`src/runtime/revision.ts`). All sections below describe the current contract, not separate versioned endpoints.
+
+## Project overview cache
 
 No new route. `POST /api/events` uses the existing `session-start` event and Agent identity to apply the six-hour cache rule; blocking capability is registered in the adapter profile, never supplied as a request flag. Normal events only read SQLite. Create/bind responses add `overview` (string or null). `POST /api/context-delivery` accepts `{sessionId}` or existing host identity `{agentType,nativeSessionId}` when a pure opening signal has no task session yet. See [overview cache](overview-cache.md).
 
-## Cloud connection settings (API 9)
+## Cloud connection settings
 
-`GET /api/config` additionally returns `apiMode` (algorithm/engineering), `authMode` (none/token/bearer), `cloudProjectId`, `connectionConfigured` and `connectionError`, never the Key. `PUT /api/config` accepts the corresponding settings; omitted apiKey retains it, explicit empty string clears it. Invalid input does not partially change the active configuration.
+`GET /api/config` additionally returns `apiMode` (algorithm/engineering), `authMode` (none/token/bearer), `cloudProjectId`, `connectionConfigured`, `connectionError` and `apiKeyLength` (character count), never the Key. `PUT /api/config` accepts the corresponding settings; omitted apiKey retains it, explicit empty string clears it. Invalid input does not partially change the active configuration.
 
 `POST /api/connection-test` uses saved settings and an optional `{spaceId:string}`. It returns `{ok,reachable,verified,message,apiMode,baseUrl}`. With an existing ID it reads that space to validate protocol access; without an ID it only probes HTTP reachability. It never creates a space or uploads messages.
 
@@ -14,33 +16,39 @@ Binding state adds `active`, true only for a nonempty binding on the current con
 
 Dialog creation adds `POST /api/create-context` (identity-only host metadata → `{createContext,createIdentifiers}`) and `POST /api/create` (`{context,name,domain}` → CLI-shaped business result). The latter resolves routing from the current native session and reuses `bindProject`; it never accepts caller-supplied project/Agent routing. Existing Viewer routes are unchanged. See [dialog creation contract](create-project-space.md) for result states, durable no-retry behavior and full-round upload admission.
 
-JSON over loopback. GET /api/config returns {baseUrl,userId,keyConfigured,paused}; PUT /api/config accepts {baseUrl,apiKey,paused} (never return key). GET/POST /api/projects (name,root); POST /api/bind {objectId,spaceId}; GET /api/state returns {projects,tasks,sessions,batches,recalls,diagnostics}; GET /api/sessions/:id returns {session,turns,traces,recalls,batches}. POST /api/events accepts AgentEvent, returns EventResult (src/adapters/types.ts). /api/search accepts {sessionId,conversationId,query}, returns CLI JSON. POST /api/sync manually runs pending sync (not failed batches).
-GET /api/adapters lists detection status; POST /api/adapters/:id/install and /uninstall call installer. Parent implements server/storage/cloud/CLI. Hook agent owns registry/installer/hook and transcript shared; native agent owns extension/rpc dirs and tests. Viewer/mock agent owns viewer, dev/memos-mock and respective tests.
+## Transport and core routes
+
+JSON over loopback; the service listens on `127.0.0.1` and rejects foreign Origin headers. `GET /api/config` returns `baseUrl,userId,apiMode,authMode,cloudProjectId,paused,uploadMaxBytes,historyUploadConfirmCount,keyConfigured,apiKeyLength,connectionConfigured,connectionError`. `PUT /api/config` accepts the editable connection fields, `apiKey`, `paused` and the two upload settings; it does not change `userId` or return the Key. Viewer exposes Key and historical confirmation count; other connection/capacity fields are managed through the local service configuration.
+
+`GET/POST /api/projects` lists/registers projects; `POST /api/bind {objectId,spaceId}` appends a binding. `GET /api/state` returns project/session metadata, bindings, batch summaries, recalls and diagnostics. `GET /api/sessions/:id` returns session details with trace or turn pagination. `POST /api/events` accepts `AgentEvent` and returns `EventResult` (`src/adapters/types.ts`). `POST /api/search` accepts `{sessionId,conversationId,query}` and returns CLI JSON. `POST /api/sync` runs the pending synchronization cycle without resetting terminal failures.
+
+`GET /api/adapters` lists detection status. `POST /api/adapters/:id/install`, `/repair` and `/uninstall` manage the selected integration.
+
 HTTP source imports .ts; build strips to JS and rewrites .ts import suffix. Node built-ins only runtime. Client helper src/adapters/_shared/client.ts exports serviceRequest<T>(path,body?,method?) and ensureService(); use it in adapter entry points. MEMOS_PM_DATA_DIR selects instance; MEMOS_PM_URL optional local service override for tests. Server state fields camelCase. Source IDs stable per native record; never hash content alone for identity. turnKey is reliable source user-message/event identity when nativeTurnId unavailable; do not assign a turn for each model/tool event.
 
-`GET /api/state` returns batch metadata only: IDs, ownership, Space IDs, status, attempts, errors and timestamps. It does not select or parse `batches.messages`. Upload and session-detail paths continue reading complete snapshots through the existing store API; no `includeMessages` or lightweight-mode request parameter is added. Viewer routes use the existing five page names in the URL hash. A project-page bootstrap loads `/api/bind` immediately; switching to a page that needs session state loads `/api/state`. A request-order counter discards stale reload results without maintaining a second page state.
+`GET /api/state` returns batch metadata only: IDs, ownership, Space IDs, status, attempts, errors and timestamps. It does not select or parse `batches.messages`. Upload and session-detail paths continue reading complete snapshots through the existing store API; no `includeMessages` or lightweight-mode request parameter is added. Viewer routes use the four page names (`overview`, `projects`, `sessions`, `agents`) in the URL hash. A project-page bootstrap loads `/api/bind` immediately; switching to a page that needs session state loads `/api/state`. A request-order counter discards stale reload results without maintaining a second page state.
 
-`GET /api/health` returns `{ok,service,apiVersion,runtimeRevision,pid}`. The local API version is 8; the runtime revision is captured when the server is created, so rebuilding files cannot make an old process claim the new revision. Viewer checks the API version before interpreting state. An old single-Space response must produce an explicit service-update message, never be interpreted as empty `spaceIds` or missing Agent ownership.
+`GET /api/health` returns `{ok,service,apiVersion,runtimeRevision,pid}`. The runtime revision is captured when the server is created, so rebuilding files cannot make an old process claim the new revision. Viewer checks the API version before interpreting state. An old single-Space response must produce an explicit service-update message, never be interpreted as empty `spaceIds` or missing Agent ownership.
 
 `GET /api/projects?agentType=<profile.agentId>` lists that agent's existing projects from supported host metadata, recorded Agent associations and captured session directories. Candidate fields reuse `name` and `root`, plus `id`, `spaceIds`, `bindingStatus` when registered. Registered parent project roots follow the same longest-directory matching as capture. A GET without `agentType` continues to list registered projects. State project rows include `agentTypes` and `spaceIds`; neither uses a duplicate singular `spaceId` alias.
 
 `POST /api/projects {name,root,spaceId,agentType}` verifies the supplied Space via `get/space`, then registers/reuses the directory project and appends its binding atomically in SQLite. The existing `agentType` records ownership even when the Agent has no captured sessions yet. Only the selected Agent’s existing sessions and batches join the new scope, preserving raw traces, identities, payloads and send counters; old independent Space bindings do not grant new authorization. Existing nested project ownership is retained. Cross-connection bindings or uncertain creation roll back the operation. The registration-only `{name,root}` request remains available.
 
-`POST /api/projects {name,root,agentType,spaceName,domain}` explicitly creates and binds a Space after Viewer confirmation. `spaceName` and `spaceId` are mutually exclusive; creation requires a trimmed, nonblank `domain` of at most 24 Unicode code points. Invalid input fails before any cloud request. The service calls `create/space` with `{space_name,domains:[{domain}]}`, validates the returned ID, and reuses the existing binding transaction with its ID and name, without another `get/space`. Viewer offers fixed choices 编程, 办公 and 自定义; custom entry uses a dialog with the same character limit. No `list/domains` or Mock request is made to load options. Binding an existing Space requires no Domain selection. No new local route is introduced. The registration-only request remains compatible.
+`POST /api/projects {name,root,agentType,spaceName,domain}` explicitly creates and binds a Space after Viewer confirmation. `spaceName` and `spaceId` are mutually exclusive; creation requires a trimmed, nonblank `domain` of at most 24 Unicode code points. Invalid input fails before any cloud request. The service calls `create/space` with `{space_name,domains:[{domain}]}`, validates the returned ID, and reuses the existing binding transaction with its ID and name, without another `get/space`. Viewer offers fixed choices 编程, 办公 and 自定义; custom entry uses a dialog with the same character limit. The Viewer loads these options locally. Binding an existing Space requires no Domain selection. No new local route is introduced. The registration-only request remains compatible.
 
 Each Agent + project scope can bind at most 20 distinct Spaces. Both binding service entries reject a new target before cloud calls when full; the existing SQLite binding transaction rechecks the count to prevent concurrent overflow. Existing targets are idempotent and remain allowed; removing a binding frees one slot. Viewer checks current bindings before submission and again after creation confirmation, alerting `单个项目绑定空间不能超过20个`. The same alert handles server overflow errors while preserving any returned created `spaceId`. This is a local binding limit, not a per-user cloud Space quota. No new configuration, columns or request parameters are introduced.
 
-Space domain mappings are internal SQLite metadata keyed by `(baseUrl,spaceId)`. Creation persists its selected domain before local binding, preserving it if binding fails. Both existing-Space binding paths retain access checks and load `list/domains {space_id}` only when the mapping is missing or empty; invalid responses, request failures or an empty list prevent a new binding. Already-bound requests also repair missing metadata. Cached names are shared across Agent/project bindings and survive restart and unbinding. External names do not inherit the 24-character local-input restriction. No new local request parameters or routes are introduced.
+Space domain mappings are internal SQLite metadata keyed by `(connectionId,spaceId)`. Creation persists its selected domain before local binding, preserving it if binding fails. Both existing-Space binding paths retain access checks and load `list/domains {space_id}` only when the mapping is missing or empty; invalid responses, request failures or an empty list prevent a new binding. Already-bound requests also repair missing metadata. Cached names are shared across Agent/project bindings and survive restart and unbinding. External names do not inherit the 24-character local-input restriction. No new local request parameters or routes are introduced.
 
 `add/message` always omits `domains`, allowing the cloud to use all registered domains of its target Space as candidates. Upload preparation does not read the local domain mapping or call `list/domains`; a missing local mapping cannot block an upload. Live and historical delivery share the same message projection and frozen message body. Existing domain mappings remain binding metadata only, and no new local parameters or configuration are added.
 
 Delivery-domain snapshots are no longer created or used. An existing `batch_deliveries.domains` column is retained for compatibility but ignored; new databases do not create it. Upload-projection migration advances SQLite `user_version` to 4 once, blocking legacy attempted-but-unconfirmed requests without rewriting their messages or send counters; accepted receipts remain intact. Business code 40089 follows ordinary send failure handling without domain refresh or a dedicated retry branch. Unbinding continues to cancel blocked destinations, so rebinding cannot restore old upload authorization.
 
-A known cloud-connection or uncertain-binding conflict rejects creation before calling the cloud. A connection change after creation prevents binding. If creation returned an ID but binding fails, HTTP 400 includes `{error,spaceId}`; Viewer preserves that ID and switches to existing-Space binding. Creation failures and unknown outcomes are never retried automatically. API v6 is required: a v5 process would silently ignore `domain` and create a Space without its selected domain. The existing managed-service upgrade mechanism replaces an old process; a stale browser prompts the user to reopen Viewer before allowing operations.
+A known cloud-connection or uncertain-binding conflict rejects creation before calling the cloud. A connection change after creation prevents binding. If creation returned an ID but binding fails, HTTP 400 includes `{error,spaceId}`; Viewer preserves that ID and switches to existing-Space binding. Creation failures and unknown outcomes are never retried automatically. The Viewer requires the current API version so an older process cannot silently ignore required fields such as `domain`. The existing managed-service upgrade mechanism replaces an old process; a stale browser prompts the user to reopen Viewer before allowing operations.
 
 `GET /api/projects/:id/spaces` returns `[{spaceId,name}]`, resolving cloud Space names and retaining cached names on temporary lookup failure. `POST /api/bind {objectId,spaceId}` appends an accessible Space idempotently. `DELETE /api/bind {objectId,spaceId}` removes only the selected local association; no cloud deletion is performed. Empty lists preserve the project and do not automatically create a replacement Space. Existing cloud task tracking and historical payload snapshots remain intact.
 
-`POST /api/search {sessionId,conversationId,query}` still powers the sole CLI command. The service supplies all bound `space_ids` in one cloud request. Both cloud `search/memory` and `add/message` use the persisted `session.id` as `conversation_id`, across turns, retries, restarts and historical deliveries. The local `conversationId` still validates the current input turn. Uploads omit `session_id` and task-status fields; existing `get/status` polling remains unchanged. Models do not receive Space management parameters.
+`POST /api/search {sessionId,conversationId,query}` powers the `memos-pm search` command. The service supplies all bound `space_ids` in one cloud request. Both cloud `search/memory` and `add/message` use the persisted `session.id` as `conversation_id`, across turns, retries, restarts and historical deliveries. The local `conversationId` still validates the current input turn. Engineering uploads omit `session_id` and task-status fields; the algorithm protocol maps `conversation_id` to `session_id`. Processing uses the selected protocol’s status endpoint. Models do not receive Space management parameters.
 
 `POST /api/context-delivery` accepts `{sessionId}` or `{agentType,nativeSessionId}` and returns `{ok:true}`. The adapter calls it after actually handing initial context to the host. Events return `overviewDelivered` so history hosts omit the cached overview on later turns, while request-view hosts keep mounting cached context. Delivery acknowledgement is not proof of model consumption.
 
@@ -74,7 +82,7 @@ protect existing work. A previously populated source becoming empty is treated a
 missing evidence, not as an unused session. Viewer visibility follows SQLite state;
 there is no additional frontend empty-session filter.
 
-## Agent + project activation (API v4)
+## Agent + project activation
 
 `GET /api/activation?agentType=...&cwd=...&nativeSessionId=...&parentNativeSessionId=...` returns `{active:boolean}` without reading transcript bodies or creating a session. Codex validates the native session header; known child sessions inherit their same-Agent parent scope.
 
@@ -84,7 +92,7 @@ there is no additional frontend empty-session filter.
 
 Unbound `/api/events` returns empty context/IDs; `/api/search` rejects stale unbound contexts normally without diagnostic noise. Unbound context-delivery acknowledgements are ignored. Last unbind freezes retained trajectories and cancels unsent target work. A bind or rebind establishes a fresh capture boundary; old content requires explicit history upload.
 
-`history.uploadError` supplies an actionable local blocker or unresolved per-Space upload failure. A blocked history job has `uploading:false`; pending queues do not imply network activity while paused. Completed delivery with no remaining content renders “已上传历史”; errors render a disabled red “上传历史失败” with the reason. Pausing later does not turn already accepted history into failure.
+`history.uploadError` supplies an actionable local blocker or unresolved per-Space upload failure. A blocked history job has `uploading:false`; pending queues do not imply network activity while paused. No remaining work renders “已完成”. Recoverable failures render an enabled “重试上传” when `canUpload` permits it; other upload blockers render a disabled “上传历史失败” with the reason. Paused work renders “上传暂停”; failed scans offer “重试扫描”.
 
 ## Project discovery and cached lists
 
@@ -99,9 +107,9 @@ Copilot CLI project discovery reads only the top-level `cwd` in `<COPILOT_HOME o
 First binding of a new Agent project starts a native history scan in the background. Repeat binding, additional Spaces and state polling do not rescan native history. History refresh merges newly completed local records into the existing catalog. Existing scopes after service restart use their SQLite records until an explicit `POST /api/projects/:scopeId/history/scan`; unbound scopes never read native history.
 
 
-## Viewer 运行概览与云服务诊断（2026-11-19）
+## Viewer 运行概览与云服务诊断
 
-此增量沿用本地 API v5。四个主导航为运行概览、项目与空间、会话轨迹和 Agent 接入；云连接配置由左下角设置抽屉管理。原 `#settings` 地址兼容为运行概览上的设置抽屉。移除手动同步按钮，后台同步及 `POST /api/sync` 的既有能力保留；暂停只停止发送，恢复不重置失败投递。
+四个主导航为运行概览、项目与空间、会话轨迹和 Agent 接入；云连接配置由左下角设置抽屉管理。原 `#settings` 地址兼容为运行概览上的设置抽屉。移除手动同步按钮，后台同步及 `POST /api/sync` 的既有能力保留；暂停期间继续采集，与暂停时段重叠的轮次转为 manual，恢复后需显式上传历史；恢复不重置失败投递。
 
 - `GET /api/diagnostics?endpoint=&page=1&size=20` 返回 `{items,total,page,size}`。仅查询新的云调用失败记录；`endpoint` 可为 `create/space`、`get/space`、`get/memory`、`search/memory`、`add/message`、`get/status`、`list/domains`。页码最小1，页长1–100。列表不返回响应正文。
 - `GET /api/diagnostics/:id` 返回完整记录，不存在返回404。记录字段为 `id,endpoint,method,kind,message,httpStatus,businessCode,context,responseBody,createdAt,lastOccurredAt,occurrences`。
@@ -143,13 +151,13 @@ Viewer 原有 `/api/bind` 和 `/api/projects` 契约保持不变。
 
 ## 历史容量与进度
 
-`GET/PUT /api/config` 增加 `uploadMaxBytes`（正安全整数，默认39000，单位UTF-8字节）；设置抽屉可修改。大小包括最终上传 JSON 请求体的全部字段。
+`GET/PUT /api/config` 支持 `uploadMaxBytes`（正安全整数，默认39000，单位UTF-8字节）；通过本地服务配置管理，Viewer 设置抽屉不提供该字段。大小包括最终上传 JSON 请求体的全部字段。
 
 历史上传仍使用 `POST /api/projects/:scopeId/history {}`，不新增批量大小、分页游标或确认参数。Viewer 提交前通过既有 `GET /api/bind` 读取最新 `history.pending`：口径为独立待处理轨迹数，同一记录多个 Space 只计一次；大于配置项 `historyUploadConfirmCount` 才确认。取消不 POST。
 
 `history.uploading` 覆盖逐会话物化、待发送及云端处理阶段；已确认的静默 skipped 不计 pending，不进入 uploadError。按钮上传中禁用，最终显示已完成。批次回执保留 skipped 的零尝试、空任务 ID，不将其当成 uploaded=true。实际云错误仍通过现有诊断和错误状态呈现。
 
-本地 API 版本为8，新 Viewer 拒绝缺少上传能力字段的旧版后台；沿用受管服务更新流程，不清理数据库。
+Viewer 校验当前 API 版本，拒绝解释旧版后台字段；沿用受管服务更新流程，不清理数据库。
 
 `GET /api/bind` 的 `history.canUpload` 表示当前允许发起上传：扫描完成、有绑定和待处理记录、无进行中的任务，且未暂停、Key 和云连接可用。失败文字不直接决定按钮是否禁用；可补传的失败显示“重试上传”，提交仍复用原接口及数量确认。运行中的本次任务优先显示“上传中”，旧失败不覆盖进度；扫描不会清除失败或隐式上传。
 

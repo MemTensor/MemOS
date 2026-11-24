@@ -1,6 +1,6 @@
 # Native adapter verification
 
-Seven concrete adapters; shared code is only local-service transport/context caching. No custom model tools, SDK runtime dependencies, or Memmy feature migration. `npm run build` preserves each host entry under `dist/adapters/<id>/extension/index.js`; Prime has `rpc/runner.js`.
+Six native extensions and one native Skill integration. `npm run build` preserves extension entries under `dist/adapters/<id>/extension/index.js`; Prime uses `dist/adapters/prime-agent/skill-runner.js` and the local service capture loop.
 
 | Adapter | Protocol baseline (not a live compatibility certification) | Session / user turn | Delivery / capture |
 |---|---|---|---|
@@ -9,8 +9,8 @@ Seven concrete adapters; shared code is only local-service transport/context cac
 | Kilo CLI | 7.8.27 API research baseline | its own `sessionID` / user message ID | documented `{id, server}` module, OpenCode-style Hooks; own product/config profile |
 | Cline CLI | 3.0.74 research baseline; source inspected at `146894b6a42a7a554c6ff37f7bb33fe5122cc33d` | setup core `sessionId` / beforeRun `snapshot.runId` | native AgentPlugin capabilities/hooks; beforeRun appendContext persists; afterModel/afterTool/onEvent and final messages captured |
 | Pi | 1.5.2 | sessionManager ID / accepted input boundary UUID | before_agent_start persistent custom message; final idle replay uses agent_settled; message and tool events retain raw data |
-| Prime Agent | Rust 0.10.3 | get_state persistent `sessionId` / controlled external input ID | `prime-agent --mode rpc` JSONL; prompt prepared before submit, raw event capture and durable sessionFile replay; `turn_start` never creates a user turn |
-| DeepSeek Harness | `dsh-v0.2.2-rc.3` research baseline; local `0.2.2-rc.4` component verification documented below | session.id / identified source.kind=user message ID | blocking pre-step prepares IDs for a named runtime context; host admission refresh materializes the current snapshot; initial overview commits separately to history |
+| Prime Agent | Rust 0.10.5 | `RLM_SESSION_ID` / parent-linked native user entry | native Skills resolve current identity; local capture reads JSONL and requires `prime-agent list --all --json` to confirm completion |
+| DeepSeek Harness | `dsh-v0.2.2-rc.3` research baseline; local `0.2.2-rc.4` previously inspected | session.id / identified source.kind=user message ID | blocking pre-step prepares IDs for a named runtime context; host admission refresh materializes the current snapshot; initial overview commits separately to history |
 
 History hosts acknowledge first overview delivery using `/api/context-delivery`; later user rounds carry current identifiers only. Request-view hosts remount cached context without repeating cloud calls. Local service owns persisted session/turn mapping, upload, retries, and search.
 
@@ -18,29 +18,19 @@ History hosts acknowledge first overview delivery using `/api/context-delivery`;
 
 Installer writes a small host-specific loader plus the shared Skill and its reference document. Content hashes protect unrelated/user-edited files. OpenCode v1/v2 profiles are mutually exclusive. Cline discovers a `.ts` loader; Pi/OpenCode/Kilo use native extension discovery.
 
-Prime: installer returns the internal Node runner path. Feed JSONL `{"message":"...","inputId":"unique-input-id"}`; submit the next message after `agent_end`. Existing TUI sessions are not intercepted. The public `memos-pm` CLI remains search-only.
+Prime: install or update its integration in Viewer, then restart the host or run `/reload`. Use the normal terminal TUI with the local plugin service running. Five Skills provide search, creation, binding, space listing and unbinding; background capture verifies complete native rounds. The old controlled RPC runner has been removed. Prime requires its native daemon to confirm session completion; a quiet file or a closed terminal alone is insufficient.
 
 DeepSeek: installer adds a marked `insert` block to `$DSH_HOME/cordis.patch.yml` (default `~/.dsh/cordis.patch.yml`), shared by all profiles. Skill files use the same DSH home. Plugin entry paths are derived at installation time from the current user's home and the installed package location; no developer machine paths are hardcoded. Restart the selected profile normally, for example `dsh web`; no extra launch overlay is required. Repair upgrades the former standalone-overlay installation and removes its unchanged installer-owned overlay. Uninstall removes only the managed block and owned files, preserving other configuration. The shared YAML file is never part of the whole-file deletion manifest. Installation status checks the managed block and owned files; it does not certify a live model/cloud session. The installer preserves existing block-list YAML text (including Cordis tags and comments), supports empty lists, and reports unsupported YAML layouts without rewriting them.
 
-## Verified locally
+## Local verification and DSH context
 
-Protocol tests invoke actual host entry exports and assert two-input turn separation, continuation identity, cached request-view context, persistent-history injection, complete raw tool record forwarding, v2 disposal, Prime subprocess JSONL framing/correlation, overview delivery acknowledgement, installation idempotence, full Skill reference copying, and preservation of user edits. Tests use temporary homes and injected local service transport; no user configuration changes.
+Run `npm test` for the current repository regression suite. Tests use isolated data directories and local fixtures; they do not certify every installed host or real MemOS access. Test counts and historical component runs are not release guarantees.
 
-### DSH runtime context regression (2026-11-18)
-
-DSH registers `memos-project-memory:call-context` through `systemPrompt.context()`. The provider reads Agent/session-local state; pre-step prepares identity asynchronously, and DSH admission refresh supplies current IDs to the host-owned runtime snapshot. The Skill catalog remains host-owned. Initial overview is a separate history message without dynamic IDs, acknowledged only after its matching session/message commit. A failed acknowledgement is retried without adding the overview again.
-
-The eight adapter tests cover current IDs, interleaved sessions, unavailable/recovery, rejected or abandoned overview proposals, acknowledgement retry, capture/completion ordering and unload. Four optional installed-host tests use real Cordis, SystemPrompt, RuntimeContextProjection, SessionStore/Session, Skill catalog and the official DeepSeek serializer. They capture an offline outgoing request body and assert that ID blocks are inside the host reminder, for both callback registration orders. Driver admission and local service transport are simulated; these tests do not run a model or call MemOS.
-
-```sh
-MEMOS_PM_DSH_ROOT=/absolute/path/to/installed/@deepseek-ai/dsh node --test tests/adapters/dsh-host.test.ts
-```
-
-Set `MEMOS_PM_DSH_ENTRY` to an absolute built `dist/adapters/deepseek-harness/extension/index.js` to verify the deployment entry with the same tests. Without `MEMOS_PM_DSH_ROOT`, the four installed-host checks explicitly skip. Local execution verified `0.2.2-rc.4` against source and built entries. Published `0.2.2-rc.3` source was checked for the same context registration and assemble/pre-step/admission-refresh APIs; that version was not executed here and is not certified by the rc.4 results.
+DSH registers `memos-project-memory:call-context` through `systemPrompt.context()`. The provider reads Agent/session-local state; pre-step prepares identity asynchronously, and DSH admission refresh supplies current IDs to the host-owned runtime snapshot. Initial overview is a separate history message, acknowledged only after its matching session/message commit. Revalidate this behavior against the target installed DSH release before shipping.
 
 ## Remaining live acceptance
 
-The original seven-adapter verification used fixtures and inspected source. DSH has since been installed locally; the context regression uses its actual components as described below. Component verification does not prove live model behavior or MemOS acceptance. The other adapters still require their own host/model runs before release claims.
+Fixtures and source inspection do not prove live model behavior or MemOS acceptance. Each adapter requires its own host/model run, installation/uninstallation check, current-turn memory query and cloud upload verification before release claims.
 
 Cline normal CLI uses one root core session per process. Its runtime snapshots omit core sessionId; adapter binds runtime agentId to its sole registered setup session. If multiple unbound core sessions share the same module, it rejects ambiguous routing instead of guessing. This is not a claim of multi-session Hub compatibility.
 
@@ -53,5 +43,5 @@ OpenCode v2 event history replay after disconnection, DeepSeek history restorati
 - [Kilo plugin modules](https://kilo.ai/docs/automate/extending/plugins)
 - [Cline plugin guide](https://github.com/cline/cline/blob/146894b6a42a7a554c6ff37f7bb33fe5122cc33d/sdk/.cline/skills/plugin.md), [runtime hooks and snapshot](https://github.com/cline/cline/blob/146894b6a42a7a554c6ff37f7bb33fe5122cc33d/sdk/packages/shared/src/agent.ts)
 - [Pi extensions](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/docs/extensions.md)
-- [Prime wire protocol](https://github.com/PrimeIntellect-ai/prime-agent/blob/v0.10.3/crates/pa-daemon/src/rpc/protocol.rs), [binary name](https://github.com/PrimeIntellect-ai/prime-agent/blob/v0.10.3/crates/pa-cli/Cargo.toml)
+- [Prime persisted events](https://github.com/PrimeIntellect-ai/prime-agent/blob/v0.10.5/crates/pa-core/src/session_engine/mod.rs), [native session roster](https://github.com/PrimeIntellect-ai/prime-agent/blob/v0.10.5/crates/pa-cli/src/daemon_session_list.rs)
 - [DeepSeek events and pre-step](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.3/packages/core/agent/src/runtime-types.ts), [session](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.3/packages/core/session/src/index.ts), [official patch structure](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.3/packages/bundle/base/cordis.patch.yml), [profile launch arguments](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.3/apps/cli/src/args.ts)

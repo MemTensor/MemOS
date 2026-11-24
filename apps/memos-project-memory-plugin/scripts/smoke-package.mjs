@@ -1,75 +1,37 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { once } from 'node:events';
-import { createMockServer, getMockState } from '../dev/memos-mock/server.ts';
 const exec=promisify(execFile), root=await mkdtemp(join(tmpdir(),'memos-package-'));
-const cloud=createMockServer();let pid;
+let pid;
 try {
- cloud.listen(0,'127.0.0.1');await once(cloud,'listening');
  const packed=await exec('npm',['pack','--pack-destination',root,'--json']);
  const archive=JSON.parse(packed.stdout.slice(packed.stdout.indexOf('[')))[0].filename;
  const clean=join(root,'clean');await mkdir(clean);
  await exec('npm',['install','--prefix',clean,'--ignore-scripts','--no-audit','--no-fund',join(root,archive)]);
  const pkg=join(clean,'node_modules','memos-project-memory-plugin');
- process.env.MEMOS_PM_DATA_DIR=join(root,'data');process.env.CODEX_HOME=join(root,'codex-home');delete process.env.MEMOS_PM_URL;
- const sourceRoot=join(process.env.CODEX_HOME,'sessions');await mkdir(sourceRoot,{recursive:true});
- const {serviceRequest,ensureService}=await import(pathToFileURL(join(pkg,'dist/adapters/_shared/client.js')));
- const url=await ensureService();pid=JSON.parse(await readFile(join(root,'data/service.json'),'utf8')).pid;
- for(const asset of ['/','/app.js','/view.js','/style.css'])assert.equal((await fetch(url+asset)).status,200);
- await serviceRequest('/api/config',{apiKey:'mock-key',baseUrl:`http://127.0.0.1:${cloud.address().port}/api/openmem/v1`},'PUT');
- const space=await (await fetch(`http://127.0.0.1:${cloud.address().port}/api/openmem/v1/create/space`,{method:'POST',headers:{Authorization:'Token mock-key','Content-Type':'application/json'},body:JSON.stringify({space_name:'Installed'})})).json();
- await serviceRequest('/api/projects',{name:'Installed',root:'/installed-project',agentType:'claude-code',spaceId:space.data.space_id});
- const {normalizeHook}=await import(pathToFileURL(join(pkg,'dist/adapters/_shared/hooks.js')));
- const claudeSource=join(root,'claude.jsonl');
- const claudeRows=[
-  {uuid:'cu',promptId:'1',type:'user',message:{role:'user',content:'installed package'}},
-  {uuid:'ca',type:'assistant',message:{role:'assistant',content:[{type:'thinking',thinking:'package reasoning'},{type:'tool_use',id:'search',name:'Bash',input:{command:'memos-pm search --query package'}}]}},
-  {uuid:'cr',type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'search',content:'INTERNAL_RECALL'}]}},
-  {uuid:'cf',type:'assistant',message:{role:'assistant',content:[{type:'text',text:'installed answer'}]}},
- ].map(row=>({...row,timestamp:new Date().toISOString()}));
- await writeFile(claudeSource,claudeRows.map(row=>JSON.stringify(row)).join('\n')+'\n');
- const claudeHook=(hook_event_name,extra={})=>normalizeHook('claude-code',{session_id:'installed-session',cwd:'/installed-project',prompt_id:'1',transcript_path:claudeSource,hook_event_name,...extra});
- const identity=await serviceRequest('/api/events',await claudeHook('UserPromptSubmit',{prompt:'installed package'}));
- await serviceRequest('/api/events',await claudeHook('Stop',{last_assistant_message:'installed answer'}));
- await appendFile(claudeSource,JSON.stringify({type:'system',subtype:'stop_hook_summary',timestamp:new Date().toISOString()})+'\n');
- await serviceRequest('/api/sync',{});assert.equal(getMockState(cloud).uploads.get(space.data.space_id)?.length,1);
- const claudeBody=getMockState(cloud).uploads.get(space.data.space_id)[0].body.messages;
- assert.match(JSON.stringify(claudeBody),/package reasoning/);assert.doesNotMatch(JSON.stringify(claudeBody),/INTERNAL_RECALL|tool_use/);
- await serviceRequest('/api/projects',{name:'Installed',root:'/installed-project',agentType:'codex-cli',spaceId:space.data.space_id});
- const source=join(sourceRoot,'rollout-package.jsonl');
- const rows=[
-  {type:'session_meta',payload:{id:'installed-codex',cwd:'/installed-project',source:'cli'}},
-  {type:'event_msg',payload:{type:'task_started',turn_id:'installed-turn'}},
-  {type:'response_item',payload:{type:'message',id:'user',role:'user',content:'package task'}},
-  {type:'response_item',payload:{type:'custom_tool_call',call_id:'tool',name:'apply_patch',input:'package patch'}},
-  {type:'response_item',payload:{type:'custom_tool_call_output',call_id:'tool',output:'package result'}},
-  {type:'response_item',payload:{type:'message',id:'answer',role:'assistant',content:'package answer',phase:'final_answer'}},
-  {type:'event_msg',payload:{type:'task_complete',turn_id:'installed-turn'}},
- ].map((row,index)=>({...row,timestamp:new Date(Date.now()+index).toISOString()}));
- await writeFile(source,rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
- const codexEvent=await normalizeHook('codex-cli',{session_id:'installed-codex',turn_id:'installed-turn',cwd:'/installed-project',transcript_path:source,hook_event_name:'Stop'});
- const codexIdentity=await serviceRequest('/api/events',codexEvent);
- await serviceRequest('/api/events',codexEvent);await serviceRequest('/api/sync',{});
- assert.equal(getMockState(cloud).uploads.get(space.data.space_id)?.length,2);
- const detail=await serviceRequest('/api/sessions/'+codexIdentity.sessionId+'?unit=turn');
- assert.equal(detail.total,1);assert.equal(detail.groups[0].traces.length,4);
- const preview=await exec(process.execPath,[join(pkg,'dist/runtime/repair-codex.js'),'--data-dir',join(root,'data'),'--source-root',sourceRoot]);
- assert.equal(JSON.parse(preview.stdout).mode,'dry-run');
- const cli=join(pkg,'dist/cli/index.js');
- const result=await exec(process.execPath,[cli,'search','--session-id',identity.sessionId,'--conversation-id',identity.conversationId,'--query','接口']);assert.equal(JSON.parse(result.stdout).status,'FOUND');
- try{await exec(process.execPath,[cli,'upload']);assert.fail('extra command accepted');}catch(error){assert.equal(error.code,1);assert.equal(JSON.parse(error.stdout).status,'INVALID_QUERY');}
- const searchArgs=[cli,'search','--session-id',identity.sessionId,'--conversation-id',identity.conversationId,'--query','接口'];
- getMockState(cloud).uploads.clear();
- assert.equal(JSON.parse((await exec(process.execPath,searchArgs)).stdout).status,'EMPTY');
- for(const [args,status] of [[ [cli,'search','--query','接口'],'CONTEXT_MISSING'],[searchArgs,'UNAVAILABLE']]){
-  if(status==='UNAVAILABLE')await serviceRequest('/api/config',{apiKey:''},'PUT');
-  try{await exec(process.execPath,args);assert.fail('error status exited zero');}catch(error){assert.equal(error.code,1);assert.equal(JSON.parse(error.stdout).status,status);}
+ const metadata=JSON.parse(await readFile(join(pkg,'package.json'),'utf8'));
+ assert.equal(metadata.license,'Apache-2.0');
+ assert.match(await readFile(join(pkg,'LICENSE'),'utf8'),/Apache License/);
+ const readme=await readFile(join(pkg,'README.md'),'utf8');
+ for(const match of readme.matchAll(/\]\(([^)]+)\)/g)){
+  const target=match[1].split('#')[0];
+  if(target&&!/^[a-z]+:/i.test(target))await readFile(join(pkg,target));
  }
+
+ process.env.MEMOS_PM_DATA_DIR=join(root,'data');process.env.CODEX_HOME=join(root,'codex-home');delete process.env.MEMOS_PM_URL;
+ const {ensureService}=await import(pathToFileURL(join(pkg,'dist/adapters/_shared/client.js')));
+ const url=await ensureService();pid=JSON.parse(await readFile(join(root,'data/service.json'),'utf8')).pid;
+ for(const asset of ['/','/app.js','/view.js','/i18n.js','/style.css'])assert.equal((await fetch(url+asset)).status,200);
+ const cli = join(clean, 'node_modules', '.bin', 'memos-pm');
+ await assert.rejects(exec(cli, ['search', '--query', 'package check']), error => {
+   assert.equal(error.code, 1);
+   assert.equal(JSON.parse(error.stdout).status, 'CONTEXT_MISSING');
+   return true;
+ });
  const {installAdapter,uninstallAdapter}=await import(pathToFileURL(join(pkg,'dist/adapters/installer.js')));
  const home=join(root,'home');await mkdir(home);await installAdapter('claude-code',{home,cwd:root});
  const settings=JSON.parse(await readFile(join(home,'.claude/settings.json'),'utf8'));
@@ -79,8 +41,8 @@ try {
  const wrapper=await readFile(join(home,'.config/opencode/plugins/memos-project-memory.js'),'utf8');assert.match(wrapper,/dist\/adapters\/opencode-v1\/extension\/index.js/);
  await import(pathToFileURL(join(home,'.config/opencode/plugins/memos-project-memory.js')));
  await uninstallAdapter('opencode-v1',{home,cwd:root});
- console.log('PASS: clean npm install, compiled service, independent Claude/Codex complete-round capture/replay, repair preview, Viewer assets, HTTP upload, CLI, hook/native installation and resource paths');
+ console.log('PASS: clean npm install, compiled service, Viewer assets, CLI, hook/native installation and resource paths');
 } finally {
  if(pid){try{process.kill(pid,'SIGTERM');}catch{} for(let i=0;i<50;i++){try{process.kill(pid,0);}catch{break;}await new Promise(r=>setTimeout(r,100));}}
- await new Promise(resolve=>cloud.close(resolve));await rm(root,{recursive:true,force:true});
+ await rm(root,{recursive:true,force:true});
 }

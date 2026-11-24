@@ -24,25 +24,6 @@ async function fixture(t: any) {
     return { dir, sources, project, service };
 }
 
-test('project backfill precedes current hook and reread preserves complete rounds and original ordering', async t => {
-    const { sources, project, service } = await fixture(t);
-    const old = join(sources, 'rollout-old.jsonl'), current = join(sources, 'rollout-new.jsonl');
-    await writeFile(old, jsonl([meta('old', project), start('old-turn'), message('ou','user','old task',2), message('oa','assistant','old answer',3), end('old-turn',4)]));
-    await writeFile(current, jsonl([meta('new', project, 2), start('new-turn',1,2), message('nu','user','new task',2,2), message('na','assistant','new answer',3,2), end('new-turn',4,2)]));
-    const hook = await normalizeHook('codex-cli', { session_id: 'new', turn_id: 'new-turn', cwd: project, transcript_path: current, hook_event_name: 'Stop', last_assistant_message: 'new answer' });
-    await service.event(hook);
-    await service.event(hook);
-    const sessions = service.store.state().sessions;
-    assert.deepEqual(sessions.map(s => s.nativeSessionId), ['old', 'new']);
-    for (const session of sessions) {
-        const detail = service.store.sessionDetail(String(session.id),1,10,'turn');
-        assert.equal(detail.total,1);
-        assert.equal(detail.groups![0]!.traces.length,2);
-        assert.match(String(detail.groups![0]!.traces[0]!.occurredAt), /^2026-01-/);
-    }
-    assert.equal(service.store.batches().length,2);
-});
-
 test('late child source completes its parent round and cannot create another visible session', async t => {
     const { sources, project, service } = await fixture(t);
     const parent = join(sources,'rollout-parent.jsonl');

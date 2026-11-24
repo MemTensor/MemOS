@@ -1,6 +1,8 @@
 # 项目概览缓存
 
-概览按既有 Agent＋项目范围、云连接和 Space 分开保存在 SQLite。`project_overviews` 唯一键为 `(scopeId,connectionId,spaceId)`，内容 `data` 和上次成功时间 `fetchedAt` 均可为 null。未获取与成功返回空主题列表有区别。旧 `sessions.overview` 字段保留兼容，不再作为概览来源，不反拆旧合并文本。
+概览按既有 Agent＋项目范围、云连接和 Space 分开保存在 SQLite。`project_overviews` 唯一键为 `(scopeId,connectionId,spaceId)`，正文 `content` 和上次成功时间 `fetchedAt` 均可为 null。成功返回空正文时仍更新 `fetchedAt`。升级时先备份已有概览缓存，再在本地将旧 `data` JSON 转为正文，保留原成功时间。旧 `sessions.overview` 字段保留兼容，不再作为概览来源，不反拆旧合并文本。
+
+每个 Space 只保存条目正文。每条取 `topic_summary` 和 `topic_description`，去除首尾空白、保留内部换行。首行以 `- ` 开头，后续行缩进两格。单字段有内容时用该字段，两个字段相同时只展示一次，两个字段都空时跳过。条目按云端顺序用空行分隔。交付时按当前绑定顺序拼接各 Space 的正文，有内容时统一添加一次“项目记忆概览”和背景说明。
 
 ## 刷新与消费
 
@@ -24,5 +26,3 @@
 纯会话开启还没有本地任务会话 ID 时，复用 `create_hosts` 身份元数据的 `overviewDelivered`，不创建虚假任务。原 `/api/context-delivery` 同时接受已有 `{sessionId}` 或 `{agentType,nativeSessionId}`。交付后首个真实用户轮继承标记，避免重复注入；同一原生会话收到新的开启信号会重置本次交付，再按原方式确认。确认只表示交付宿主，不保证模型已消费。
 
 没有可靠开启信号的入口不把每轮 turn-start 冒充 session-start。现有 DSH 实时入口、OpenCode v2 当前事件流、Cline setup、Prime 原生 Skill 暂无该信号；其概览仍可读绑定时已保存的缓存，不会因此增加定时刷新。其他入口继续使用其已有真实开启事件。
-
-不做 Topic 结果复查，不改变主动记忆检索、轨迹采集和上传。

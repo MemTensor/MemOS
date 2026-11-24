@@ -1,14 +1,16 @@
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { cursorToolEvidence, readKey } from './tool-evidence.ts';
 import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { AgentEvent, Message, TraceInput } from '../types.ts';
-import { asMessage, object, textField } from '../_shared/transcript.ts';
+import { asMessage, messagePart, object, textField } from '../_shared/transcript.ts';
 import { normalizeTaskTrace } from '../_shared/task-trace.ts';
 import { hasTaskContent } from '../_shared/message-content.ts';
 import type { Store } from '../../storage/store.ts';
 import { cursorSource, cursorTranscript, cursorReadSource, type CursorSource } from './source.ts';
 
-type Receipt = { sessionId: string; conversationId: string; nativeSessionId: string; nativeTurnId: string; scopeId: string; enabledAt: string; submittedAt: string; path?: string; source?: CursorSource; observed?: { dev: number; ino: number; size: number }; stopped?: boolean; parentNativeTurnId?: string };
+type Receipt = { sessionId: string; conversationId: string; nativeSessionId: string; nativeTurnId: string; scopeId: string; enabledAt: string; submittedAt: string; path?: string; source?: CursorSource; observed?: { dev: number; ino: number; size: number }; stopped?: boolean; stoppedAt?: string; parentNativeTurnId?: string };
 
 /** Cursor completion is proven by its own transcript, never by a timer or Hook arrival order. */
 export class CursorCapture {
@@ -78,13 +80,17 @@ export class CursorCapture {
         if (records.length) this.store.capture(session.id, records);
         if (admitted) {
           if (!receipt.path) receipt.path = textField(raw, 'transcript_path', 'transcriptPath');
-          if (event.event === 'turn-end' || event.event === 'session-end') receipt.stopped = true;
+          if (event.event === 'turn-end' || event.event === 'session-end') {
+            receipt.stopped = true;
+            receipt.stoppedAt ??= this.store.memory.recordTime(raw);
+          }
           this.store.db.prepare('UPDATE cursor_receipts SET event=? WHERE id=?').run(JSON.stringify(receipt), String(turn.id));
         }
       }
       if (event.event === 'session-end' && !key) {
         for (const row of this.store.rows('SELECT id,event FROM cursor_receipts WHERE json_extract(event,\'$.sessionId\')=?', session.id)) {
           const receipt = JSON.parse(String(row.event)) as Receipt; receipt.stopped = true;
+          receipt.stoppedAt ??= this.store.memory.recordTime(raw);
           this.store.db.prepare('UPDATE cursor_receipts SET event=? WHERE id=?').run(JSON.stringify(receipt), String(row.id));
         }
       }
@@ -126,6 +132,70 @@ export class CursorCapture {
     const args = object(input);
     if (typeof args.command !== 'string' || Object.keys(args).some(key => !['command', 'cwd', 'timeout', 'description'].includes(key))) return;
     return { key: JSON.stringify([args.command, args.cwd ?? '']), timeout: args.timeout };
+  }
+  private reconcileCalls(records: TraceInput[], existing: { sourceId: string; message: Message; raw: Record<string, unknown> }[], receipt: Receipt, cwd: string) {
+    const replacements = new Set<string>();
+    const candidates = records.flatMap(record => {
+      const call = this.calls(record.message!)[0], fn = object(call?.function);
+      const name = call?.name ?? fn.name;
+      if (typeof name !== 'string') return [];
+      let input = call.input ?? fn.arguments ?? call.arguments;
+      if (input === undefined) return [];
+      try { if (typeof input === 'string') input = JSON.parse(input); } catch { return []; }
+      return [{ record, call, name, input }];
+    });
+    if (!candidates.some(item => !item.call.id)) return replacements;
+    const native = cursorToolEvidence(this.home, cwd, receipt.nativeSessionId, receipt.nativeTurnId);
+    for (const { record, call, name, input } of candidates) {
+      if (call.id) continue;
+      const same = (other: { name: string; input: unknown }) => other.name === name && isDeepStrictEqual(other.input, input);
+      const matches = native?.calls.filter(c => same({ name: c.name, input: c.args })) ?? [];
+      if (candidates.filter(same).length !== 1 || matches.length > 1) continue;
+      const match = matches[0];
+      const prefix = `hook:${receipt.nativeSessionId}:tool-call:`;
+      let hook = match && existing.find(row => row.sourceId === prefix + match.id);
+      const resultId = (id: string) => `hook:${receipt.nativeSessionId}:tool-result:${id}`;
+      const hasResult = (id: string) => [...existing, ...records].some(row => row.sourceId === resultId(id));
+      // Older Shell hooks can carry an execution UUID distinct from the provider ID.
+      // Defaults omitted by the transcript are tolerated only for a unique compatible hook.
+      if (!hook && name === 'Shell') {
+        const shell = this.shell(record.message!);
+        if (shell && candidates.filter(c => this.shell(c.record.message!)?.key === shell.key).length === 1) {
+          const possible = existing.filter(row => row.sourceId.startsWith(prefix) && this.shell(row.message)?.key === shell.key);
+          const candidate = possible.length === 1 ? possible[0] : undefined;
+          const timeout = candidate && this.shell(candidate.message)!.timeout;
+          if (shell.timeout === undefined || timeout === undefined || shell.timeout === timeout) hook = candidate;
+        }
+      } else if (!hook && !match) {
+        const key = readKey(name, input);
+        if (key && candidates.filter(c => readKey(c.name, c.input) === key).length === 1) {
+          const possible = existing.filter(row => row.raw.cursorReadKey === key && row.sourceId.startsWith(prefix));
+          if (possible.length === 1) hook = possible[0];
+        }
+      }
+      const hookCall = hook && this.calls(hook.message)[0];
+      const id = hook ? hookCall?.id : match?.id;
+      if (typeof id !== 'string' || !id.trim() || (hook && hook.sourceId !== prefix + id)) continue;
+      if ((!match || match.id !== id) && native?.calls.some(c => c.id === id)) continue;
+      if (records.some(other => other.sourceId === prefix + id)) continue;
+      const result = name === 'GetDynamicTools' ? native?.results.get(id) : undefined;
+      if (!hasResult(id) && result !== undefined) {
+        if (!hook && existing.some(row => this.calls(row.message).some(c => object(c.function).name === name))) continue;
+        const raw = object(record.raw);
+        const part = 1 + Math.max(...records.filter(row => object(row.raw).sourceOrdinal === raw.sourceOrdinal).map(row => Number(object(row.raw).sourcePart)));
+        records.push({ ...record, sourceId: resultId(id), raw: { occurredAt: receipt.submittedAt, sourceOrdinal: raw.sourceOrdinal, sourcePart: part },
+          message: { role: 'tool', tool_call_id: id, content: result } });
+      }
+      record.sourceId = prefix + id;
+      call.id = id;
+      if (!hook || !match || match.id !== id || object(hookCall?.function).name === 'skill') continue;
+      // Preserve the Hook's stable message metadata and the transcript's verified position.
+      const position = object(record.raw);
+      record.raw = { ...hook.raw, sourceOrdinal: position.sourceOrdinal, sourcePart: position.sourcePart };
+      record.message = { ...hook.message, tool_calls: [{ ...hookCall, function: { name: match.name, arguments: JSON.stringify(match.args) } }] };
+      replacements.add(record.sourceId);
+    }
+    return replacements;
   }
   private text(content: unknown): string {
     if (typeof content === 'string') return content;
@@ -187,8 +257,8 @@ export class CursorCapture {
         const records: TraceInput[] = [];
         const prose: string[] = [];
         let userSeen = false, terminal: Record<string, unknown> | undefined, offset = readOffset;
-        const existing = this.store.rows("SELECT sourceId,message FROM traces WHERE sessionId=? AND conversationId=? ORDER BY id", receipt.sessionId, receipt.conversationId)
-          .map(item => ({ sourceId: String(item.sourceId), message: JSON.parse(String(item.message)) as Message }));
+        const existing = this.store.rows("SELECT sourceId,message,raw FROM traces WHERE sessionId=? AND conversationId=? ORDER BY id", receipt.sessionId, receipt.conversationId)
+          .map(item => ({ sourceId: String(item.sourceId), raw: object(JSON.parse(String(item.raw))), message: JSON.parse(String(item.message)) as Message }));
         const expected = existing.find(record => record.message.role === 'user')?.message;
         for (const line of data.subarray(readOffset, endAt + 1).toString('utf8').split('\n')) {
           const at = offset; offset += Buffer.byteLength(line, 'utf8') + 1;
@@ -211,7 +281,7 @@ export class CursorCapture {
           // records. Its admission timestamp is provenance, not a replay-time guess.
           const record: TraceInput = { sourceId: `cursor:${receipt.nativeSessionId}:${receipt.nativeTurnId}:${at}`, nativeTurnId: receipt.nativeTurnId, raw: { ...raw, occurredAt: receipt.submittedAt }, message };
           const append = (body: Message, part: number, sourceId = `${record.sourceId}:${part}`) => records.push({ ...record, sourceId,
-            raw: { ...object(record.raw), sourceOrdinal: at, sourcePart: part }, message: body });
+            raw: { ...object(record.raw), sourceOrdinal: at, sourcePart: part }, message: messagePart(body, part, message) });
           if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
             append(message, 0, `hook:${receipt.nativeSessionId}:tool-result:${message.tool_call_id}`);
           } else if (message.role === 'tool' && Array.isArray(message.content) && message.content.some(block => object(block).type === 'tool_result' && typeof object(block).tool_use_id === 'string')) {
@@ -243,18 +313,7 @@ export class CursorCapture {
         if (!['success', 'completed', 'cancelled', 'canceled', 'failed', 'error', 'aborted', 'interrupted'].includes(String(terminal.status))) throw new Error('Cursor 原生结束状态尚无法确认');
         const cancelled = ['cancelled', 'canceled', 'failed', 'error', 'aborted', 'interrupted'].includes(String(terminal.status));
         if (!cancelled && !records.some(record => record.message?.role === 'assistant' && this.text(record.message.content).trim())) throw new Error('Cursor 等待本轮最终回答');
-        // A unique native Shell projection can reuse its Hook identity. Repeated
-        // commands or differing operative fields remain separate, never guessed.
-        for (const record of records) {
-          const call = this.calls(record.message!)[0], command = this.shell(record.message!);
-          if (!command || typeof call?.id === 'string') continue;
-          const native = records.filter(item => this.shell(item.message!)?.key === command.key);
-          const hooks = existing.filter(item => item.sourceId.startsWith('hook:') && this.shell(item.message)?.key === command.key);
-          if (native.length !== 1 || hooks.length !== 1 || typeof this.calls(hooks[0]!.message)[0]?.id !== 'string') continue;
-          const hook = this.shell(hooks[0]!.message)!;
-          if (command.timeout !== undefined && hook.timeout !== undefined && command.timeout !== hook.timeout) continue;
-          record.sourceId = hooks[0]!.sourceId;
-        }
+        const replacements = this.reconcileCalls(records, existing, receipt, session!.cwd);
         const messages = [...existing.map(record => record.message), ...records.map(record => record.message!)];
         const pendingCalls = new Set(messages.flatMap(message => this.calls(message).flatMap(call => typeof call.id === 'string' ? [call.id] : [])));
         for (const message of messages) {
@@ -282,11 +341,14 @@ export class CursorCapture {
             if (!matched) continue; // Unmatched task text must not be discarded.
             this.store.db.prepare('DELETE FROM traces WHERE id=?').run(Number(hook.id));
           }
-          this.store.capture(receipt.sessionId, records);
+          this.store.capture(receipt.sessionId, records, replacements);
           for (const record of records) this.store.db.prepare("UPDATE traces SET raw=json_set(raw,'$.sourceOrdinal',?,'$.sourcePart',?) WHERE sessionId=? AND conversationId=? AND sourceId=?")
             .run(Number(object(record.raw).sourceOrdinal), Number(object(record.raw).sourcePart), receipt.sessionId, receipt.conversationId, record.sourceId);
           this.store.db.prepare("UPDATE traces SET raw=json_set(raw,'$.sourceOrdinal',?,'$.sourcePart',-1) WHERE sessionId=? AND conversationId=? AND json_extract(message,'$.role')='user'").run(readOffset, receipt.sessionId, receipt.conversationId);
-          this.store.finalizeTurn(receipt.sessionId, receipt.nativeTurnId);
+          const unresolved = records.flatMap(record => this.calls(record.message!).filter(call => !call.id)
+            .map(call => String(call.name ?? object(call.function).name ?? 'unknown')));
+          if (unresolved.length) this.store.diagnostic(`Cursor 本轮缺少可唯一关联的工具调用 ID：${[...new Set(unresolved)].join('、')}（${receipt.nativeTurnId}）`);
+          this.store.finalizeTurn(receipt.sessionId, receipt.nativeTurnId, this.store.memory.recordTime(terminal) ?? receipt.stoppedAt);
           this.store.db.prepare('DELETE FROM cursor_receipts WHERE id=?').run(String(row.id));
           this.store.db.exec('COMMIT');
         } catch (error) { if (this.store.db.isTransaction) this.store.db.exec('ROLLBACK'); throw error; }

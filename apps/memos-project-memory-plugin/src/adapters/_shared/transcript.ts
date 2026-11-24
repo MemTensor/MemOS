@@ -12,16 +12,27 @@ export function textField(value: Record<string, unknown>, ...keys: string[]): st
 /** Copy only metadata backed by the source message, never a tool/event identity or inferred member. */
 export function messageMetadata(message: Message, raw: unknown): Message {
   const row = object(raw), payload = object(row.payload), data = object(row.data);
+  const item = object(payload.item);
+  const execution = [item.type, payload.type].some(type => ['CommandExecution', 'McpToolCall', 'FileChange', 'ImageView', 'WebSearch', 'SubAgentActivity'].includes(String(type))
+    || /^(?:function|custom_tool|web_search|local_shell|computer|image_generation|file_search|code_interpreter|mcp)_call(?:_output)?$/.test(String(type)));
+  const executionIds = new Set([item.id, payload.id, payload.call_id, message.tool_call_id,
+    ...(Array.isArray(message.tool_calls) ? message.tool_calls.map(call => object(call).id) : [])].filter(value => typeof value === 'string'));
+  const isMessageId = (id: unknown) => !execution || typeof id !== 'string' || !executionIds.has(id);
+  // Old stored projections may already contain the execution ID as message.id.
+  if (message.id !== undefined && !isMessageId(message.id)) {
+    const { id: _executionId, ...body } = message; message = body as Message;
+  }
   const sameRole = (value: Record<string, unknown>) => value.role === message.role
     || message.role === 'tool' && value.role === 'toolResult'
     || message.role === 'user' && value.type === 'UserMessage'
     || message.role === 'assistant' && value.type === 'AgentMessage';
-  const sources = [object(row.message), object(data.message), ...(row.type === `${message.role}.message` ? [{ ...data, role: message.role }] : []), data, object(payload.message), object(payload.item), payload, row].filter(sameRole);
+  const sources = [object(row.message), object(data.message), ...(row.type === `${message.role}.message` ? [{ ...data, role: message.role }] : []), data, object(payload.message), object(item.message), item, payload, row]
+    .filter(value => sameRole(value) && (!value.type || ['message', 'user', 'assistant', 'tool', 'toolResult', 'UserMessage', 'AgentMessage', `${message.role}.message`].includes(String(value.type))));
   const metadata: Record<string, unknown> = {};
   for (const key of ['id', 'chat_time', 'role_id', 'role_name']) {
     if (Object.hasOwn(message, key)) metadata[key] = message[key];
     else {
-      const source = sources.find(value => Object.hasOwn(value, key));
+      const source = sources.find(value => Object.hasOwn(value, key) && (key !== 'id' || isMessageId(value.id)));
       if (source) metadata[key] = source[key];
     }
   }
@@ -33,7 +44,7 @@ export function messageMetadata(message: Message, raw: unknown): Message {
           ['tool_use', 'tool-call', 'tool_call', 'toolCall', 'function_call'].includes(String(object(part).type))));
     const id = native && textField(native, 'message_id', 'messageId')
       || wrapper && textField(row, 'uuid', 'message_id', 'messageId', 'id');
-    if (id) metadata.id = id;
+    if (id && isMessageId(id)) metadata.id = id;
   }
   const iso = (value: unknown): string | undefined => {
     if (typeof value !== 'string' && typeof value !== 'number') return;
@@ -50,6 +61,10 @@ export function messageMetadata(message: Message, raw: unknown): Message {
     if (time) metadata.chat_time = time;
   }
   return { ...message, ...metadata } as Message;
+}
+/** A native message may produce several task records; each keeps its own stable identity. */
+export function messagePart(message: Message, part: string | number, parent: Message = message): Message {
+  return typeof parent.id === 'string' ? { ...message, id: `${parent.id}:part:${part}` } : message;
 }
 /** Only real-time host callbacks may use receipt time; transcript replay never calls this. */
 export function observed(raw: Record<string, any>): Record<string, any> {

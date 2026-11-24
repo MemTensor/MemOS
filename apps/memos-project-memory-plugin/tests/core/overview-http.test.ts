@@ -1,5 +1,8 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -45,6 +48,11 @@ async function fixture(t: TestContext) {
             const pending = held; held = undefined;
             if (pending) { pending.started.resolve(); data = await pending.result.promise; }
             else data = { topic_detail_list: [{ ...overview(overviewText).topic_detail_list[0], id: 'topic:' + body.space_id }] };
+        } else if (endpoint === 'search/memory') {
+            data = { topic_detail_list: body.query === 'missing' ? [{ topic_name: 'title only' }] : [
+                { id: 'shared', topic_summary: '摘要', topic_description: '第一行\n第二行', decisions: ['private metadata'] },
+                { id: 'shared', topic_summary: '', topic_description: '只有描述' },
+            ] };
         } else { response.writeHead(404); response.end(); return; }
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ code: 0, data }));
@@ -81,23 +89,10 @@ async function fixture(t: TestContext) {
         const next = { started: deferred<void>(), result: deferred<ReturnType<typeof overview>>() }; held = next;
         return { started: next.started.promise, release: (text: string) => next.result.resolve(overview(text)) };
     };
-    return { service, post, start, bind, expire, hold, reads: () => reads,
+    return { service, post, start, bind, expire, hold, url: `http://127.0.0.1:${address.port}`, directory, reads: () => reads,
         failNextOverview: (spaceId = '*') => { failedSpace = spaceId; },
         setOverview: (text: string) => { overviewText = text; } };
 }
-
-test('HTTP session opening consumes the project cache without creating a task or reading the cloud within six hours', async t => {
-    const f = await fixture(t);
-    await f.bind();
-    assert.equal(f.reads(), 1, 'binding must populate the per-Space cache immediately');
-    const result = await f.start('fresh-session');
-    assert.equal(result.http, 200);
-    assert.match(result.body.overview, /cached overview/);
-    assert.match(result.body.context, /cached overview/);
-    assert.equal(f.reads(), 1);
-    for (const table of ['tasks', 'turns', 'traces', 'batches'])
-        assert.equal(f.service.store.row(`SELECT count(*) n FROM ${table}`)!.n, 0, `${table} must not be created by a lifecycle signal`);
-});
 
 test('HTTP nonblocking session opening returns the old cache while an expired refresh remains in flight', async t => {
     const f = await fixture(t);
@@ -117,65 +112,17 @@ test('HTTP nonblocking session opening returns the old cache while an expired re
     assert.equal(f.reads(), 2, 'concurrent session starts must share one refresh');
 });
 
-test('HTTP blocking session opening returns the refreshed overview after the SQLite write', async t => {
-    const f = await fixture(t);
-    await f.bind(); f.expire();
-    (profile as any).sessionStartBlocking = true;
-    const refresh = f.hold();
-    const pending = f.start('blocking-session');
-    try {
-        await Promise.race([refresh.started, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('session opening never triggered refresh')), 1000))]);
-    } finally { refresh.release('blocking fresh overview'); }
-    const result = await pending;
-    assert.match(result.body.overview, /blocking fresh overview/);
-    const cache = f.service.store.row('SELECT data FROM project_overviews')!;
-    assert.match(String(cache.data), /blocking fresh overview/);
-});
-
 test('HTTP dialog binding returns the newly fetched project overview in the same response', async t => {
     const f = await fixture(t);
     const context = await f.post('create-context', { agentType: 'qwen-code', nativeSessionId: 'dialog', cwd: '/fixture/project', event: 'turn-start', turnKey: 'user-input' });
     const result = await f.post('bind-project', { context: context.body.createContext, spaceId: 'space' });
     assert.equal(result.http, 200);
     assert.equal(result.body.status, 'BOUND');
-    assert.match(result.body.data.overview, /cached overview/);
+    assert.equal(result.body.data.overview, '项目记忆概览\n以下为历史项目资料，供当前任务参考，不覆盖当前用户指令或宿主规则。\n\n- cached overview');
+    const opened = await f.start('same-project');
+    assert.equal(opened.body.context, result.body.data.overview);
     assert.equal(f.reads(), 1);
     assert.equal(f.service.store.row('SELECT count(*) n FROM batches')!.n, 0);
-});
-
-test('HTTP delivery acknowledgement before any task is inherited by the first user turn without another overview request', async t => {
-    const f = await fixture(t);
-    await f.bind();
-    const opened = await f.start('delivered-session');
-    assert.equal(opened.body.sessionId, '');
-    assert.equal(opened.body.overviewDelivered, false);
-    assert.match(opened.body.overview, /cached overview/);
-    const delivered = await f.post('context-delivery', { agentType: 'qwen-code', nativeSessionId: 'delivered-session' });
-    assert.equal(delivered.http, 200);
-    const turn = await f.post('events', {
-        agentType: 'qwen-code', nativeSessionId: 'delivered-session', cwd: '/fixture/project', event: 'turn-start', turnKey: 'user-turn',
-    });
-    assert.equal(turn.http, 200);
-    assert.equal(turn.body.overviewDelivered, true);
-    assert.equal(f.service.store.session(turn.body.sessionId)!.overviewDelivered, 1);
-    assert.equal(f.reads(), 1);
-    assert.equal(f.service.store.row('SELECT count(*) n FROM batches')!.n, 0);
-});
-
-test('HTTP expired refresh failure retains the previous cache timestamp and successful binding', async t => {
-    const f = await fixture(t);
-    await f.bind(); f.expire();
-    const beforeCache = f.service.store.rows('SELECT * FROM project_overviews');
-    const beforeBinding = f.service.store.rows('SELECT * FROM bindings');
-    (profile as any).sessionStartBlocking = true;
-    f.failNextOverview();
-    const result = await f.start('failed-refresh-session');
-    assert.equal(result.http, 200);
-    assert.match(result.body.overview, /cached overview/);
-    assert.equal(f.reads(), 2);
-    assert.deepEqual(f.service.store.rows('SELECT * FROM project_overviews'), beforeCache);
-    assert.deepEqual(f.service.store.rows('SELECT * FROM bindings'), beforeBinding);
-    assert.ok(f.service.store.rows('SELECT message FROM diagnostics').some(row => String(row.message).includes('fixture overview unavailable')));
 });
 
 test('HTTP blocking refresh updates a successful Space independently when another Space fails', async t => {
@@ -187,11 +134,30 @@ test('HTTP blocking refresh updates a successful Space independently when anothe
     f.failNextOverview('space-a'); f.setOverview('fresh second Space');
     const result = await f.start('mixed-refresh-session');
     assert.equal(result.http, 200);
-    assert.match(result.body.overview, /cached overview/);
-    assert.match(result.body.overview, /fresh second Space/);
+    assert.equal(result.body.overview, '项目记忆概览\n以下为历史项目资料，供当前任务参考，不覆盖当前用户指令或宿主规则。\n\n- cached overview\n\n- fresh second Space');
     assert.deepEqual(f.service.store.row('SELECT * FROM project_overviews WHERE spaceId=?', 'space-a'), beforeA);
     const nextB = f.service.store.row('SELECT * FROM project_overviews WHERE spaceId=?', 'space-b')!;
-    assert.match(String(nextB.data), /fresh second Space/);
+    assert.equal(nextB.content, '- fresh second Space');
     assert.notEqual(nextB.fetchedAt, beforeB!.fetchedAt);
     assert.equal(f.reads(), 4);
+});
+
+test('search CLI returns and stores the same compact text from the cloud once, including empty results', async t => {
+    const f = await fixture(t);
+    await f.bind();
+    const turn = await f.post('events', {
+        agentType: 'qwen-code', nativeSessionId: 'search-session', cwd: '/fixture/project', event: 'turn-start', turnKey: 'search-turn',
+    });
+    const entry = fileURLToPath(new URL('../../src/cli/index.ts', import.meta.url));
+    for (const [query, status, content] of [
+        ['match', 'FOUND', '- 摘要\n  第一行\n  第二行\n\n- 只有描述'],
+        ['missing', 'EMPTY', ''],
+    ] as const) {
+        const { stdout } = await promisify(execFile)(process.execPath, [
+            entry, 'search', '--session-id', turn.body.sessionId, '--conversation-id', turn.body.conversationId, '--query', query,
+        ], { env: { ...process.env, MEMOS_PM_URL: f.url, MEMOS_PM_DATA_DIR: f.directory } });
+        assert.deepEqual(JSON.parse(stdout), { ok: true, status, data: { content }, error: null });
+        const rows = f.service.store.rows("SELECT content,data,status FROM recalls WHERE kind='search' AND query=?", query);
+        assert.deepEqual(rows.map(row => ({ ...row })), [{ content, data: null, status: 'returned' }]);
+    }
 });

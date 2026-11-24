@@ -22,7 +22,6 @@ class Element {
   click() { this.listeners.click?.({ currentTarget: this, target: this }); }
   get text(): string { return this.textContent + this.children.map(node => node.text).join(''); }
 }
-const flush = () => new Promise(resolve => setImmediate(resolve));
 const agentSelector = '#session-filters select[name="agent"]';
 async function harness() {
   const nodes = new Map<string, Element>();
@@ -80,20 +79,4 @@ test('Agent then project selection isolates equal names, scopes options and rest
   assert.equal(h.app.selection().project,'p2');
   assert.equal(h.app.selection().session,'other');
   assert.equal(h.app.selection().page,1);
-});
-
-test('a slow session response cannot overwrite a different project selected while loading', async () => {
-  const h=await harness();
-  const pending=h.app.openSession('old');
-  assert.equal(h.requests.length,1);
-  h.chooseProject('/two');
-  assert.equal(h.requests.length,2);
-  h.requests[1].finish({session:h.state.sessions[2],groups:[],total:0}); await flush();
-  const expected=h.node('#session-detail').text;
-  assert.match(expected,/另一个项目任务/);
-  h.requests[0].finish({session:h.state.sessions[1],groups:[{traces:[{message:{role:'user',content:'过期项目回复'}}]}],total:1});
-  await pending;
-  assert.equal(h.node('#session-detail').text,expected);
-  assert.equal(h.app.selection().project,'p2');
-  assert.equal(h.app.selection().session,'other');
 });

@@ -350,7 +350,7 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                     if (existing) this.store.updateBatch(existing.id, { status: 'blocked', error: 'Codex 整轮轨迹尚未收齐' });
                     continue;
                 }
-                if (existing && round.snapshotHash === round.eventSetHash && (['pending', 'cancelled'].includes(existing.status) || existing.error === '整轮轨迹超出保守上传容量；完整内容已保留')) continue;
+                if (existing && round.snapshotHash === round.eventSetHash && (['pending', 'manual', 'cancelled'].includes(existing.status) || existing.error === '整轮轨迹超出保守上传容量；完整内容已保留')) continue;
                 const messages = filterUploadTraces(this.orderedRoundRecords(id)).map(row => row.message), payload = JSON.stringify(messages);
                 if (!messages.length) continue;
                 const oversized = Buffer.byteLength(payload, 'utf8') > this.store.uploadMaxBytes;

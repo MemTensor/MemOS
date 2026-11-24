@@ -128,19 +128,6 @@ small,.hint {
 .nav.active {
   background:#fff;
   color:var(--accent)}
-.sidebar-foot {
-  margin-top:auto;
-  font-size:11px;
-  color:#647891;
-  padding:14px 8px 0;
-  border-top:1px solid #dfe5ef}
-.live-dot {
-  display:inline-block;
-  width:6px;
-  height:6px;
-  background:#6c63ff;
-  border-radius:50%;
-  margin-right:6px}
 main {
   margin:20px 20px 20px 224px;
   padding:32px 38px;
@@ -454,8 +441,6 @@ main {
 .nav {
   flex-direction:column;
   gap:5px}
-.sidebar-foot {
-  display:none}
 main {
   margin:0 8px 8px;
   padding:24px 16px;
@@ -688,23 +673,6 @@ body:has(.trace-drawer[open]) {
   height:44px}
 #project-space-help {
   margin:8px 0 0}
-.project-card-foot {
-  display:flex;
-  align-items:center;
-  gap:8px;
-  border-top:1px solid #eef0f6;
-  background:#fcfcff;
-  padding:13px 25px;
-  font-size:12px;
-  color:#8893a6}
-.project-card-foot p {
-  margin:0}
-.project-card-foot .icon {
-  width:15px;
-  height:15px}
-.project-card-foot strong {
-  font-weight:500;
-  color:#61728b}
 .project-relations-title {
   display:flex;
   align-items:center;
@@ -788,7 +756,6 @@ body:has(.trace-drawer[open]) {
   .project-form-body { padding:20px; }
   .project-selection,.project-space-entry,.project-space-entry.binding-existing { grid-template-columns:minmax(0,1fr); }
   .project-space-entry > button { width:100%; }
-  .project-card-foot { padding:13px 20px; align-items:flex-start; }
   .project-space-tabs { display:flex; }
   .project-space-tab { flex:1; justify-content:center; padding-inline:9px; }
   .binding-relations > .card-heading { align-items:flex-start; }
@@ -1014,7 +981,6 @@ body:has(.trace-drawer[open]) {
 
 /* Viewer navigation, runtime overview and cloud diagnostics. Session content retains its own styles. */
 .settings-entry { margin: auto 8px 15px; display:flex; gap:10px; align-items:center; text-align:left; background:transparent; border:0; color:#687d98; padding:12px; }
-.sidebar-foot { margin-top:0; }
 .runtime-status { display:flex; align-items:center; gap:28px; padding:20px 24px; }
 .runtime-status-item { padding-right:28px; border-right:1px solid var(--line); min-width:100px; }
 .runtime-status-item small { display:block; margin-bottom:5px; font-size:11px; }
@@ -1057,9 +1023,9 @@ body:has(.trace-drawer[open]) {
 .viewer-drawer-body { padding:26px 28px; }
 .viewer-drawer .stack-form { margin-top:25px; gap:20px; }
 .viewer-drawer .stack-form button { justify-self:end; }
-.viewer-drawer .checkbox-field { display:flex; align-items:center; gap:8px; }
-.viewer-drawer .checkbox-field input { width:auto; margin:0; }
-.connection-test-fields { display:grid; gap:12px; padding-top:20px; border-top:1px solid var(--line); }
+.api-key-field > div { display:flex; align-items:center; gap:8px; }
+.api-key-field input { flex:1; min-width:0; }
+.api-key-field button { flex:none; }
 .diagnostic-drawer { width:min(620px,100vw); }
 .cloud-error-summary { padding:17px 18px; background:#fff7f5; border:1px solid #f3e2df; border-radius:10px; }
 .cloud-error-summary strong { display:block; font-size:14px; font-weight:500; margin:10px 0 5px; overflow-wrap:anywhere; }

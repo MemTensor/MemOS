@@ -1,4 +1,4 @@
-import { el, details, filterSessions, statusLabel, sessionTitle, projectBindingTable, spaceBindingItem, projectSessionGroups, sessionStartedAt, sessionUpdatedAt, traceOccurredAt, taskTurnInline, traceScopeGroups, traceScopeSessions, cloudOperations, cloudDiagnosticDetail, t, setText, attr, joinText, dateText, errorText, initTranslations } from './view.js';
+import { el, statusLabel, sessionTitle, projectBindingTable, spaceBindingItem, projectSessionGroups, sessionStartedAt, sessionUpdatedAt, traceOccurredAt, taskTurnInline, traceScopeGroups, traceScopeSessions, cloudOperations, cloudDiagnosticDetail, t, setText, attr, joinText, dateText, errorText, initTranslations } from './view.js';
 
 const $ = (selector) => document.querySelector(selector);
 initTranslations();
@@ -16,7 +16,6 @@ let traceTime = 'all', traceDates = { from: '', to: '' };
 let serviceError = '';
 let overviewTab = 'summary', diagnosticPage = 1, diagnosticListRequest = 0, diagnosticRequest = 0;
 let selectedDiagnostic, diagnosticTrigger, settingsTrigger;
-let connectionTestRequest = 0;
 const pageInfo = {
   overview: t("运行概览"),
   projects: t("项目与空间"),
@@ -141,7 +140,8 @@ function renderOverview() {
   const attention = clear('#attention-list');
   for (const batch of failed.slice().reverse().slice(0, 4)) {
     const session = sessions.find(item => item.id === batch.sessionId), row = el('div', '', 'attention-row'), content = el('div', '', 'row-main');
-    content.append(badge(batch.status), el('strong', session ? sessionTitle(session) : t("上传批次")), el('small', errorText(batch.error) || (batch.status === 'blocked' ? t("上传受阻，暂未记录具体原因。") : t("云端处理失败，详情见诊断记录。"))));
+    content.append(badge(batch.status), el('strong', session ? sessionTitle(session) : t("上传批次")));
+    if (batch.status !== 'blocked') content.append(el('small', errorText(batch.error) || t("云端处理失败，详情见诊断记录。")));
     row.append(content);
     if (session) row.append(button(t("查看会话 →"), () => openSession(session.id), 'text-button'));
     attention.append(row);
@@ -387,7 +387,6 @@ function updateProjectSelection() {
   $('#project-space-help').hidden = !blocked;
   $('#project-directory').hidden = !project;
   setText($('#project-directory'), project?.root ?? '');
-  setText($('#project-target-agent'), agentName(form.elements.agentType.value) || t("所选 Agent"));
 }
 function projectSpaceLimitReached(input) {
   const binding = state.bindings.find(scope => scope.agentType === input.agentType && scope.root === input.root);
@@ -631,26 +630,19 @@ async function renderAgents() {
   }
   if (!adapters.length) empty(list, t("未加载 Agent 配置"));
 }
+let clearSavedKey = false;
 function renderSettings() {
-  const form = $('#config-form'); form.elements.baseUrl.value = config.baseUrl ?? ''; form.elements.userId.value = config.userId ?? '';
-  form.elements.apiMode.value = config.apiMode ?? 'engineering';
-  form.elements.authMode.value = config.authMode ?? 'token';
-  form.elements.cloudProjectId.value = config.cloudProjectId ?? '';
-  form.elements.apiKey.value = ''; form.elements.clearApiKey.checked = false;
-  form.elements.uploadMaxBytes.value = config.uploadMaxBytes ?? '';
+  const form = $('#config-form');
+  form.elements.userId.value = config.userId ?? '';
   form.elements.historyUploadConfirmCount.value = config.historyUploadConfirmCount ?? '';
-  updateConnectionFields();
-}
-function updateConnectionFields() {
-  const form = $('#config-form'), algorithm = form.elements.apiMode.value === 'algorithm', noAuth = form.elements.authMode.value === 'none';
-  $('#cloud-project-field').hidden = !algorithm;
-  form.elements.cloudProjectId.required = algorithm;
-  form.elements.apiKey.disabled = noAuth || form.elements.clearApiKey.checked;
-  setText($('#key-status'), noAuth ? t("当前连接无需 Key") : config.keyConfigured ? t("Key 已配置") : t("未配置 Key"));
+  clearSavedKey = false;
+  form.elements.apiKey.value = '';
+  form.elements.apiKey.placeholder = '*'.repeat(config.apiKeyLength ?? 0);
+  $('#clear-api-key').disabled = !config.keyConfigured;
 }
 function openSettings(trigger = $('#open-settings')) {
   settingsTrigger = trigger;
-  renderSettings(); setText($('#config-notice'), ''); setText($('#connection-test-result'), '');
+  renderSettings(); setText($('#config-notice'), '');
   if (!$('#settings-dialog').open) $('#settings-dialog').showModal();
 }
 function selectOverviewTab(name, load = true) {
@@ -712,7 +704,7 @@ async function openDiagnostic(id) {
 async function toggleUpload() {
   const report = pageNotifier();
   await api('/api/config', { paused: !config.paused }, 'PUT'); await reload();
-  report(config.paused ? t("上传已暂停。采集继续保留在本地。") : t("上传已恢复。已停止重试的批次仍保留原状态。"));
+  report(config.paused ? t("上传已暂停。采集继续保留在本地。") : t("已恢复自动上传。暂停期间的轮次可在项目页手动上传。"));
 }
 
 window.addEventListener('hashchange', () => {
@@ -815,31 +807,25 @@ $('#config-form').addEventListener('submit', (event) => {
   event.preventDefault(); const form = event.currentTarget;
   return action(form.querySelector('button[type="submit"]'), async () => {
     try {
-      connectionTestRequest++; setText($('#connection-test-result'), '');
-      const body = { apiMode: form.elements.apiMode.value, authMode: form.elements.authMode.value, cloudProjectId: form.elements.cloudProjectId.value.trim(), baseUrl: form.elements.baseUrl.value.trim(), uploadMaxBytes: Number(form.elements.uploadMaxBytes.value), historyUploadConfirmCount: Number(form.elements.historyUploadConfirmCount.value) };
-      if (form.elements.clearApiKey.checked) body.apiKey = '';
-      else if (form.elements.apiKey.value) body.apiKey = form.elements.apiKey.value;
-      config = await api('/api/config', body, 'PUT'); form.elements.apiKey.value = ''; await reload(); renderSettings(); setText($('#config-notice'), t("设置已保存。"));
+      const body = { historyUploadConfirmCount: Number(form.elements.historyUploadConfirmCount.value) };
+      if (form.elements.apiKey.value || clearSavedKey) {
+        body.apiKey = form.elements.apiKey.value;
+        body.authMode = 'token';
+      }
+      config = await api('/api/config', body, 'PUT');
+      renderSettings(); await reload(); setText($('#config-notice'), t("设置已保存。"));
     } catch (error) { setText($('#config-notice'), t("保存失败：{0}", errorText(error.message))); throw error; }
   });
 });
-$('#config-form').addEventListener('change', event => {
-  const form = $('#config-form');
-  if (event.target.name === 'apiMode') form.elements.authMode.value = form.elements.apiMode.value === 'algorithm' ? 'none' : 'token';
-  if (['apiMode', 'authMode', 'clearApiKey'].includes(event.target.name)) updateConnectionFields();
+$('#clear-api-key').addEventListener('click', () => {
+  const key = $('#config-form').elements.apiKey;
+  key.value = ''; key.placeholder = ''; clearSavedKey = true;
+  $('#clear-api-key').disabled = true;
+  key.focus();
 });
-$('#test-connection').addEventListener('click', event => action(event.currentTarget, async () => {
-  const request = ++connectionTestRequest, spaceId = $('#config-form').elements.connectionTestSpaceId.value.trim();
-  setText($('#connection-test-result'), t("正在测试已保存的连接…"));
-  try {
-    const result = await api('/api/connection-test', spaceId ? { spaceId } : {});
-    if (request !== connectionTestRequest) return;
-    setText($('#connection-test-result'), result.verified ? t("读取验证通过：{0}", errorText(result.message))
-      : result.reachable ? t("已收到服务响应，业务验证未完成：{0}", errorText(result.message)) : t("连接测试失败：{0}", errorText(result.message)));
-  } catch (error) {
-    if (request === connectionTestRequest) setText($('#connection-test-result'), t("连接测试失败：{0}", errorText(error.message)));
-  }
-}));
+$('#config-form').addEventListener('input', event => {
+  if (event.target.name === 'apiKey') $('#clear-api-key').disabled = !event.target.value && !event.target.placeholder;
+});
 $('#open-settings').addEventListener('click', event => openSettings(event.currentTarget));
 $('#connection-settings').addEventListener('click', event => openSettings(event.currentTarget));
 $('#close-settings').addEventListener('click', () => $('#settings-dialog').close());

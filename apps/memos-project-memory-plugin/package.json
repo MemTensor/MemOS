@@ -15,7 +15,8 @@
     "viewer",
     "skills",
     "README.md",
-    "docs"
+    "docs",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test \"tests/**/*.test.ts\"",
@@ -23,7 +24,6 @@
     "build": "node scripts/build.mjs",
     "lint": "node scripts/check.mjs",
     "start": "node dist/runtime/main.js",
-    "mock": "node dev/memos-mock/server.ts",
     "prepack": "npm run build",
     "dev": "node src/runtime/main.ts",
     "viewer": "node dist/runtime/open.js",
@@ -32,5 +32,6 @@
   "devDependencies": {
     "typescript": "^6.0.3",
     "@types/node": "^25.9.1"
-  }
+  },
+  "license": "Apache-2.0"
 }

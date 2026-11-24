@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile, mkdir, rm, chmod, mkdtemp, rename } from 'node:fs/promises';
+import { readdir, readFile, writeFile, mkdir, rm, chmod, mkdtemp, rename, lstat } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import ts from 'typescript';
 // Compile away from the live tree. A failed build leaves the working runtime intact.
@@ -21,9 +21,24 @@ async function build(dir) {
   outputs.push(relative);
  }
 }
+async function removeStaleOutputs(relative = '') {
+ const directory = join('dist', relative);
+ const entries = await readdir(directory, { withFileTypes: true });
+ for (const entry of entries) {
+  const path = join(relative, entry.name);
+  // Never traverse linked directories or treat user-provided links as outputs.
+  if (entry.isDirectory()) await removeStaleOutputs(path);
+  else if (entry.isFile() && path.endsWith('.js') && !outputs.includes(path)) await rm(join('dist', path));
+ }
+}
 try {
  await build('src');
  await chmod(join(staging, 'cli/index.js'), 0o755);
+ const existing = await lstat('dist').catch(error => { if (error.code !== 'ENOENT') throw error; });
+ if (existing?.isSymbolicLink()) throw new Error('Build output directory must not be a symbolic link');
+ // Compilation has succeeded. Remove obsolete generated JavaScript before
+ // publishing the new runtime revision; failed compilation leaves dist intact.
+ if (existing) await removeStaleOutputs();
  // Atomic file replacement never leaves an absent/partial entrypoint. Publish
  // main last because its mtime is the managed service's runtime revision.
  outputs.sort((a, b) => Number(a === 'runtime/main.js') - Number(b === 'runtime/main.js'));

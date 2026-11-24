@@ -12,7 +12,6 @@
       <button type="button" class="nav" data-page="agents"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 3 6 3v6l-6 3-6-3V6l6-3Zm6 9 6 3v6l-6 3-6-3v-6" transform="translate(0 -1) scale(.92)"/><path d="m9 5 0 8m-5-6 5 3 5-3m1 7v7m-5-5 5 3 5-3"/></svg>Agent 接入</button>
     </nav>
     <button id="open-settings" type="button" class="settings-entry secondary">⚙ 设置</button>
-    <div class="sidebar-foot"><span class="live-dot"></span>本地服务 · 回环访问</div>
   </aside>
   <main>
     <header class="topbar"><div><h1 id="page-title">运行概览</h1></div><div class="top-actions"><div class="language-switch" role="group" aria-label="界面语言"><button type="button" data-language="zh" aria-pressed="true" title="切换为中文" lang="zh-CN">CH</button><button type="button" data-language="en" aria-pressed="false" title="切换为英文" lang="en">EN</button></div><button id="refresh" class="secondary" type="button"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>刷新</button></div></header>
@@ -68,7 +67,6 @@
               </div>
             </div>
           </div>
-          <div class="project-card-foot"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-9h.01"/></svg><p>绑定范围：<strong id="project-target-agent">所选 Agent</strong>＋当前项目</p></div>
         </form>
       </section>
       <section class="card binding-relations"><div class="card-heading"><div class="project-relations-title"><h2>绑定关系</h2><span id="binding-count" class="project-binding-count">0</span></div></div><div id="project-list"></div></section>
@@ -108,25 +106,14 @@
     <div class="viewer-drawer-header"><h2 id="settings-title">设置</h2><button id="close-settings" class="text-button" type="button" aria-label="关闭设置">关闭 ×</button></div>
     <div class="viewer-drawer-body"><h3>云连接</h3>
       <form id="config-form" class="stack-form">
-        <label>接口类型<select name="apiMode"><option value="algorithm">算法接口</option><option value="engineering">工程接口</option></select></label>
-        <label>MemOS API 基址<input name="baseUrl" type="url" required spellcheck="false"></label>
-        <p class="hint">填写包含接口前缀的完整地址。切换接口类型不会替换地址，也不会迁移已有绑定。</p>
-        <label id="cloud-project-field">云服务项目 ID<input name="cloudProjectId" spellcheck="false"></label>
-        <label>鉴权方式<select name="authMode"><option value="none">无需鉴权</option><option value="token">Token</option><option value="bearer">Bearer</option></select></label>
-        <label>MemOS API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="留空保留当前 Key"></label>
-        <p id="key-status" class="hint"></p>
-        <label class="checkbox-field"><input name="clearApiKey" type="checkbox">清除已保存的 Key</label>
+        <div class="api-key-field">
+          <label for="settings-api-key">MemOS API Key</label>
+          <div><input id="settings-api-key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false"><button id="clear-api-key" type="button" class="secondary" aria-label="清除 API Key">清除</button></div>
+        </div>
         <label>用户标识<input name="userId" readonly></label>
-        <label>上传字节上限<input name="uploadMaxBytes" type="number" min="1" step="1" required></label>
         <label>历史上传确认条数<input name="historyUploadConfirmCount" type="number" min="1" step="1" required></label>
         <button type="submit">保存设置</button>
         <p id="config-notice" class="hint" role="status" aria-live="polite"></p>
-        <div class="connection-test-fields">
-          <label>验证用 Space ID（可选）<input name="connectionTestSpaceId" spellcheck="false"></label>
-          <p class="hint">测试使用已保存的连接设置。填写已有 Space ID 可验证读取权限；不填写时仅检查基础连接，不创建空间。</p>
-          <button id="test-connection" type="button" class="secondary">测试连接</button>
-          <p id="connection-test-result" class="hint" role="status" aria-live="polite"></p>
-        </div>
       </form>
 
     </div>

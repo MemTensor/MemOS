@@ -14,6 +14,8 @@ export interface Config {
     uploadMaxBytes: number;
     historyUploadConfirmCount: number;
 }
+// Required project default for the currently supported algorithm API.
+const defaultAlgorithmProjectId = 'test1';
 export const defaultUploadMaxBytes = 39000;
 export const defaultHistoryUploadConfirmCount = 100;
 export const defaultDataDir = () => process.env.MEMOS_PM_DATA_DIR ?? join(homedir(), '.memos-project-memory');
@@ -27,7 +29,7 @@ export function connectionError(config: Config): string | undefined {
     return undefined;
 }
 export class Configuration {
-    value: Config;
+    value: Config & { uploadPauses?: { start: number; end?: number }[] };
     path: string;
     revision = 0;
     constructor(directory: string) {
@@ -35,10 +37,12 @@ export class Configuration {
         this.path = join(directory, 'config.json');
         this.value = existsSync(this.path) ? JSON.parse(readFileSync(this.path, 'utf8')) : { userId: randomUUID(), installationId: randomUUID(), baseUrl: 'https://memos.memtensor.cn/api/openmem/v1', apiKey: '', paused: false };
         this.value.apiMode ??= 'engineering';
-        this.value.authMode ??= this.value.apiMode === 'algorithm' ? 'none' : 'token';
-        this.value.cloudProjectId ??= '';
+        this.value.authMode ??= 'token';
+        if (!this.value.cloudProjectId) this.value.cloudProjectId = defaultAlgorithmProjectId;
         this.value.uploadMaxBytes ??= defaultUploadMaxBytes;
         this.value.historyUploadConfirmCount ??= defaultHistoryUploadConfirmCount;
+        // Older installations stored only the switch. The start of an existing pause is unknown.
+        this.value.uploadPauses ??= this.value.paused ? [{ start: 0 }] : [];
         this.save();
     }
     save(value = this.value) {
@@ -65,8 +69,10 @@ export class Configuration {
         const next = { ...this.value };
         if (input.apiMode !== undefined) {
             if (!['algorithm', 'engineering'].includes(input.apiMode)) throw new Error('未知接口类型');
-            if (input.apiMode !== next.apiMode && input.authMode === undefined) next.authMode = input.apiMode === 'algorithm' ? 'none' : 'token';
+            next.authMode = input.authMode ?? 'token';
             next.apiMode = input.apiMode;
+            if (input.apiMode === 'algorithm' && input.cloudProjectId === undefined && !next.cloudProjectId)
+                next.cloudProjectId = defaultAlgorithmProjectId;
         }
         if (input.authMode !== undefined) {
             if (!['none', 'token', 'bearer'].includes(input.authMode)) throw new Error('未知鉴权方式');
@@ -87,8 +93,13 @@ export class Configuration {
             if (typeof input.apiKey !== 'string' || /[\r\n]/.test(input.apiKey)) throw new Error('API Key 无效');
             next.apiKey = input.apiKey;
         }
-        if (input.paused !== undefined)
+        if (input.paused !== undefined && !!input.paused !== next.paused) {
             next.paused = !!input.paused;
+            const time = Date.now();
+            const pauses = next.uploadPauses ?? [];
+            if (next.paused) next.uploadPauses = [...pauses, { start: time }];
+            else next.uploadPauses = [...pauses.slice(0, -1), { start: pauses.at(-1)?.start ?? 0, end: time }];
+        }
         if (input.uploadMaxBytes !== undefined) next.uploadMaxBytes = input.uploadMaxBytes;
         if (input.historyUploadConfirmCount !== undefined) next.historyUploadConfirmCount = input.historyUploadConfirmCount;
         this.save(next);
@@ -96,5 +107,5 @@ export class Configuration {
         this.revision++;
         return this.public();
     }
-    public() { const { apiKey, installationId: _installationId, ...rest } = this.value; const error = connectionError(this.value); return { ...rest, keyConfigured: !!apiKey, connectionConfigured: !error, connectionError: error ?? null }; }
+    public() { const { apiKey, installationId: _installationId, uploadPauses: _pauses, ...rest } = this.value; const error = connectionError(this.value); return { ...rest, keyConfigured: !!apiKey, apiKeyLength: Array.from(apiKey).length, connectionConfigured: !error, connectionError: error ?? null }; }
 }

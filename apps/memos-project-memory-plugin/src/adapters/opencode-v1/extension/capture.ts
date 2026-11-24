@@ -1,6 +1,7 @@
 import type { Message, TraceInput } from '../../types.ts';
 import { Bridge, sendEvent, type Data, type Send } from './bridge.ts';
 import type { CreateIdentity } from '../../_shared/create-context.ts';
+import { messagePart } from '../../_shared/transcript.ts';
 
 /** OpenCode-only decoration; other hosts retain the shared Bridge semantics. */
 export function captureBridge(agent: string, cwd: string, send: Send = sendEvent) {
@@ -72,7 +73,7 @@ export function captureRecords(info: Data, parts: string | Data[], nativeTurnId:
   for (const [index, part] of blocks.entries()) {
     if (part.synthetic || part.ignored) continue;
     if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
-      add(`message:${info.id}:text:${part.id ?? index}`, { role: 'assistant', content: part.text });
+      add(`message:${info.id}:text:${part.id ?? index}`, messagePart({ role: 'assistant', content: part.text }, `text:${part.id ?? index}`, { role: 'assistant', content: '', id: info.id }));
     } else if (part.type === 'tool' && part.state) {
       const state = part.state;
       if (state.status === 'pending') continue;

@@ -7,13 +7,8 @@ export function el(tag, text = '', className = '') {
   if (className) element.className = className;
   return element;
 }
-export function details(title, value) {
-  const node = el('details', '', 'detail');
-  node.append(el('summary', title), el('pre', typeof value === 'string' ? value : JSON.stringify(value, null, 2)));
-  return node;
-}
 export function statusLabel(value) {
-  return ({ skipped: t("已处理"), blocked: t("上传受阻"), accumulating: t("消息积累中"), unknown: t("整理状态待确认"), accepted: t("已接收"), 'processing-failed': t("云端处理失败"), prepared: t("已准备上下文"), returned: t("已返回检索结果"), pending: t("等待上传"), waiting_space: t("等待空间"), creating: t("创建空间中"), uncertain: t("创建结果待确认"), uploading: t("上传中"), received: t("已接收"), uploaded: t("已接收"), running: t("云端处理中"), processing: t("云端处理中"), completed: t("已完成"), failed: t("失败"), stopped: t("已停止重试"), installed: t("已安装"), unavailable: t("不可用"), FOUND: t("检索命中"), EMPTY: t("无匹配结果"), UNAVAILABLE: t("记忆暂不可用"), injected: t("已交付上下文"), CONTEXT_MISSING: t("当前轮标识无效") })[value] ?? value ?? '—';
+  return ({ manual: t("仅手动上传"), skipped: t("已处理"), blocked: t("上传受阻"), accumulating: t("消息积累中"), unknown: t("整理状态待确认"), accepted: t("已接收"), 'processing-failed': t("云端处理失败"), prepared: t("已准备上下文"), returned: t("已返回检索结果"), pending: t("等待上传"), waiting_space: t("等待空间"), creating: t("创建空间中"), uncertain: t("创建结果待确认"), uploading: t("上传中"), received: t("已接收"), uploaded: t("已接收"), running: t("云端处理中"), processing: t("云端处理中"), completed: t("已完成"), failed: t("失败"), stopped: t("已停止重试"), installed: t("已安装"), unavailable: t("不可用"), FOUND: t("检索命中"), EMPTY: t("无匹配结果"), UNAVAILABLE: t("记忆暂不可用"), injected: t("已交付上下文"), CONTEXT_MISSING: t("当前轮标识无效") })[value] ?? value ?? '—';
 }
 export function filterSessions(sessions, filter, batches) {
   return sessions.filter((session) => {
@@ -74,28 +69,11 @@ export function projectSessionGroups(state) {
   groups.sort((a, b) => compareTime(a.earliestOccurredAt, b.earliestOccurredAt) || String(a.id).localeCompare(String(b.id)));
   return [...groups, unassigned];
 }
-export function projectTraceCard(group, selected, onOpen) {
-  const card = el('button', '', `session-select project-select${selected ? ' selected' : ''}`);
-  card.type = 'button'; attr(card, 'aria-current', String(selected));
-  card.append(el('strong', group.name), el('small', group.root || t("尚未关联到已登记项目")),
-    el('small', t("{0} 个会话 · {1} 轮", group.sessions.length, group.turnCount), 'hint'));
-  card.addEventListener('click', onOpen);
-  return card;
-}
 export function sessionTitle(session) {
   if (typeof session.title === 'string' && session.title.trim()) return session.title;
   const id = String(session.nativeSessionId || session.id || '');
   return t("未命名会话 · {0}", (id.startsWith('session-') ? id.slice(8) : id).slice(0, 8));
 }
-export function sessionTraceCard(session, selected, time, onOpen) {
-  const card = el('button', '', `session-select${selected ? ' selected' : ''}`);
-  card.type = 'button'; attr(card, 'aria-current', String(selected));
-  card.append(el('strong', sessionTitle(session)),
-    el('small', session.agentType), el('small', time), el('small', t("{0} 轮", Number(session.turnCount) || 0), 'hint'));
-  card.addEventListener('click', onOpen);
-  return card;
-}
-
 export function projectBindingTable(projects, agents, openSpaces, uploadHistory, scanHistory) {
   const table = el('table', '', 'binding-table'), head = el('thead'), heading = el('tr'), body = el('tbody');
   for (const title of ['Agent', t("项目名称"), t("已绑定 Space"), t("历史会话上传")]) { const cell = el('th', title); attr(cell, 'scope', 'col'); heading.append(cell); }
@@ -126,7 +104,6 @@ export function projectBindingTable(projects, agents, openSpaces, uploadHistory,
       history.append(upload);
       if (uploadError && !paused) history.append(el('p', errorText(uploadError), 'history-upload-error'));
     }
-    if (progress?.warning) history.append(el('p', errorText(progress.warning), 'hint'));
     if (scanHistory && progress?.status === 'ready' && count && !progress.uploading) {
       const scan = el('button', t("扫描历史"), 'text-button'); scan.type = 'button';
       scan.addEventListener('click', () => scanHistory(project, scan)); history.append(scan);
@@ -280,27 +257,6 @@ export function taskTraceEntries(trace, time) {
   if (agent) for (const card of cards) card.children[0].append(el('span', agent, 'trace-agent'));
   return cards;
 }
-
-export function taskTurnCard(group, number, time, onOpen) {
-  const entries = group.traces.flatMap((trace) => taskTraceEntries(trace, ''));
-  const task = entries.find(entry => entry.children[0].children[0].textContent === 'user');
-  const title = compactText(task?.children[1]?.textContent ?? '', 120) || t("查看任务轨迹");
-  const card = el('button', '', 'turn-card'); card.type = 'button';
-  const heading = el('div', '', 'turn-heading');
-  heading.append(el('strong', t("第 {0} 轮", number)), el('time', time, 'hint'), el('span', t("查看详情 →"), 'turn-open'));
-  const counts = ['user', 'tool use', 'tool result', 'thinking', 'answer'].map((label) => {
-    const count = entries.filter((entry) => entry.children[0].children[0].textContent === label).length;
-    return count ? `${label} ${count}` : '';
-  }).filter(Boolean);
-  card.append(heading, el('p', title, 'turn-title'), el('small', joinText(counts), 'hint'));
-  const execution = { running: t("执行中"), completed: t("执行结束"), failed: t("执行失败"), cancelled: t("已取消"), interrupted: t("已中断") };
-  const capture = { catching_up: t("历史回填中"), collecting: t("采集中"), awaiting_children: t("等待子任务"), complete: t("采集完整"), incomplete: t("采集有缺口") };
-  const states = [execution[group.executionStatus], capture[group.captureStatus]].filter(Boolean);
-  if (states.length) card.append(el('small', joinText(states), 'turn-status'));
-  card.addEventListener('click', onOpen);
-  return card;
-}
-
 
 /** Agent is the outer scope; retain explicit project IDs, including null for unassigned. */
 export function traceScopeGroups(state, agent = '') {

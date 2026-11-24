@@ -1,9 +1,0 @@
-{
-  "score": 95,
-  "verdict": "pass",
-  "category_match": true,
-  "differences": [],
-  "suggestions": [],
-  "reasoning": "最终截图确认副标题与三类任务轨迹一致；当前会话仅展示用户任务和助手回复，无上传状态、注入上下文或运行事件。会话列表只显示宿主和时间，详情仅保留宿主会话ID、目录、创建时间。",
-  "next_actions": []
-}

@@ -89,7 +89,7 @@ export class PrimeCapture {
               if (known?.completedAt) continue;
               this.store.startTurn(session.id, turn.key, false);
               this.store.capture(session.id, turn.records);
-              if (idle && !snapshot.partial && turn.completedAt) this.store.finalizeTurn(session.id, turn.key);
+              if (idle && !snapshot.partial && turn.completedAt) this.store.finalizeTurn(session.id, turn.key, turn.completedAt);
             }
             const current = this.store.row('SELECT id,completedAt FROM turns WHERE sessionId=? AND nativeKey=?', session.id, snapshot.currentTurn ?? '');
             this.store.db.prepare('UPDATE sessions SET currentTurnId=? WHERE id=?').run(current && !current.completedAt ? String(current.id) : null, session.id);

@@ -3,20 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { once } from 'node:events';
 import { PluginService } from '../../src/server/service.ts';
 import { processHook } from '../../src/adapters/_shared/hooks.ts';
-import { createMockServer, getMockState } from '../../dev/memos-mock/server.ts';
+import { captureUploads } from '../helpers/capture-uploads.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const dir = await mkdtemp(join(tmpdir(), 'pm-copilot-'));
-  const mock = createMockServer(); mock.listen(0, '127.0.0.1'); await once(mock, 'listening');
-  const address = mock.address(); assert.ok(address && typeof address !== 'string');
+  const { uploads, call } = captureUploads();
   let service = new PluginService(join(dir, 'data'), { home: dir, codexRoots: [] });
-  t.after(async () => { service.close(); await new Promise<void>(resolve => mock.close(() => resolve())); await rm(dir, { recursive: true, force: true }); });
-  service.configure({ baseUrl: `http://127.0.0.1:${address.port}/api/openmem/v1`, apiKey: 'mock-key' });
-  const space = await service.cloud.call<{ space_id: string }>('create/space', { space_name: 'Copilot', domains: [{ domain: '编程' }] });
-  service.store.bindProject('project', dir, space.space_id, service.config.value.baseUrl, 'copilot-cli');
+  t.after(async () => { service.close(); await rm(dir, { recursive: true, force: true }); });
+  service.cloud.call = call;
+  service.configure({ authMode: 'none' });
+  service.store.bindProject('project', dir, 'space', service.config.value.baseUrl, 'copilot-cli');
   const rows: Record<string, unknown>[] = [], path = join(dir, 'events.jsonl');
   let time = Date.now() + 10, id = 0;
   const add = (type: string, data: unknown) => rows.push({ type, data, id: `event-${++id}`, timestamp: new Date(++time).toISOString() });
@@ -45,7 +43,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     add('hook.end', { hookType: 'agentStop', hookInvocationId: invocation, success: true });
     await save(); return input;
   }
-  return { get service() { return service; }, restart() { service.close(); service = new PluginService(join(dir, 'data'), { home: dir, codexRoots: [] }); }, rows, add, save, path, hook, prompt, answer, stop, uploads: () => getMockState(mock).uploads.get(space.space_id) ?? [] };
+  return { get service() { return service; }, restart() { service.close(); service = new PluginService(join(dir, 'data'), { home: dir, codexRoots: [] }); service.cloud.call = call; }, rows, add, save, path, hook, prompt, answer, stop, uploads };
 }
 
 test('Copilot tool cycles remain in one user round with complete tool results and readable reasoning', async t => {
@@ -57,10 +55,15 @@ test('Copilot tool cycles remain in one user round with complete tool results an
   f.add('tool.execution_complete', { toolCallId: 'call', success: true, result });
   f.add('assistant.turn_end', { turnId: '0' });
   f.answer('one', 'done'); await f.hook('agentStop', await f.stop()); await f.service.sync();
-  const messages = f.uploads()[0]!.body.messages;
+  assert.deepEqual(f.uploads[0]?.space_ids, ['space']);
+  const messages = f.uploads[0]!.messages;
   assert.deepEqual(messages.map((m: { role: string }) => m.role), ['user', 'assistant', 'assistant', 'tool', 'assistant']);
   assert.equal(messages.filter((m: { tool_calls?: unknown[] }) => m.tool_calls?.length).length, 1);
-  assert.deepEqual(JSON.parse(messages[3].content), result);
+  assert.deepEqual(JSON.parse(String(messages[3]!.content)), result);
   assert.ok(!JSON.stringify(messages).includes('not-readable'));
+  assert.equal(new Set(messages.map(message => message.id)).size, messages.length);
+  const frozen = JSON.stringify(messages);
+  f.restart(); await f.service.sync();
+  assert.equal(JSON.stringify(f.service.store.batches()[0]!.messages), frozen);
   assert.equal(f.service.store.rows('SELECT * FROM turns').length, 1);
 });

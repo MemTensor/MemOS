@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { AgentEvent, Message, TraceInput } from '../types.ts';
-import { object, textField } from '../_shared/transcript.ts';
+import { messageMetadata, messagePart, object, textField } from '../_shared/transcript.ts';
 import type { Store } from '../../storage/store.ts';
 import { filterCopilotSkills } from './skill-filter.ts';
 import { normalizeTaskTrace } from '../_shared/task-trace.ts';
@@ -72,7 +72,7 @@ export class CopilotCapture {
                 .run(JSON.stringify(message), JSON.stringify({ ...object(JSON.parse(String(stored.raw))), message }), Number(stored.id));
             }
             this.store.capture(String(session.id), event.records ?? []);
-            this.store.finalizeTurn(String(session.id), event.turnKey);
+            this.store.finalizeTurn(String(session.id), event.turnKey, this.store.memory.recordTime(notification.raw));
           }
           this.store.db.prepare('DELETE FROM copilot_receipts WHERE id=?').run(String(receipt.id));
           this.store.db.exec('COMMIT');
@@ -181,7 +181,11 @@ export async function copilotEvent(event: AgentEvent, name: string, env: NodeJS.
       pending = undefined; continue;
     }
     if (!current) continue;
-    const add = (message: Message, suffix = '') => current!.records.push({ sourceId: `copilot:${event.nativeSessionId}:${row.id}${suffix}`, nativeTurnId: current!.key, raw: row, message });
+    const add = (message: Message, suffix = '') => {
+      message = messageMetadata(message, row);
+      if (row.type === 'assistant.message') message = messagePart(message, suffix === ':reasoning' ? 'reasoning' : 'body');
+      current!.records.push({ sourceId: `copilot:${event.nativeSessionId}:${row.id}${suffix}`, nativeTurnId: current!.key, raw: row, message });
+    };
     if (row.type === 'assistant.turn_start') { current.steps.add(String(data.turnId)); continue; }
     if (row.type === 'assistant.turn_end') {
       if (!current.steps.delete(String(data.turnId))) throw new Error('Copilot 模型步骤结束缺少对应开始记录');
