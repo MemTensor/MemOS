@@ -172,7 +172,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--score", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--profile", type=Path, default=Path.home() / ".claude.env")
+    parser.add_argument("--profile", type=Path, default=Path.home() / ".openai.env")
     parser.add_argument("--max-calls", type=int, default=80)
     parser.add_argument("--model", help="Override the profile's MODEL (defaults to the profile)")
     args = parser.parse_args()
