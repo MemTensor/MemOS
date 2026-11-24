@@ -76,3 +76,22 @@ def test_observation_classifies_no_drafts_staging_pending_and_failure():
         observe_turn({**row, "outcome": "staged", "staged_status": "active"}, set(), {})["status"]
         == "staged"
     )
+
+
+def test_flush_space_retries_until_nothing_is_in_flight(monkeypatch):
+    from collections import deque
+    from unittest.mock import Mock
+
+    from evaluation.frontiermemory_topic import replay as module
+
+    runtime = Mock()
+    runtime.flush.side_effect = [
+        {"formation": {"ran": False, "reason": "EPISODES_IN_FLIGHT"}},
+        {"formation": {"ran": True}},
+    ]
+    drained = []
+    monkeypatch.setattr(module, "drain_work", lambda *args: drained.append(args))
+    results = module.flush_space(runtime, deque(), Mock(), Mock())
+    assert [r["formation"].get("ran") for r in results] == [False, True]
+    assert len(drained) == 2
+    runtime.flush.assert_called_with(module.SPACE)

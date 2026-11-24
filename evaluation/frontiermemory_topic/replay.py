@@ -176,6 +176,21 @@ def drain_work(
     raise RuntimeError("Add replay exceeded its scheduler recovery limit")
 
 
+def flush_space(
+    runtime: EpisodeAddRuntime, queue: deque[ScheduleMessageItem], clock: ReplayClock, ledger: Any
+) -> list[dict[str, Any]]:
+    """Settle the replay Space with the runtime's flush, draining stages it starts."""
+    results = []
+    for _ in range(5):
+        ledger.ensure_open()
+        result = runtime.flush(SPACE)
+        results.append(result)
+        drain_work(runtime, queue, clock, ledger)
+        if result["formation"].get("reason") != "EPISODES_IN_FLIGHT":
+            return results
+    raise RuntimeError("Add replay could not settle in-flight Episodes before flushing")
+
+
 def export_state(store: PostgresAddStore, turns: list[dict[str, Any]]) -> dict[str, Any]:
     """Read persisted Turn, Episode and Topic assignments from the isolated store."""
     topics = store.read_topics(SPACE)
@@ -249,9 +264,14 @@ def main() -> int:
     parser.add_argument("--profile", type=Path, default=Path.home() / ".deepseek.env")
     parser.add_argument("--formation-count", type=int, default=RuntimeSettings.formation_count)
     parser.add_argument("--probe", action="store_true")
+    parser.add_argument(
+        "--flush-out",
+        type=Path,
+        help="Also flush the Space after the last wave and write the settled state here",
+    )
     args = parser.parse_args()
-    if args.out.exists():
-        parser.error("--out already exists")
+    if args.out.exists() or (args.flush_out and args.flush_out.exists()):
+        parser.error("--out or --flush-out already exists")
 
     dsn = os.environ["FRONTIER_PG_DSN"]
     redis_url = os.environ["FRONTIER_REDIS_URL"]
@@ -292,6 +312,8 @@ def main() -> int:
     complete = False
     ledger = None
     error = None
+    live_state = None
+    flushes: list[dict[str, Any]] = []
     try:
         with store.transaction() as cursor:
             cursor.execute(
@@ -352,6 +374,10 @@ def main() -> int:
             while runtime.acceptance.close_due(limit=1):
                 drain_work(runtime, queue, clock, ledger)
             print(f"Wave {wave} completed", flush=True)
+        if args.flush_out:
+            live_state = export_state(store, turns)
+            flushes = flush_space(runtime, queue, clock, ledger)
+            print(f"Flush completed: {flushes[-1]['formation']}", flush=True)
         complete = True
     except Exception as exc:
         error = type(exc).__name__
@@ -359,6 +385,9 @@ def main() -> int:
     finally:
         try:
             state = export_state(store, turns)
+            if args.flush_out and live_state is not None:
+                _write_json(args.flush_out, {**state, "flushes": flushes, "complete": complete})
+                state = live_state
             _write_json(
                 args.out,
                 {
