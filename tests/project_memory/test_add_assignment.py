@@ -715,3 +715,27 @@ def test_formation_input_carries_episode_evidence():
     by_id = {row["id"]: row for row in call["episodes"]}
     assert by_id["new"]["evidence"] == [{"kind": "decision", "quote": "Keep the pool at 8."}]
     assert by_id["old"]["evidence"] == []
+
+
+def test_formation_links_need_an_operated_resource_not_a_shared_mention():
+    from memos.project_memory.add_algorithm import _formation_links
+
+    mention = [{"path": "/tmp/plan.md", "status": "unresolved", "change_kind": "mention"}]
+    edited = [{"path": "src/core.ts", "status": "unresolved", "change_kind": "modified"}]
+    episodes = [
+        episode(
+            "a", episode_summary="loading state", anchors=mention, anchor_keys=["path:/tmp/plan.md"]
+        ),
+        episode(
+            "b",
+            episode_summary="validated container",
+            anchors=mention,
+            anchor_keys=["path:/tmp/plan.md"],
+        ),
+        episode("c", episode_summary="resolver", anchors=edited, anchor_keys=["path:src/core.ts"]),
+        episode("d", episode_summary="debounce", anchors=edited, anchor_keys=["path:src/core.ts"]),
+    ]
+    pairs = {tuple(link["episode_ids"]): link["signals"] for link in _formation_links(episodes)}
+    assert "shared_anchor" not in pairs[("a", "b")]
+    assert "shared_mention" in pairs[("a", "b")]
+    assert "shared_anchor" in pairs[("c", "d")]

@@ -96,7 +96,8 @@ _FORMATION = (
     + _DELIVERABLE_RULE
     + _SOURCE_RULE
     + """links 的 signals：same_conversation 只说明发生在同一会话，不是同一工作的证据；
-shared_anchor（共同操作的资源）和 similar_summary（摘要共有的具体词）才是正面线索。
+shared_anchor（共同操作的资源）和 similar_summary（摘要共有的具体词）才是正面线索；
+shared_mention 只是都提到同一路径或符号，不能单独作为同一工作的依据。
 以轨迹摘要、资源证据和连边为主。一致领域必须来自各 Episode 候选领域的交集。
 输出 JSON {\"clusters\":[{\"episode_ids\":[...],\"domain\":... ,\"name\":... ,
 \"independently_deliverable\": true,\"affects_existing_decisions\":false}]}。
@@ -421,6 +422,7 @@ _STRONG_LINKS = frozenset({"shared_anchor", "similar_summary"})
 
 def _formation_links(episodes: list[dict]) -> list[dict]:
     summaries = [_terms(str(ep.get("episode_summary") or "")) for ep in episodes]
+    strong = [strong_anchor_keys(ep.get("anchors") or []) for ep in episodes]
     common: set[str] = set()
     if len(episodes) >= 4:
         # Words shared by most summaries in the batch (templated phrasing) carry no topic signal.
@@ -436,8 +438,12 @@ def _formation_links(episodes: list[dict]) -> list[dict]:
                 "conversation_id"
             ):
                 signals.append("same_conversation")
-            if set(left.get("anchor_keys") or []).intersection(right.get("anchor_keys") or []):
+            # Only operated resources join work; a path both merely mention (a scratch
+            # plan file, a README) is a weak hint shown to the model, as in recall.
+            if strong[index] & strong[offset]:
                 signals.append("shared_anchor")
+            elif set(left.get("anchor_keys") or []).intersection(right.get("anchor_keys") or []):
+                signals.append("shared_mention")
             if len((summaries[index] & summaries[offset]) - common) >= 2:
                 signals.append("similar_summary")
             if signals:
