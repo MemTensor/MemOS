@@ -525,3 +525,10 @@ def test_decision_update_shows_the_original_quotes():
     quotes = [item["quote"] for item in inputs["decisions"][0]["items"]]
     assert quotes == ["Default to `true` everywhere.", "Use `auto`."]
     assert "以 quote 原话为准" in DECISION_UPDATE
+
+
+def test_decision_update_keeps_parallel_variants_and_name_differences_apart():
+    from memos.project_memory.prompts import DECISION_UPDATE
+
+    assert "再加一个并列的变体" in DECISION_UPDATE
+    assert "接口名或参数名有一处不同就算不同" in DECISION_UPDATE
