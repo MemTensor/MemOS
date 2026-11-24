@@ -284,9 +284,9 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
         same_as = None
     plan.same_as = same_as
 
-    own = draft.user_id in dec.user_ids or bool(
-        set(draft.approved_by) & {dec.user_labels.get(u, u) for u in dec.user_ids}
-    )
+    # Only the owner changes their own decision. A member relaying that the owner agreed
+    # ("B 同意改成…") is not the owner's statement, so it stays a conflict for people to settle.
+    own = draft.user_id in dec.user_ids
     late = not (draft.time and dec.time and draft.time < dec.time)
     informed = row.get("informed")
     evidence = {
@@ -310,7 +310,7 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
     if model_action and model_action != action:
         why = {
             OP_RESOLVE: "满足拍板的全部条件",
-            OP_REWRITE: "说话人是负责人或已和负责人确认，且不早于当前结论",
+            OP_REWRITE: "说话人是负责人，且不早于当前结论",
             OP_JOIN: "与已有的一项结论相同",
             OP_CONFLICT: "结论不同，说话人不是负责人",
         }[action]
@@ -319,7 +319,7 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
         elif model_action == OP_RESOLVE and not inf:
             why = "Agent 没把各项都说给他听（informed 没覆盖全部项或对不上 listed）"
         elif model_action == OP_REWRITE and not own:
-            why = "说话人不是负责人，也没和负责人确认过"
+            why = "说话人不是负责人；转述负责人同意不算授权"
         elif model_action == OP_REWRITE and not late:
             why = "这句话早于当前结论，不能改写"
         plan.guarded.append(f"模型给 {model_action}，代码改为 {action}：{why}")

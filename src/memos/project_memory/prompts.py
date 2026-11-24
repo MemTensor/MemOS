@@ -65,9 +65,9 @@ DECISION_UPDATE = """[系统]
 3. 定动作（action），五选一，从上往下先符合哪条用哪条：
    - "add" 新增：decision_id 为 null，这是一件新的事。
    - "resolve" 解决冲突：下面四条都满足。那条决策有不一致结论；final 为 true；same_as 不为 null；listed 里说到了那条决策的每一项。少一条都不算。
-   - "rewrite" 更新：same_as 为 null，并且 name 在 "current" 的 members 里，或者 approved_by 里有 "current" 的 members 里的人。
+   - "rewrite" 更新：same_as 为 null，并且 name 在 "current" 的 members 里。只有负责人本人能改自己的结论；approved_by 是说话人转述别人的同意，不能授权改写。
    - "join" 加入：same_as 不为 null。成员采用或同意了已有的某一项结论。
-   - "conflict" 记成冲突：same_as 为 null，name 不在 "current" 的 members 里，approved_by 里也没有负责人。
+   - "conflict" 记成冲突：same_as 为 null，name 不在 "current" 的 members 里，即使 approved_by 里有负责人。
 
 【每条新决策输出一项，7 个字段】
 1. n：照抄 new 里的序号。

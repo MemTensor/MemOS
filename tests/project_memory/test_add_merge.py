@@ -107,6 +107,10 @@ def test_existing_decision_rewrite_retains_history_and_does_not_mutate_snapshot(
     assert change["kind"] == "modify"
     assert data == frozen
     assert writer.calls == ["dec.update"]
+    # The owner's own change is also kept as progress on the Topic.
+    (record,) = [row for row in proposed["timeline"] if "池大小设为 16" in row["content"]]
+    assert "池大小设为 8" in record["content"]
+    assert record["source_refs"][0]["message_id"] == "message"
 
 
 def test_append_rebase_keeps_concurrent_entries_and_rewrites_metadata():

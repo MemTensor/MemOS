@@ -172,6 +172,18 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
         history.reason = reason
     if memory.content != target.content:
         memory.reason = reason
+    if applied.action == decision.OP_REWRITE and memory.content != target.content:
+        # A member revising their own decision is also progress others should see.
+        change = f"{draft.name} 将决策从「{target.content}」改为「{memory.content}」"
+        record = {
+            "id": stable_uuid(f"timeline:{topic_id}:{item['draft_id']}:rewrite"),
+            "content": change[:300],
+            "episode_id": episode["id"],
+            "time": item.get("chat_time"),
+            "user_ids": item["authors"],
+            "source_refs": item["source_refs"],
+        }
+        snapshot["timeline"] = _extend(snapshot.get("timeline") or [], [record], "timeline")
     snapshot["decisions"][index] = {
         "id": memory.id,
         **memory.to_project(),
