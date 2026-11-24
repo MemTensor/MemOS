@@ -37,9 +37,14 @@ kind 是 decision（成员确定的团队做法）、experience（有场景与�
 decision 只记范围内的规则、对外约定和共同约定。对 Agent 回复格式或表达方式的要求、一次性的局部实现、
 执行步骤、未采纳的方案和未决事项都不是 decision，不要输出。成员对某个具体对象（配置、数值、时点、阈值）
 给出明确结论时才是 decision。
+成员一句话里给出几条能各自改动的规则或取值（不同对象或条件，如顺序和例外处理、温度和保存时长），
+每条单独输出一个 decision，content 只写这一条；“先到为准”这类连接条件随相关的那条保留。
+成员确认的规则和 Agent 在这一段报告的落实结果分别输出 decision 和 timeline，同一段可以两种都有。
+content 改用 Agent 回复里的规范写法时（如把“东八区”写成 UTC+8），在 context 里引用 Agent 那句原话。
 成员的原话带有原因（因为、由于、考虑到某个具体问题）时，把原因随结论写进 content，只取原话里的原因。
 timeline 记 Agent 在这一段里明确报告的可验证结果：已新增、已修改、已撤回、已修复、已完成的具体产出，
-一件事一条，quote 取 Agent 的原话。尚未发生的计划不是 timeline。
+一件事一条，quote 取 Agent 的原话。成员问“做好了吗、放好了吗”，Agent 答已经办好的，也是 timeline，
+content 写清落实的是哪条规则或哪个对象。尚未发生的计划不是 timeline：“会先…”“将…”“准备…”都不记。
 experience 记排查或试错后得到的、可复用的做法：先查什么、哪种做法行不通及原因，必须有这一段的证据。
 quote 是这次 Episode 的消息中逐字原话。成员授权优先引用本段用户确立或确认做法的原话。
 origin 取 member、adopted（成员明确采纳）、delegated（Agent 执行）；Agent 自述绝非成员决策。
@@ -168,6 +173,7 @@ def _draft(
     member: dict,
     previous: dict[str, dict],
     anchors: list[dict],
+    support: dict[str, dict] | None = None,
 ) -> dict | None:
     kind = raw.get("kind")
     content = raw.get("content")
@@ -202,7 +208,16 @@ def _draft(
             proposals.append({"ref": context, "quote": quote, "kind": "assistant_proposal"})
     if origin == "adopted" and not (member_statement and proposals):
         return None
-    witness = [raw["quote"], *contextual_text, raw.get("_support_quote") or ""]
+    # Later Agent replies of the same Turn may support a value the member said in other words
+    # ("东八区" → "UTC+8"); they never authorize the draft.
+    supporting = []
+    for item in raw.get("context") or []:
+        later = (support or {}).get(item.get("message_id")) if isinstance(item, dict) else None
+        support_ref = quote_ref(later, item.get("quote")) if later is not None else None
+        if support_ref is not None:
+            text = text_at(later, support_ref["source_path"]) or ""
+            supporting.append(text[support_ref["start"] : support_ref["end"]])
+    witness = [raw["quote"], *contextual_text, *supporting, raw.get("_support_quote") or ""]
     if unwitnessed_tokens(content, "\n".join(witness)):
         return None
     origin = "adopted" if origin == "adopted" else "member" if member_statement else "delegated"
@@ -370,7 +385,17 @@ def extract_episode(
         if member is None:
             continue
         item, row = _member_anchored(item, row, member)
-        draft = _draft(episode, item, row, member, prior_to[str(row["message_id"])], anchors)
+        turn = str(member.get("turn_id") or member["message_id"])
+        support = {
+            mid: later
+            for mid, later in by_id.items()
+            if later["role"] in _ROLE_AGENT
+            and str(later.get("turn_id") or "") == turn
+            and mid not in prior_to[str(row["message_id"])]
+        }
+        draft = _draft(
+            episode, item, row, member, prior_to[str(row["message_id"])], anchors, support
+        )
         if draft:
             valid[draft["draft_id"]] = draft
     dropped = len(raw_drafts) - len(valid)

@@ -411,3 +411,52 @@ def test_summary_stripping_removes_whole_tokens_only():
     )
     result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
     assert result["episode_summary"] == "重试次数从 10 改为  次，接口"
+
+
+def _timezone_decision(context):
+    return {
+        "episode_summary": "月报按 UTC+8 切分",
+        "drafts": [
+            {
+                "kind": "decision",
+                "content": "月报的月初月末按 UTC+8 切分，不用 UTC。",
+                "message_id": "ask",
+                "quote": "月报的月初月末按东八区算，别用 UTC。",
+                "origin": "member",
+                "context": context,
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("context", "kept"),
+    [
+        ([{"message_id": "reply", "quote": "按 UTC+8 算月初月末"}], True),
+        ([], False),
+        ([{"message_id": "reply", "quote": "不在原文里的 UTC+8"}], False),
+    ],
+)
+def test_same_turn_agent_quote_can_witness_a_normalized_value(context, kept):
+    member = row("ask", "user", "月报的月初月末按东八区算，别用 UTC。", role_id="lin")
+    reply = row("reply", "assistant", "report.ts 切月份时按 UTC+8 算月初月末，不再用 UTC。")
+    drafts = extract_episode(
+        writer := Writer(_timezone_decision(context)), {"id": "e"}, [member, reply]
+    )["drafts"]
+    assert bool(drafts) is kept
+    if kept:
+        (draft,) = drafts
+        # The Agent's wording supports the value; only the member's words authorize it.
+        assert draft["authorizing_evidence_refs"] == draft["source_refs"]
+        assert draft["source_refs"][0]["message_id"] == "ask"
+        assert draft["context_refs"] == []
+    assert writer.calls
+
+
+def test_extraction_prompt_splits_rules_and_keeps_completion_reports():
+    from memos.project_memory.add_extraction import _EXTRACT
+
+    assert "每条单独输出一个 decision" in _EXTRACT
+    assert "同一段可以两种都有" in _EXTRACT
+    assert "Agent 答已经办好的，也是 timeline" in _EXTRACT
+    assert "“会先…”“将…”“准备…”都不记" in _EXTRACT
