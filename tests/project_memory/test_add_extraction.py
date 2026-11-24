@@ -372,3 +372,11 @@ def test_unverifiable_summary_token_is_removed_without_discarding_the_summary():
     )
     result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
     assert result["episode_summary"] == "成员要求在 Database 上新增  两个安全批量接口"
+
+
+def test_extraction_summary_leads_with_every_requested_deliverable():
+    from memos.project_memory.add_extraction import _EXTRACT
+
+    assert "开头先写成员本段要交付的具体对象" in _EXTRACT
+    assert "逐项点名" in _EXTRACT
+    assert "保留原文标识符" in _EXTRACT

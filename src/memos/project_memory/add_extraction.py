@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 
 _EXTRACT = """[系统]
 你为项目整理一段完整 Episode。仅输出一个 JSON 对象，包含 episode_summary 和 drafts 数组。
-episode_summary 依据这一段写具体处理的对象、成员的结论和相关资源，不写推测，200 字以内。
+episode_summary 开头先写成员本段要交付的具体对象（功能、接口、配置项、规则或产出物），保留原文标识符；
+成员一段里提出多项独立要求时逐项点名，不能只写其中一项。之后写成员的结论和相关资源，不写推测，200 字以内。
 不要补“仅为规则说明”“未见后续进展”这类对状态的套话，摘要只陈述这一段实际出现的内容。
 闲聊或没可保留的事实输出空数组。prior 只帮助理解，不能为新结论授权。
 drafts 每项给出 kind、content、message_id、quote、origin，可附 source_path（默认 /content）。
