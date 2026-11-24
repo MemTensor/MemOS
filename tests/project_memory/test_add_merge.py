@@ -337,6 +337,10 @@ def with_stance(topic, author, content, hour, *, same_as=None, confirms=None):
         "chat_time": f"2026-11-19T{hour:02}:00:00Z",
         "final": confirms is not None,
         "listed": list((confirms or {}).values()),
+        # Each stance is its own message; one message's clauses are sibling rules instead.
+        "source_refs": [
+            {"message_id": f"{author}-{hour}", "source_path": "/content", "start": 0, "end": 1}
+        ],
     }
     writer = Writer()
     if topic is not None:

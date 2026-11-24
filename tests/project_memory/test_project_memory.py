@@ -810,3 +810,28 @@ def test_expected_4xx_are_not_logged_as_hook_failures(monkeypatch):
         assert logged == []
     finally:
         reset_project_hooks()
+
+
+def test_sibling_rules_from_one_message_never_rewrite_each_other():
+    d = _decision()
+    d.source = Source("conv", "m-sample", "留样 125 克，保存 48 小时。")
+    sibling = DecisionDraft(
+        "m-sample",
+        "留样 125 克，保存 48 小时。",
+        "每道菜留样 125 克。",
+        user_id="user_b",
+        name="用户B",
+        time="2026-10-30T10:00:00+08:00",
+    )
+    row = {"decision_id": "d1", "same_as": None, "action": "rewrite"}
+    plan = dec.decide(sibling, row, {"d1": d})
+    assert plan.action == "add" and plan.decision_id is None and plan.guarded
+    later = DecisionDraft(
+        "m-later",
+        "q",
+        "每道菜留样 150 克。",
+        user_id="user_b",
+        name="用户B",
+        time="2026-10-30T10:00:00+08:00",
+    )
+    assert dec.decide(later, row, {"d1": d}).action == "rewrite"

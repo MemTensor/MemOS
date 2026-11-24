@@ -284,6 +284,13 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
         same_as = None
     plan.same_as = same_as
 
+    if same_as is None and dec.source.message_id and dec.source.message_id == draft.message_id:
+        # One message stating several rules yields sibling decisions; a member does not revise
+        # a rule with the next clause of the same sentence.
+        plan.decision_id = None
+        plan.guarded.append("同一条消息里拆出的另一条规则，按新增")
+        return _finish(plan, OP_ADD)
+
     # Only the owner changes their own decision. A member relaying that the owner agreed
     # ("B 同意改成…") is not the owner's statement, so it stays a conflict for people to settle.
     own = draft.user_id in dec.user_ids
