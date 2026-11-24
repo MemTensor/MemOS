@@ -388,6 +388,9 @@ def test_extraction_summary_leads_with_every_requested_deliverable():
         ("接口 api/v1", "接口 api/v10"),
         ("配置 conf/retry/3", "配置 conf/retry/30"),
         ("存到 ta/bucket", "存到 data/bucket"),
+        ("接口 api/v1", "接口 api/v1-beta"),
+        ("改 src/a", "改 src/a.py"),
+        ("配置 conf/retry/3", "配置 conf/retry/3.5"),
     ],
 )
 def test_path_tokens_still_need_their_own_boundaries(claimed, source):

@@ -45,8 +45,10 @@ def unwitnessed_tokens(text: str, witness: str) -> set[str]:
 
 def _occurs_whole(token: str, witness: str) -> bool:
     # A glued prefix may only end in punctuation (``non-skipped/...``), and nothing may follow
-    # that would extend the token (``api/v1`` is not witnessed by ``api/v10``).
-    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![\w/])", witness) is not None
+    # that would extend the token (``api/v1`` is not witnessed by ``api/v10``, ``api/v1-beta``
+    # or ``src/a.py``); sentence punctuation after it (``truthy/falsy.``) is fine.
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![\w/]|[.-]\w)"
+    return re.search(pattern, witness) is not None
 
 
 def strip_tokens(text: str, tokens: set[str]) -> str:
