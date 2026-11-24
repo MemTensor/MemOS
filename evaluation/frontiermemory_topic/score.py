@@ -154,6 +154,7 @@ def _task_topic_attribution(turns: list[dict], gold_field: str) -> dict[str, Any
 
     tasks = {}
     counts: Counter[str] = Counter()
+    full: Counter[str] = Counter()  # Every Turn of the Task also has a formal Topic.
     for task, topic_ids in sorted(task_topics.items()):
         shared = sorted(topic_id for topic_id in topic_ids if len(topic_turns[topic_id]) > 1)
         split_neighbors = sorted(
@@ -183,6 +184,8 @@ def _task_topic_attribution(turns: list[dict], gold_field: str) -> dict[str, Any
             "allow_split_or_merge": shape in {"one_to_one", "split", "merge"},
         }
         counts.update(rule for rule, passed in passes.items() if passed)
+        if not unassigned[task]:
+            full.update(rule for rule, passed in passes.items() if passed)
         tasks[task] = {
             "complete": not unassigned[task],
             "omitted": omitted,
@@ -195,11 +198,16 @@ def _task_topic_attribution(turns: list[dict], gold_field: str) -> dict[str, Any
         }
 
     total = len(tasks)
-    return {
-        "rates": {
-            rule: {"correct": counts[rule], "total": total, "rate": _ratio(counts[rule], total)}
+
+    def rates(passed: Counter[str]) -> dict[str, dict[str, Any]]:
+        return {
+            rule: {"correct": passed[rule], "total": total, "rate": _ratio(passed[rule], total)}
             for rule in _ATTRIBUTION_RULES
-        },
+        }
+
+    return {
+        "rates": rates(counts),
+        "rates_full_coverage": rates(full),
         "tasks": tasks,
         "topic_turn_ids": {
             topic_id: {task: sorted(ids) for task, ids in sorted(rows.items())}

@@ -178,6 +178,12 @@ def test_task_topic_rates_allow_pure_split_or_pure_merge_but_reject_mixed_compon
     assert rates["allow_split"]["correct"] == 2
     assert rates["allow_merge"]["correct"] == 4
     assert rates["allow_split_or_merge"]["correct"] == 5
+    # A Task with an unassigned Turn keeps its structure but fails full coverage.
+    full = rubric["rates_full_coverage"]
+    assert full["strict_one_to_one"] == {"correct": 1, "total": 8, "rate": 0.125}
+    assert full["allow_merge"]["correct"] == 3
+    assert full["allow_split_or_merge"]["correct"] == 4
+    assert rubric["tasks"]["merge-missing"]["complete"] is False
     assert rubric["tasks"]["missing"]["omitted"] is True
     assert rubric["tasks"]["mixed-a"]["shape"] == "mixed"
     assert rubric["tasks"]["mixed-b"]["shape"] == "mixed"
