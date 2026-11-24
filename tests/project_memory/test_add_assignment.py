@@ -97,6 +97,7 @@ def test_recall_preserves_predecessor_and_does_not_expose_other_domains_or_draft
                 "action": "attach",
                 "topic_id": "prior",
                 "relationship": "same_work",
+                "same_deliverable": True,
                 "positive_basis": "previous_episode",
                 "independently_deliverable": False,
                 "affects_existing_decisions": True,
@@ -145,6 +146,7 @@ def test_name_only_match_is_staged():
                 "action": "attach",
                 "topic_id": "top",
                 "relationship": "same_work",
+                "same_deliverable": True,
                 "positive_basis": "name",
                 "independently_deliverable": False,
                 "affects_existing_decisions": True,
@@ -172,6 +174,7 @@ def test_mention_only_anchor_does_not_establish_same_work():
                 "action": "attach",
                 "topic_id": "top",
                 "relationship": "same_work",
+                "same_deliverable": True,
                 "positive_basis": "shared_anchor",
                 "independently_deliverable": False,
                 "affects_existing_decisions": True,
@@ -234,6 +237,7 @@ def staged_choice(eid, target):
         "topic_id": target,
         "action": "attach",
         "relationship": "same_work",
+        "same_deliverable": True,
         "positive_basis": "same_goal",
         "independently_deliverable": False,
         "affects_existing_decisions": True,
@@ -568,3 +572,42 @@ def test_formation_prompt_offers_attaching_to_existing_topics():
 
     assert "topic_id" in _FORMATION
     assert "无法独立交付的组保留在默认主题" not in _FORMATION
+
+
+@pytest.mark.parametrize("prompt", [_ASSIGN, _ASSIGN_BATCH], ids=["direct", "batch"])
+def test_assignment_prompt_requires_the_same_deliverable(prompt):
+    assert "same_deliverable" in prompt
+    assert "episode_deliverable" in prompt
+    assert "连续的请求常常已转到下一项工作" in prompt
+
+
+@pytest.mark.parametrize("judged", [False, None, "true"], ids=["false", "missing", "text"])
+def test_attach_needs_an_explicit_same_deliverable_judgment(judged):
+    target = topic("prior", "project")
+    current = episode("new", previous={"result": {"topic_ids": ["prior"]}})
+    reply = {
+        "action": "attach",
+        "topic_id": "prior",
+        "relationship": "same_work",
+        "positive_basis": "previous_episode",
+        "independently_deliverable": False,
+        "affects_existing_decisions": True,
+    }
+    if judged is not None:
+        reply["same_deliverable"] = judged
+    plan = organize_episode(
+        Writer([reply]),
+        current,
+        recall_candidates(current, [target]),
+        [],
+        {"staged_since_last_formation": 0, "last_formation_at": NOW},
+        now=NOW,
+    )
+    assert plan["assignments"] == []
+    assert plan["staging"]["reason"] == "NO_CONFIRMED_TOPIC"
+
+
+def test_formation_prompt_separates_deliverables_in_one_module():
+    from memos.project_memory.add_algorithm import _FORMATION
+
+    assert "交付对象和验收条件不同" in _FORMATION

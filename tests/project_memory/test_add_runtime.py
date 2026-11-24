@@ -186,6 +186,7 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
                         "action": "attach",
                         "topic_id": target["id"],
                         "relationship": "same_work",
+                        "same_deliverable": True,
                         "positive_basis": "same_goal",
                         "independently_deliverable": False,
                         "affects_existing_decisions": True,

@@ -21,12 +21,23 @@ if TYPE_CHECKING:
     from .judge import ModelHub
 
 
-_ASSIGN = """[系统]
+# Sibling work in one module shares vocabulary, so recall alone cannot separate it.
+_DELIVERABLE_RULE = """同一模块、同一数据格式族、同一配置前缀或同一流程的不同阶段，只要交付对象和验收条件不同，就是不同工作。
+例如同一导出模块里的“失败重试”和“结果落盘”，同一解析器里“格式 A 的容错”和“格式 B 的容错”。
+"""
+
+_ASSIGN = (
+    """[系统]
 判断 Episode 是否推进候选 Topic 的同一项工作。只依据轨迹摘要、资源锚点和上下文，不能因名字相似归入。
 两个工作同时满足可独立交付且结论不影响既有决策时，应新开工作，此步返回 stage。
 先核对本段与候选是否涉及同一具体决策事项。证据明确时，对该事项提出不同结论、修订或定案仍属同一工作，即使方案可独立实施。
-正面依据为实际操作共同资源、上段承接、明确指代或摘要和描述所指的具体目标吻合。
+再分别写出本段和候选的交付对象，具体到功能、接口、配置项、规则或产出物，保留原文标识符。两者相同才算 same_deliverable。
+"""
+    + _DELIVERABLE_RULE
+    + """上段承接和同一会话只说明发生顺序，连续的请求常常已转到下一项工作，不能单独作为归入依据。
+正面依据为实际操作共同资源、上段承接、明确指代或摘要和描述所指的具体目标吻合，且交付对象相同。
 输出 JSON：{\"action\":\"attach\"/\"stage\",\"topic_id\":候选ID,
+\"episode_deliverable\":本段交付对象,\"topic_deliverable\":候选交付对象,\"same_deliverable\":布尔值,
 \"relationship\":\"same_work\"/\"other\",\"independently_deliverable\":布尔值,
 \"affects_existing_decisions\":布尔值,\"positive_basis\":\"shared_anchor\"/\"previous_episode\"/
 \"explicit_reference\"/\"same_goal\"/\"none\"}。不确定用 stage。不得创造候选 ID。
@@ -34,14 +45,22 @@ _ASSIGN = """[系统]
 [用户]
 {inputs}
 """
+)
 
-_ASSIGN_BATCH = """[系统]
+_ASSIGN_BATCH = (
+    """[系统]
 逐条独立判断 Episode 是否推进其候选 Topic 的同一项工作。每条只能用该条的候选和证据。
 依据轨迹摘要、资源锚点和上下文，仅名字相似无效。可独立交付且不影响既有决策时应暂存。
 先核对本段与候选是否涉及同一具体决策事项。证据明确时，对该事项提出不同结论、修订或定案仍属同一工作，即使方案可独立实施。
+再分别写出本段和候选的交付对象，具体到功能、接口、配置项、规则或产出物，保留原文标识符。两者相同才算 same_deliverable。
+"""
+    + _DELIVERABLE_RULE
+    + """上段承接和同一会话只说明发生顺序，连续的请求常常已转到下一项工作，不能单独作为归入依据。
 为每个 episode_id 原样返回一行，不得重复、遗漏或从其他行借用 Topic ID。
 输出 JSON {"assignments":[{"episode_id":输入ID,"action":"stage"},
-{"episode_id":输入ID,"action":"attach","topic_id":该条候选ID,"relationship":"same_work",
+{"episode_id":输入ID,"action":"attach","topic_id":该条候选ID,
+"episode_deliverable":本段交付对象,"topic_deliverable":候选交付对象,"same_deliverable":布尔值,
+"relationship":"same_work",
 "independently_deliverable":布尔值,"affects_existing_decisions":布尔值,
 "positive_basis":"shared_anchor"/"previous_episode"/"explicit_reference"/"same_goal"}]}。
 只有共同操作资源、上段承接、明确指代或具体目标吻合才能归入。不确定用 stage。
@@ -49,11 +68,13 @@ _ASSIGN_BATCH = """[系统]
 [用户]
 {inputs}
 """
+)
 
 _ASSIGN_BATCH_SIZE = 8
 _FORMATION_TOPIC_LIMIT = 24
 
-_FORMATION = """[系统]
+_FORMATION = (
+    """[系统]
 把待归类的 Episode 聚成可独立交付的具体工作，每个 cluster 对应一个主题。
 粒度规则（与 PRD 的同一项工作判定一致）：
 1. 一个主题对应一项可独立交付的工作：一个功能、模块或产出物，或一条与其他规则互不影响的独立规则。
@@ -63,7 +84,9 @@ _FORMATION = """[系统]
 3. 互不影响、可分别交付的规则必须分别建 cluster，即使它们属于同一领域、同一会话、同一发言人，
    或者摘要的句式和措辞相似。例如“轮胎更换标准”和“加油付款方式”是两个主题。
 4. 拿不准时拆开：单个 Episode 可以独立成为一个 cluster，不要为了减少主题数量合并。
-links 的 signals：same_conversation 只说明发生在同一会话，不是同一工作的证据；
+"""
+    + _DELIVERABLE_RULE
+    + """links 的 signals：same_conversation 只说明发生在同一会话，不是同一工作的证据；
 shared_anchor（共同操作的资源）和 similar_summary（摘要共有的具体词）才是正面线索。
 以轨迹摘要、资源证据和连边为主。一致领域必须来自各 Episode 候选领域的交集。
 输出 JSON {\"clusters\":[{\"episode_ids\":[...],\"domain\":... ,\"name\":... ,
@@ -77,6 +100,7 @@ existing_topics 的 episode_ids 标明召回该 Topic 的待归类 Episode。先
 [用户]
 {inputs}
 """
+)
 
 _WORDS = re.compile(r"[a-z0-9_./-]{2,}|[\u3400-\u9fff]+", re.I)
 _DATE_IN_NAME = re.compile(r"\b20\d{2}(?:[-./]\d{1,2})?|\d+月\d+日")
@@ -268,6 +292,8 @@ def _assignment_choice(output: dict, candidates: list[dict]) -> dict | None:
     affects = output.get("affects_existing_decisions")
     if not isinstance(independent, bool) or not isinstance(affects, bool):
         raise ModelError("Topic assignment requires explicit work relationship judgments")
+    if output.get("same_deliverable") is not True:
+        return None
     if output.get("relationship") != "same_work" or (independent and not affects):
         return None
     basis = output.get("positive_basis")
