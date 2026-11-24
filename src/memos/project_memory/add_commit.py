@@ -190,13 +190,15 @@ def _topic_edit(cursor: Any, edit: dict, key: str, current: dict, scoped: dict[s
     refresh_topic_items(cursor, topic, item_embeddings=edit.get("item_embeddings"))
 
 
-def _staged_episodes(cursor: Any, changes: dict, episode: dict) -> dict[str, dict]:
-    scoped = {episode["id"]: episode}
+def _staged_episodes(
+    cursor: Any, changes: dict, project: str, space: str, episode: dict | None = None
+) -> dict[str, dict]:
+    scoped = {episode["id"]: episode} if episode else {}
     by_id = {item["episode_id"]: item for item in changes["staged_updates"]}
     for episode_id, update in sorted(by_id.items()):
-        if episode_id == episode["id"]:
+        if episode_id in scoped:
             continue
-        row = _query_episode(cursor, episode["project_id"], episode_id, episode["space_id"])
+        row = _query_episode(cursor, project, episode_id, space)
         if row is None or row["staged_status"] != "active":
             raise VersionConflictError("A staged Episode is no longer eligible for Formation")
         if row["updated_at"].isoformat() != update.get("expected_updated_at"):
@@ -205,12 +207,11 @@ def _staged_episodes(cursor: Any, changes: dict, episode: dict) -> dict[str, dic
     return scoped
 
 
-def _finish_staged(cursor: Any, changes: dict, episode: dict) -> dict:
-    stage = changes["staging"]
-    current_update = {}
-    for update in changes["staged_updates"]:
-        if update["episode_id"] == episode["id"]:
-            current_update = update
+def _write_staged_updates(
+    cursor: Any, updates: list[dict], project: str, space: str, skip: str | None = None
+) -> None:
+    for update in updates:
+        if update["episode_id"] == skip:
             continue
         cursor.execute(
             """UPDATE episodes SET staged_status = %s, moved_to_topic_id = %s,
@@ -221,10 +222,20 @@ def _finish_staged(cursor: Any, changes: dict, episode: dict) -> dict:
                 update.get("topic_id"),
                 update["attempts"],
                 update["episode_id"],
-                episode["project_id"],
-                episode["space_id"],
+                project,
+                space,
             ),
         )
+
+
+def _finish_staged(cursor: Any, changes: dict, episode: dict) -> dict:
+    stage = changes["staging"]
+    current_update = next(
+        (u for u in changes["staged_updates"] if u["episode_id"] == episode["id"]), {}
+    )
+    _write_staged_updates(
+        cursor, changes["staged_updates"], episode["project_id"], episode["space_id"], episode["id"]
+    )
     if not stage:
         return {}
     stage_domain = _domain(cursor, episode["space_id"], stage.get("domain"))
@@ -334,7 +345,7 @@ def commit_changeset(
         if formation and scope["formation_version"] != formation["version"]:
             raise VersionConflictError("Default Topic Formation changed during preparation")
 
-        scoped = _staged_episodes(cursor, changeset, current)
+        scoped = _staged_episodes(cursor, changeset, project, space, current)
         for row in scoped.values():
             if scope["cleared_at"] is not None and scope["cleared_at"] >= row["opened_at"]:
                 raise EpisodeFenceError("A staged Episode predates the current Space contents")
@@ -352,14 +363,7 @@ def commit_changeset(
             )
         staged = _finish_staged(cursor, changeset, current)
         if formation:
-            cursor.execute(
-                """INSERT INTO add_space_state AS st (space_id, formation_version, last_formation_at)
-                   VALUES (%s, 1, now())
-                   ON CONFLICT (space_id) DO UPDATE SET formation_version = st.formation_version + 1,
-                       last_formation_at = now(),
-                       staged_since_last_formation = greatest(0, st.staged_since_last_formation - %s)""",
-                (space, formation["consumed"]),
-            )
+            _advance_formation(cursor, space, formation["consumed"])
         elif staged:
             cursor.execute(
                 """INSERT INTO add_space_state AS st (space_id, staged_since_last_formation)
@@ -369,3 +373,64 @@ def commit_changeset(
                 (space,),
             )
         return _finalize_episode(cursor, changeset, current, key, staged)
+
+
+def _advance_formation(cursor: Any, space: str, consumed: int) -> None:
+    cursor.execute(
+        """INSERT INTO add_space_state AS st (space_id, formation_version, last_formation_at)
+           VALUES (%s, 1, now())
+           ON CONFLICT (space_id) DO UPDATE SET formation_version = st.formation_version + 1,
+               last_formation_at = now(),
+               staged_since_last_formation = greatest(0, st.staged_since_last_formation - %s)""",
+        (space, consumed),
+    )
+
+
+def commit_formation(store: PostgresAddStore, changeset: dict) -> dict:
+    """Write a Space-level Formation that no new Episode carries, under the Space gate."""
+    project = store.project_id
+    space = changeset["space_id"]
+    formation = changeset.get("formation")
+    if changeset.get("episode_id") is not None or not formation:
+        raise EpisodeFenceError("Space Formation needs a ChangeSet without a carrier Episode")
+    with store.transaction() as cursor:
+        cursor.execute(
+            f"""SELECT s.*, {SPACE_STATE}, clock_timestamp() AS commit_clock
+                  FROM spaces s LEFT JOIN add_space_state st ON st.space_id = s.id
+                 WHERE s.project_id = %s AND s.id = %s FOR UPDATE OF s""",
+            (project, space),
+        )
+        scope = cursor.fetchone()
+        if scope is None:
+            raise EpisodeFenceError("Space no longer exists in this project")
+        if scope["formation_version"] != formation["version"]:
+            raise VersionConflictError("Default Topic Formation changed during preparation")
+        scoped = _staged_episodes(cursor, changeset, project, space)
+        for row in scoped.values():
+            if scope["cleared_at"] is not None and scope["cleared_at"] >= row["opened_at"]:
+                raise EpisodeFenceError("A staged Episode predates the current Space contents")
+            _assert_witnesses(cursor, row)
+        key = f"formation:{space}:{formation['version']}"
+        for edit in sorted(changeset["topics"], key=lambda value: value["topic"]["id"]):
+            # The first member Episode stands in as the creator of a new Topic.
+            carrier = {"id": edit["episode_ids"][0], "space_id": space}
+            _topic_edit(cursor, edit, key, carrier, scoped)
+        if store.retrieval_index:
+            sync_space(cursor, project, space)
+            publish_topics(
+                cursor,
+                project,
+                space,
+                [edit["topic"]["id"] for edit in changeset["topics"]],
+                scope["commit_clock"],
+            )
+        _write_staged_updates(cursor, changeset["staged_updates"], project, space)
+        _advance_formation(cursor, space, formation["consumed"])
+    return {
+        "formation_version": formation["version"] + 1,
+        "topic_ids": sorted(edit["topic"]["id"] for edit in changeset["topics"]),
+        "created_topic_ids": sorted(changeset["created_topic_ids"]),
+        "moved": {
+            u["episode_id"]: u["topic_id"] for u in changeset["staged_updates"] if u["topic_id"]
+        },
+    }

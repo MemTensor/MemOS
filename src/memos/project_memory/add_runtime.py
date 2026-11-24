@@ -33,8 +33,13 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 
 from .add_acceptance import AddAcceptance
-from .add_algorithm import organize_episode, recall_candidates
-from .add_commit import DraftWitnessError, EpisodeFenceError, commit_changeset
+from .add_algorithm import formation_due, organize_episode, organize_staged, recall_candidates
+from .add_commit import (
+    DraftWitnessError,
+    EpisodeFenceError,
+    commit_changeset,
+    commit_formation,
+)
 from .add_dispatch import EpisodeDispatch, StageLease, label_for
 from .add_evidence import anchor_keys, collect_anchors
 from .add_extraction import extract_episode, jsonable
@@ -118,6 +123,7 @@ class EpisodeAddRuntime:
         self.dispatch = EpisodeDispatch(store, lease_seconds=self.settings.stage_lease_seconds)
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
+        self._formation_thread: threading.Thread | None = None
 
     @staticmethod
     def _metered(
@@ -241,6 +247,9 @@ class EpisodeAddRuntime:
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
+        if self._formation_thread:
+            self._formation_thread.join(timeout=5)
+            self._formation_thread = None
 
     def _run_timer(self) -> None:
         scan_key = f"project_episode_scan_lock:{self.store.project_id}"
@@ -256,11 +265,172 @@ class EpisodeAddRuntime:
                             self.acceptance.close_due()
                         finally:
                             self.redis.eval(_RELEASE_LOCK, 1, scan_key, token)
+                        self._start_formation_scan()
                     next_close = time.monotonic() + self.settings.scan_seconds
                 self.recover()
             except Exception as exc:
                 logger.warning("Project Add timer will retry (%s)", type(exc).__name__)
             self._stopped.wait(self.settings.recover_seconds)
+
+    def _start_formation_scan(self) -> None:
+        """Run quiet-Space Formation beside the timer so closing and recovery never wait on it."""
+        if self._formation_thread is not None and self._formation_thread.is_alive():
+            return
+        self._formation_thread = threading.Thread(
+            target=self._formation_scan, name="project-add-formation", daemon=True
+        )
+        self._formation_thread.start()
+
+    def _formation_scan(self) -> None:
+        try:
+            self.form_due_spaces()
+        except Exception as exc:
+            logger.warning("Project Add Formation scan will retry (%s)", type(exc).__name__)
+
+    def form_due_spaces(self) -> list[dict[str, Any]]:
+        """Run Formation for quiet Spaces whose staged Episodes waited past the interval."""
+        results = []
+        for space_id in self.store.staged_space_ids():
+            if self._stopped.is_set():
+                break
+            try:
+                result = self.form_space(space_id)
+            except Exception as exc:
+                # Store or Redis trouble is usually transient: retry after a few scans.
+                self._back_off(space_id, self.settings.scan_seconds * 5)
+                logger.warning(
+                    "Project Add Formation for a quiet Space backs off (%s)", type(exc).__name__
+                )
+                continue
+            if result["ran"]:
+                results.append(result)
+        return results
+
+    def _formation_key(self, kind: str, space_id: str) -> str:
+        return f"project_formation_{kind}:{self.store.project_id}:{space_id}"
+
+    def _back_off(self, space_id: str, seconds: int | None = None) -> None:
+        # A Formation that cannot commit would fail the same way on the next scan.
+        self.redis.set(
+            self._formation_key("backoff", space_id),
+            "1",
+            ex=int(seconds or self.settings.formation_interval),
+        )
+
+    def form_space(self, space_id: str, *, force: bool = False) -> dict[str, Any]:
+        """Run one Formation over a Space's staged Episodes without a new Episode to carry it.
+
+        Planning runs under a per-Space planning lock only, so Episode commits keep going; the
+        Space lock is taken just around the commit, which rechecks every version it relies on.
+        A forced run (flush) ignores back-off and the interval, and does not age staged Episodes.
+        """
+        outcome: dict[str, Any] = {"space_id": space_id, "ran": False}
+        if not force and self.redis.exists(self._formation_key("backoff", space_id)):
+            return {**outcome, "reason": "BACKING_OFF"}
+        space = self.store.read_space(space_id)
+        staged = self.store.read_staged(space_id) if space else []
+        if not staged:
+            return {**outcome, "reason": "NO_STAGED"}
+        now = self.now()
+        due = formation_due(
+            space,
+            staged,
+            now,
+            formation_count=self.settings.formation_count,
+            formation_interval=self.settings.formation_interval,
+        )
+        if not force and not due:
+            return {**outcome, "reason": "NOT_DUE"}
+        planning = self._formation_key("planning", space_id)
+        token = f"formation:{uuid4().hex}"
+        if not self.redis.set(planning, token, nx=True, ex=self.settings.lock_wait_seconds):
+            return {**outcome, "reason": "FORMATION_RUNNING"}
+        try:
+            return self._form_and_commit(space_id, space, staged, now, force, outcome)
+        finally:
+            self.redis.eval(_RELEASE_LOCK, 1, planning, token)
+
+    def _form_and_commit(
+        self,
+        space_id: str,
+        space: dict,
+        staged: list[dict],
+        now: datetime,
+        force: bool,
+        outcome: dict[str, Any],
+    ) -> dict[str, Any]:
+        domains = sorted({domain for ep in staged for domain in ep["domains"]})
+        plan = organize_staged(
+            self.hub,
+            staged,
+            space,
+            self.store.read_topics(space_id, domains),
+            now=now,
+            count_attempt=not force,
+        )
+        if plan["formation"] is None:
+            self._back_off(space_id)
+            return {**outcome, "reason": "FORMATION_MODEL_UNAVAILABLE"}
+        changeset = index_changeset(
+            rewrite_metadata(self.hub, prepare_merge(self.hub, plan)),
+            self.embedder,
+            self.store.dim,
+            model_id=self.embedding_model_id,
+        )
+        key = self._space_key({"space_id": space_id})
+        token = f"formation:{uuid4().hex}"
+        deadline = time.monotonic() + 30
+        while not self.redis.set(key, token, nx=True, ex=30):
+            if time.monotonic() >= deadline:
+                self._back_off(space_id, self.settings.scan_seconds * 5)
+                return {**outcome, "reason": "SPACE_LOCKED"}
+            time.sleep(0.2)
+        try:
+            committed = commit_formation(self.store, changeset)
+        except VersionConflictError:
+            # An Episode ran Formation or changed a staged Episode first; plan again later.
+            self._back_off(space_id, self.settings.scan_seconds * 5)
+            return {**outcome, "reason": "FORMATION_CONFLICT"}
+        except (EpisodeFenceError, DraftWitnessError):
+            self._back_off(space_id)
+            return {**outcome, "reason": "FORMATION_REJECTED"}
+        finally:
+            self.redis.eval(_RELEASE_LOCK, 1, key, token)
+        return {
+            **outcome,
+            "ran": True,
+            **committed,
+            "staged": len(staged),
+            "rejected": plan["formation"].get("rejected", []),
+        }
+
+    def flush(
+        self, space_id: str, conversation_id: str | None = None, *, wait_seconds: float = 0.0
+    ) -> dict[str, Any]:
+        """Close open Episodes, wait for in-flight stages, then force Formation (dev and eval).
+
+        Episodes still in flight after ``wait_seconds`` are reported and Formation waits for them;
+        call again once they finish. Formation covers the whole Space's staged Episodes.
+        """
+        closed = self.acceptance.close_open(space_id, conversation_id)
+        for episode_id in closed:
+            self._publish(episode_id)
+        deadline = time.monotonic() + wait_seconds
+        while (pending := self.store.unfinished_episode_ids(space_id)) and (
+            time.monotonic() < deadline
+        ):
+            time.sleep(0.1)
+        if pending:
+            formation = {"space_id": space_id, "ran": False, "reason": "EPISODES_IN_FLIGHT"}
+        else:
+            formation = self.form_space(space_id, force=True)
+        return {
+            "space_id": space_id,
+            "closed_episode_ids": closed,
+            "pending_episode_ids": pending,
+            "formation": formation,
+            "staged_remaining": self.store.staged_count(space_id),
+        }
 
     def handle(self, batch: list[ScheduleMessageItem]) -> None:
         for message in batch:

@@ -502,3 +502,33 @@ def test_relational_search_and_get_keep_member_stance_times_private(add_store):
         assert row["id"] == decision_id
         assert row["time"] == "2026-11-19T01:00:00+00:00"
         assert "_member_stance_times" not in row
+
+
+def test_decision_update_shows_the_original_quotes():
+    from memos.project_memory.decision import update_inputs
+    from memos.project_memory.prompts import DECISION_UPDATE
+    from memos.project_memory.types import ConflictItem, Decision, DecisionDraft, Source
+
+    draft = DecisionDraft(
+        message_id="m2", quote="Default to `false` in CI.", content="CI 默认 false", user_id="bob"
+    )
+    decision = Decision(
+        content="默认 true",
+        user_ids=["alice"],
+        source=Source("conv", "m1", "Default to `true` everywhere."),
+    )
+    decision.conflicts.append(
+        ConflictItem(1, "默认 auto", None, ["carol"], Source("conv", "m3", "Use `auto`."))
+    )
+    inputs = update_inputs([draft], [decision], "bail")
+    assert inputs["new"][0]["quote"] == "Default to `false` in CI."
+    quotes = [item["quote"] for item in inputs["decisions"][0]["items"]]
+    assert quotes == ["Default to `true` everywhere.", "Use `auto`."]
+    assert "以 quote 原话为准" in DECISION_UPDATE
+
+
+def test_decision_update_keeps_parallel_variants_and_name_differences_apart():
+    from memos.project_memory.prompts import DECISION_UPDATE
+
+    assert "再加一个并列的变体" in DECISION_UPDATE
+    assert "接口名或参数名有一处不同就算不同" in DECISION_UPDATE

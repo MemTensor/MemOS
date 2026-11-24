@@ -220,6 +220,42 @@ def test_quote_ref_tolerates_whitespace_layout_but_never_guesses():
     assert quote_ref({"message_id": "m4", "content": "a b\na b"}, "a  b") is None
 
 
+def test_draft_preserves_original_whitespace_in_source_and_reason_quotes():
+    source_quote = "Updated the\u00a0connection pool."
+    reason_quote = "It was\n  saturated."
+    current = [
+        row("member", "user", "Update the pool."),
+        row(
+            "assistant",
+            "assistant",
+            f"Reason: {reason_quote}",
+            tool_calls=[
+                {"function": {"name": "record_result", "arguments": f"Result: {source_quote}"}}
+            ],
+        ),
+    ]
+    writer = Writer(
+        {
+            "episode_summary": "Connection pool updated",
+            "drafts": [
+                {
+                    "kind": "timeline",
+                    "content": "Connection pool updated",
+                    "message_id": "assistant",
+                    "source_path": "/tool_calls/0/function/arguments",
+                    "quote": "Updated the connection pool.",
+                    "reason_quote": "It was saturated.",
+                }
+            ],
+        }
+    )
+
+    (draft,) = extract_episode(writer, {"id": "episode"}, current)["drafts"]
+
+    assert draft["quote"] == draft["evidence"][0]["quote"] == source_quote
+    assert draft["reason_quote"] == draft["evidence"][1]["quote"] == reason_quote
+
+
 def test_extraction_prompt_excludes_reply_style_and_execution_steps():
     from memos.project_memory.add_extraction import _EXTRACT
 
@@ -271,3 +307,107 @@ def test_agent_decision_without_the_member_instruction_is_still_dropped():
     result = extract_episode(writer, {"id": "episode"}, [member, reply])
     assert result["drafts"] == []
     assert result["dropped_drafts"] == 1
+
+
+@pytest.mark.parametrize(
+    ("content", "quote"),
+    [
+        # A path-like token at the end of a sentence carries the period in the source.
+        ("首行首列作 truthy/falsy 判断", "use the first column as truthy/falsy."),
+        (
+            "不变量错误需提及 validation/invariants。",
+            "errors need to mention validation/invariants.",
+        ),
+        # The model drops a prefix that the source glues onto the same token.
+        ("第 N 个非 skipped/non-todo 失败", "bail on the Nth non-skipped/non-todo failure"),
+    ],
+)
+def test_draft_accepts_path_tokens_across_source_punctuation(content, quote):
+    writer = Writer(
+        {
+            "episode_summary": content,
+            "drafts": [
+                {"kind": "decision", "content": content, "message_id": "one", "quote": quote}
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
+    assert [draft["content"] for draft in result["drafts"]] == [content]
+    assert result["episode_summary"] == content
+
+
+def test_draft_still_rejects_a_path_token_absent_from_the_witness():
+    writer = Writer(
+        {
+            "episode_summary": "改用 src/cache.py",
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "content": "改用 src/cache.py",
+                    "message_id": "one",
+                    "quote": "改用 src/store.py",
+                }
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", "改用 src/store.py")])
+    assert result["drafts"] == []
+
+
+def test_unverifiable_summary_token_is_removed_without_discarding_the_summary():
+    quote = "Add `safe_bulk_insert` and `safe_bulk_upsert` on `Database`."
+    summary = "成员要求在 Database 上新增 safe_bulk_insert/upsert 两个安全批量接口"
+    writer = Writer(
+        {
+            "episode_summary": summary,
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "content": "新增安全批量接口",
+                    "message_id": "one",
+                    "quote": quote,
+                }
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
+    assert result["episode_summary"] == "成员要求在 Database 上新增  两个安全批量接口"
+
+
+def test_extraction_summary_leads_with_every_requested_deliverable():
+    from memos.project_memory.add_extraction import _EXTRACT
+
+    assert "开头先写成员本段要交付的具体对象" in _EXTRACT
+    assert "逐项点名" in _EXTRACT
+    assert "保留原文标识符" in _EXTRACT
+
+
+@pytest.mark.parametrize(
+    ("claimed", "source"),
+    [
+        ("接口 api/v1", "接口 api/v10"),
+        ("配置 conf/retry/3", "配置 conf/retry/30"),
+        ("存到 ta/bucket", "存到 data/bucket"),
+        ("接口 api/v1", "接口 api/v1-beta"),
+        ("改 src/a", "改 src/a.py"),
+        ("配置 conf/retry/3", "配置 conf/retry/3.5"),
+    ],
+)
+def test_path_tokens_still_need_their_own_boundaries(claimed, source):
+    from memos.project_memory.add_evidence import unwitnessed_tokens
+
+    assert unwitnessed_tokens(claimed, source)
+
+
+def test_summary_stripping_removes_whole_tokens_only():
+    quote = "重试次数改为 10，接口 api/v10，另记 3 次"
+    writer = Writer(
+        {
+            "episode_summary": "重试次数从 10 改为 1 次，接口 api/v1",
+            "drafts": [
+                {"kind": "decision", "content": "重试 10 次", "message_id": "one", "quote": quote}
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
+    assert result["episode_summary"] == "重试次数从 10 改为  次，接口"

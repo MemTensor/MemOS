@@ -210,6 +210,21 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
                 503, "Project memory temporarily unavailable", "STORE_UNAVAILABLE"
             ) from exc
 
+    def flush_episodes(
+        self, space_id: str, conversation_id: str | None = None, wait_seconds: float = 0.0
+    ) -> dict[str, Any]:
+        """Settle a Space's Add pipeline now; see EpisodeAddRuntime.flush."""
+        from memos.api.handlers.project_view import ProjectHTTPError
+
+        runtime = self._require_runtime()
+        try:
+            return runtime.flush(space_id, conversation_id, wait_seconds=wait_seconds)
+        except Exception as exc:
+            logger.warning("Project Add flush failed (%s)", type(exc).__name__)
+            raise ProjectHTTPError(
+                503, "Project memory temporarily unavailable", "STORE_UNAVAILABLE"
+            ) from exc
+
     def _require_runtime(self) -> EpisodeAddRuntime:
         from memos.api.handlers.project_view import ProjectHTTPError
 

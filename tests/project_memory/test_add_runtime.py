@@ -9,6 +9,7 @@ import pytest
 from memos.project_memory.add_dispatch import label_for
 from memos.project_memory.add_runtime import EpisodeAddRuntime, RuntimeSettings
 from memos.project_memory.add_store import PostgresAddStore
+from memos.project_memory.judge import ModelError
 
 
 @pytest.fixture
@@ -186,6 +187,7 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
                         "action": "attach",
                         "topic_id": target["id"],
                         "relationship": "same_work",
+                        "same_deliverable": True,
                         "positive_basis": "same_goal",
                         "independently_deliverable": False,
                         "affects_existing_decisions": True,
@@ -306,3 +308,193 @@ def test_episode_lifecycle_events_carry_stage_usage(store):
     assert done["next_stage"] == "done" and done["outcome"] == "skipped"
     assert done["usage"][0]["total_tokens"] == 42
     assert events[-2]["detail"]["outcome"] == "skipped"
+
+
+def _staging_hub(formation_ids=None, *, cluster=True, formation_error=False):
+    """A hub that stages every Episode and clusters all of them when asked."""
+    hub = Mock()
+
+    def write(scope, _prompt, inputs):
+        if scope == "episode.extract":
+            (message,) = inputs["episode"]
+            return {
+                "episode_summary": "connection pool sizing " + message["content"],
+                "drafts": [
+                    {
+                        "kind": "decision",
+                        "message_id": message["id"],
+                        "quote": message["content"],
+                        "content": message["content"],
+                    }
+                ],
+            }
+        if scope in {"episode.assign", "episode.assign.batch"}:
+            rows = inputs.get("episodes")
+            if rows is None:
+                return {"action": "stage"}
+            return {
+                "assignments": [{"episode_id": r["episode_id"], "action": "stage"} for r in rows]
+            }
+        if scope == "episode.formation":
+            if formation_error:
+                raise ModelError("Formation down")
+            if not cluster:
+                return {"clusters": []}
+            ids = [ep["id"] for ep in inputs["episodes"]]
+            return {
+                "clusters": [
+                    {
+                        "episode_ids": ids,
+                        "domain": "product",
+                        "name": "Connection pool sizing",
+                        "independently_deliverable": True,
+                        "affects_existing_decisions": False,
+                    }
+                ]
+            }
+        if scope == "dec.update":
+            return {
+                "results": [
+                    {"n": row["n"], "decision_id": None, "same_as": None, "action": "add"}
+                    for row in inputs["new"]
+                ]
+            }
+        if scope == "episode.metadata":
+            return {"summary": "Connection pool", "description": "Connection pool sizing"}
+        raise AssertionError(f"Unexpected model operation {scope}")
+
+    hub.write.side_effect = write
+    return hub
+
+
+def _add(runtime, work, user, content):
+    runtime.accept(
+        SimpleNamespace(
+            user_id=user,
+            conversation_id=f"conv-{user}",
+            space_ids=["test"],
+            domains=["product"],
+            messages=[{"message_id": user, "role": "user", "content": content}],
+        )
+    )
+    while work:
+        runtime.handle([work.pop(0)])
+
+
+def test_flush_closes_open_episodes_and_forms_the_tail_batch(store):
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    work = []
+    runtime = EpisodeAddRuntime(
+        store, _staging_hub(), work.extend, Redis.from_url(redis_url), RuntimeSettings()
+    )
+    _add(runtime, work, "alice", "Pool size is 8 connections.")
+    _add(runtime, work, "bob", "Keep the pool at 8 connections per worker.")
+
+    first = runtime.flush("test")
+    assert len(first["closed_episode_ids"]) == 2
+    assert first["formation"]["reason"] == "EPISODES_IN_FLIGHT"
+    while work:
+        runtime.handle([work.pop(0)])
+    assert len(store.read_staged("test")) == 2
+
+    second = runtime.flush("test")
+    assert second["pending_episode_ids"] == []
+    formation = second["formation"]
+    assert formation["ran"] is True and formation["formation_version"] == 1
+    (topic,) = store.read_topics("test")
+    assert formation["created_topic_ids"] == [topic["id"]]
+    assert sorted(formation["moved"].values()) == [topic["id"], topic["id"]]
+    assert store.read_staged("test") == []
+    assert len(topic["decisions"]) >= 1
+    assert second["staged_remaining"] == 0
+    assert runtime.flush("test")["formation"]["reason"] == "NO_STAGED"
+
+
+def test_quiet_space_forms_staged_episodes_only_after_the_interval(store):
+    from datetime import timedelta
+
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    work = []
+    runtime = EpisodeAddRuntime(
+        store,
+        _staging_hub(),
+        work.extend,
+        Redis.from_url(redis_url),
+        RuntimeSettings(formation_interval=3600),
+    )
+    _add(runtime, work, "alice", "Pool size is 8 connections.")
+    _add(runtime, work, "bob", "Keep the pool at 8 connections per worker.")
+    runtime.acceptance.close_open("test")
+    for episode in runtime.dispatch.due(runtime.now(), stale_seconds=0):
+        runtime._publish(episode["id"])
+    while work:
+        runtime.handle([work.pop(0)])
+    assert len(store.read_staged("test")) == 2
+
+    assert runtime.form_due_spaces() == []
+    assert runtime.form_space("test")["reason"] == "NOT_DUE"
+    later = runtime.now() + timedelta(hours=2)
+    runtime.now = lambda: later
+    (formed,) = runtime.form_due_spaces()
+    assert formed["ran"] is True
+    assert store.read_staged("test") == []
+
+
+def _settled_runtime(store, hub, **settings):
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    client = Redis.from_url(redis_url)
+    client.delete(*client.keys("project_formation_*") or ["none"])
+    work = []
+    runtime = EpisodeAddRuntime(store, hub, work.extend, client, RuntimeSettings(**settings))
+    _add(runtime, work, "alice", "Pool size is 8 connections.")
+    _add(runtime, work, "bob", "Keep the pool at 8 connections per worker.")
+    runtime.flush("test")
+    while work:
+        runtime.handle([work.pop(0)])
+    return runtime, client
+
+
+def test_forced_flush_does_not_age_unclustered_episodes(store):
+    runtime, _ = _settled_runtime(store, _staging_hub(cluster=False))
+    for _ in range(4):
+        result = runtime.flush("test")
+        assert result["formation"]["ran"] is True
+    staged = store.read_staged("test")
+    assert len(staged) == 2 and {ep["staged_attempts"] for ep in staged} == {0}
+    assert result["staged_remaining"] == 2
+
+
+def test_failed_quiet_formation_backs_off_but_flush_still_runs(store):
+    from datetime import timedelta
+
+    runtime, client = _settled_runtime(
+        store, _staging_hub(formation_error=True), formation_interval=3600
+    )
+    later = runtime.now() + timedelta(hours=2)
+    runtime.now = lambda: later
+    assert runtime.form_due_spaces() == []
+    assert client.exists(runtime._formation_key("backoff", "test"))
+    assert runtime.form_space("test")["reason"] == "BACKING_OFF"
+    assert runtime.flush("test")["formation"]["reason"] == "FORMATION_MODEL_UNAVAILABLE"
+
+
+def test_concurrent_formation_planning_is_skipped(store):
+    runtime, client = _settled_runtime(store, _staging_hub())
+    client.set(runtime._formation_key("planning", "test"), "other", ex=60)
+    try:
+        assert runtime.flush("test")["formation"]["reason"] == "FORMATION_RUNNING"
+    finally:
+        client.delete(runtime._formation_key("planning", "test"))
+    assert runtime.flush("test")["formation"]["ran"] is True

@@ -164,6 +164,7 @@ def test_formation_recalls_immediate_predecessor_without_changing_task_receipt(a
                     "action": "attach",
                     "topic_id": "prior-topic",
                     "relationship": "same_work",
+                    "same_deliverable": True,
                     "positive_basis": "previous_episode",
                     "independently_deliverable": False,
                     "affects_existing_decisions": True,

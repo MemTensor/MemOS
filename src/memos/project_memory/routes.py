@@ -79,6 +79,14 @@ class FlushRequest(BaseModel):
     )
 
 
+class EpisodeFlushRequest(BaseModel):
+    space_id: str
+    conversation_id: str | None = Field(None, description="只关这个会话的段；不传关整个 Space 的")
+    wait_seconds: float = Field(
+        0.0, ge=0, le=300, description="等待在途 Episode 处理完的秒数；仍有在途时不整理，稍后再调"
+    )
+
+
 def _ok(data: Any, message: str = "ok") -> dict[str, Any]:
     return {"code": 200, "message": message, "data": data}
 
@@ -170,5 +178,15 @@ def create_router(plugin, *, legacy_flush: bool = False) -> APIRouter:
                     ),
                 }
             )
+
+    elif os.getenv("PROJECT_MEMORY_ENABLE_FLUSH", "false").lower() == "true":
+        # Development and evaluation only: closes every open Episode and forces LLM Formation.
+
+        @router.post(
+            "/flush_project_memory",
+            summary="Dev/eval: close open Episodes, settle in-flight stages, force Formation",
+        )
+        def flush_episodes(req: EpisodeFlushRequest):
+            return _ok(plugin.flush_episodes(req.space_id, req.conversation_id, req.wait_seconds))
 
     return router
