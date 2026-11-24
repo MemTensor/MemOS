@@ -413,12 +413,22 @@ def _formation_candidates(scoped: dict[str, list[dict]]) -> list[dict]:
     return list(selected.values())
 
 
+_FORMATION_NAME_LIMIT = 32  # The prompt asks for 20; identifiers make longer names specific.
+
+
 def _formation_topics(
-    hub: ModelHub, episodes: list[dict], candidates: dict[str, list[dict]], space: dict
+    hub: ModelHub,
+    episodes: list[dict],
+    candidates: dict[str, list[dict]],
+    space: dict,
+    rejected: list[dict] | None = None,
 ) -> list[tuple[dict, list[dict]]]:
+    """Turn Formation clusters into new Topics, recording each rejected cluster."""
     if not episodes:
         return []
+    rejected = [] if rejected is None else rejected
     links = _formation_links(episodes)
+    existing = _formation_candidates(candidates)
     output = hub.write(
         "episode.formation",
         _FORMATION,
@@ -433,7 +443,7 @@ def _formation_topics(
                 for ep in episodes
             ],
             "links": links,
-            "existing_topics": _formation_candidates(candidates),
+            "existing_topics": existing,
         },
     )
     clusters = output.get("clusters")
@@ -457,31 +467,16 @@ def _formation_topics(
         if len(set(ids)) != len(ids) or used.intersection(ids):
             raise ModelError("Formation assigns an Episode more than once")
         used.update(ids)
+        if reason := _formation_rejection(cluster, ids, by_id, linked):
+            if ids:
+                rejected.append({"episode_ids": list(ids), "reason": reason})
+            continue
         batch = [by_id[eid] for eid in ids]
-        if (
-            not ids
-            or cluster.get("independently_deliverable") is not True
-            or cluster.get("affects_existing_decisions") is not False
-        ):
-            continue
-        if len(ids) > 1 and any(
-            not any(frozenset((i, j)) in linked for j in ids if j != i) for i in ids
-        ):
-            continue
-        domain, name = cluster.get("domain"), cluster.get("name")
-        if not isinstance(domain, str) or any(domain not in ep["domains"] for ep in batch):
-            continue
-        if (
-            not isinstance(name, str)
-            or not (0 < len(name.strip()) <= 20)
-            or _DATE_IN_NAME.search(name)
-        ):
-            continue
-        if not _has_evidence(batch):
-            continue
-        key = (domain, name.strip().casefold())
+        domain, name = cluster["domain"], cluster["name"].strip()
+        key = (domain, name.casefold())
         if key in topics:
             # Naming collisions do not establish semantic equivalence between groups.
+            rejected.append({"episode_ids": list(ids), "reason": "name_collision"})
             continue
         topic = {
             "id": stable_uuid(
@@ -489,13 +484,46 @@ def _formation_topics(
             ),
             "space_id": batch[0]["space_id"],
             "domain": domain,
-            "topic_name": name.strip(),
+            "topic_name": name,
             "topic_summary": "",
             "topic_description": "",
             "version": None,
         }
         topics[key] = (topic, batch)
     return list(topics.values())
+
+
+def _formation_rejection(
+    cluster: dict,
+    ids: list[str],
+    by_id: dict[str, dict],
+    linked: set[frozenset[str]],
+) -> str | None:
+    """Name the first guard a Formation cluster fails, or None when it can be applied."""
+    if not ids:
+        return "empty"
+    batch = [by_id[eid] for eid in ids]
+    if (
+        cluster.get("independently_deliverable") is not True
+        or cluster.get("affects_existing_decisions") is not False
+    ):
+        return "not_independent"
+    if len(ids) > 1 and any(
+        not any(frozenset((i, j)) in linked for j in ids if j != i) for i in ids
+    ):
+        return "unlinked_episode"
+    domain, name = cluster.get("domain"), cluster.get("name")
+    if not isinstance(domain, str) or any(domain not in ep["domains"] for ep in batch):
+        return "domain_mismatch"
+    if (
+        not isinstance(name, str)
+        or not (0 < len(name.strip()) <= _FORMATION_NAME_LIMIT)
+        or _DATE_IN_NAME.search(name)
+    ):
+        return "invalid_name"
+    if not _has_evidence(batch):
+        return "insufficient_evidence"
+    return None
 
 
 def organize_episode(
@@ -558,12 +586,15 @@ def organize_episode(
             else:
                 pending.append(ep)
                 pending_candidates[ep["id"]] = staged_candidates.get(ep["id"], [])
-        selected.extend(_formation_topics(hub, pending, pending_candidates, space))
+        rejected: list[dict] = []
+        selected.extend(_formation_topics(hub, pending, pending_candidates, space, rejected))
     except ModelError:
         plan["warnings"].append("FORMATION_MODEL_UNAVAILABLE")
         return jsonable(plan)
 
     plan["formation"] = {"version": int(space.get("formation_version") or 0), "consumed": count}
+    if rejected:
+        plan["formation"]["rejected"] = rejected
     destinations = {}
     for topic, grouped in selected:
         _assign(plan, topic, [_episode_input(ep) for ep in grouped])

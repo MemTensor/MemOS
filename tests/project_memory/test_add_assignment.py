@@ -492,3 +492,39 @@ def test_formation_does_not_join_episodes_linked_only_by_conversation():
     )
     assert plan["assignments"] == []
     assert {u["episode_id"]: u["status"] for u in plan["staged_updates"]}["old"] == "active"
+
+
+def _formation_plan(writer, new, staged, candidates=(), all_topics=None):
+    return organize_episode(
+        writer,
+        new,
+        list(candidates),
+        staged,
+        {"staged_since_last_formation": 3, "last_formation_at": NOW - timedelta(hours=3)},
+        now=NOW,
+        all_topics=all_topics,
+    )
+
+
+def test_formation_records_why_each_cluster_was_rejected():
+    new = episode("new", episode_summary="tire tread depth")
+    old = episode("old", episode_summary="fuel card payment", staged_at=NOW - timedelta(hours=3))
+    lone = episode("lone", staged_at=NOW - timedelta(hours=3))
+    reply = formation_reply(["new", "old"])
+    reply["clusters"].append({**reply["clusters"][0], "episode_ids": ["lone"], "name": "x" * 40})
+    plan = _formation_plan(Writer([reply]), new, [old, lone])
+    assert plan["assignments"] == []
+    assert plan["formation"]["rejected"] == [
+        {"episode_ids": ["new", "old"], "reason": "unlinked_episode"},
+        {"episode_ids": ["lone"], "reason": "invalid_name"},
+    ]
+
+
+def test_formation_accepts_a_specific_name_longer_than_twenty_characters():
+    new = episode("new")
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    name = "Validated.combine_n 多值组合"
+    plan = _formation_plan(Writer([formation_reply(["new", "old"], name=name)]), new, [old])
+    (assignment,) = plan["assignments"]
+    assert assignment["topic"]["topic_name"] == name
+    assert "rejected" not in plan["formation"]
