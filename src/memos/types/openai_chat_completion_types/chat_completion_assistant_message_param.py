@@ -43,6 +43,9 @@ class ChatCompletionAssistantMessageParam(TypedDict, total=False):
     refusal: str | None
     """The refusal message by the assistant."""
 
+    experience_notes: list[dict] | None
+    """Project memory: experience drafts the Agent wrote on the spot (`memos note`)."""
+
     tool_calls: (
         list[ChatCompletionMessageToolCallUnionParam] | ChatCompletionMessageToolCallUnionParam
     )
@@ -54,3 +57,9 @@ class ChatCompletionAssistantMessageParam(TypedDict, total=False):
 
     message_id: str | None
     """Optional unique identifier for the message"""
+
+    role_id: str | None
+    """Optional identifier for the speaker in multi-role scenarios."""
+
+    role_name: str | None
+    """Optional display name for the speaker in multi-role scenarios."""

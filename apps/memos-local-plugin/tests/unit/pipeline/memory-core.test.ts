@@ -7,6 +7,7 @@
  */
 
 import net from "node:net";
+import * as embeddingModule from "../../../core/embedding/index.js";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1622,64 +1623,71 @@ describe("bootstrapMemoryCore", () => {
   });
 
   it("persists lightweight summarizer model status for Hermes overview", async () => {
-    home = await makeTmpHome({
-      agent: "hermes",
-      configYaml: `
-llm:
-  provider: host
-  model: hermes-summary-test
-algorithm:
-  lightweightMemory:
-    enabled: true
-`,
-    });
-    const bridge: HostLlmBridge = {
-      id: "test-host-llm",
-      async complete() {
-        return {
-          text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
-          model: "hermes-summary-test",
-          durationMs: 1,
-        };
-      },
-    };
-    core = await bootstrapMemoryCore({
-      agent: "hermes",
-      home: home.home,
-      config: home.config,
-      pkgVersion: "bootstrap-test",
-      hostLlmBridge: bridge,
-      now: () => 1_700_000_000_000,
-    });
-    await core.init();
+    // This test verifies summarizer status, without downloading embedding models.
+    const embeddingFactory = vi.spyOn(embeddingModule, "createEmbedder")
+      .mockReturnValue(fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }));
+    try {
+      home = await makeTmpHome({
+        agent: "hermes",
+        configYaml: `
+  llm:
+    provider: host
+    model: hermes-summary-test
+  algorithm:
+    lightweightMemory:
+      enabled: true
+  `,
+      });
+      const bridge: HostLlmBridge = {
+        id: "test-host-llm",
+        async complete() {
+          return {
+            text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
+            model: "hermes-summary-test",
+            durationMs: 1,
+          };
+        },
+      };
+      core = await bootstrapMemoryCore({
+        agent: "hermes",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "bootstrap-test",
+        hostLlmBridge: bridge,
+        now: () => 1_700_000_000_000,
+      });
+      await core.init();
 
-    const start = await core.onTurnStart({
-      agent: "hermes",
-      sessionId: "hermes-lightweight-status",
-      userText: "请记住 Hermes 摘要模型状态应该显示已调用",
-      ts: 1_700_000_000_000,
-    });
-    await core.onTurnEnd({
-      agent: "hermes",
-      sessionId: "hermes-lightweight-status",
-      episodeId: start.query.episodeId!,
-      agentText: "已记住。",
-      toolCalls: [],
-      ts: 1_700_000_000_100,
-    });
+      const start = await core.onTurnStart({
+        agent: "hermes",
+        sessionId: "hermes-lightweight-status",
+        userText: "请记住 Hermes 摘要模型状态应该显示已调用",
+        ts: 1_700_000_000_000,
+      });
+      await core.onTurnEnd({
+        agent: "hermes",
+        sessionId: "hermes-lightweight-status",
+        episodeId: start.query.episodeId!,
+        agentText: "已记住。",
+        toolCalls: [],
+        ts: 1_700_000_000_100,
+      });
 
-    const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
-    const llmRows = logs.logs
-      .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
-      .filter((row) => row.role === "llm");
-    expect(llmRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          status: "ok",
-          op: "capture.summarize",
-        }),
-      ]),
-    );
+      const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
+      const llmRows = logs.logs
+        .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
+        .filter((row) => row.role === "llm");
+      expect(llmRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: "ok",
+            op: "capture.summarize",
+          }),
+        ]),
+      );
+    } finally {
+      embeddingFactory.mockRestore();
+    }
   });
 
   it("init() recovers orphaned open episodes left behind by a previous crash", async () => {

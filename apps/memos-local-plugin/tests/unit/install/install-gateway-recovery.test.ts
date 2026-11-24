@@ -66,6 +66,12 @@ if [[ "$*" == "gateway start" ]]; then
   fi
   exit "\${FAKE_GATEWAY_START_EXIT:-0}"
 fi
+if [[ "$*" == "health" ]]; then exit "\${FAKE_GATEWAY_HEALTH_EXIT:-1}"; fi
+if [[ "$*" == "gateway stop --help" && "\${FAKE_MODERN_HOST:-0}" == "1" ]]; then echo "--force --disable"; fi
+if [[ "$*" == "config --help" && "\${FAKE_MODERN_HOST:-0}" == "1" ]]; then echo validate; fi
+if [[ "$*" == "config validate" ]]; then exit "\${FAKE_CONFIG_EXIT:-0}"; fi
+if [[ "$*" == "plugins enable --help" && "\${FAKE_MODERN_HOST:-0}" == "1" ]]; then echo --accept-capabilities; fi
+if [[ "$*" == "plugins enable memos-local-plugin --accept-capabilities" ]]; then exit "\${FAKE_ENABLE_EXIT:-0}"; fi
 exit 0`,
   );
   writeExecutable(path.join(bin, "sleep"), "exit 0");
@@ -150,6 +156,7 @@ describe.skipIf(process.platform === "win32")(
 
         expect(result.status).toBe(1);
         expect(gatewayCalls(fixture)).toEqual([
+          "gateway stop --help",
           "gateway stop",
           "gateway start",
         ]);
@@ -171,6 +178,7 @@ describe.skipIf(process.platform === "win32")(
 
         expect(result.status).toBe(1);
         expect(gatewayCalls(fixture)).toEqual([
+          "gateway stop --help",
           "gateway stop",
           "gateway start",
         ]);
@@ -194,11 +202,73 @@ describe.skipIf(process.platform === "win32")(
 
         expect(result.status).not.toBe(0);
         expect(gatewayCalls(fixture)).toEqual([
+          "gateway stop --help",
           "gateway stop",
+          "config --help",
+          "plugins enable --help",
           "gateway start",
+          "health",
         ]);
         expect(result.stderr).toContain("openclaw gateway start failed");
         expectTemporaryDirectoriesCleaned(fixture);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not mistake an occupied port for a healthy gateway after start failure", () => {
+      const fixture = createFixture();
+      try {
+        const tarball = createValidPackage(fixture);
+        writeExecutable(path.join(fixture.bin, "lsof"), "echo 12345; exit 0");
+        const result = runInstaller(fixture, tarball, {
+          FAKE_CURL_EXIT: "0", FAKE_GATEWAY_START_EXIT: "17", FAKE_GATEWAY_HEALTH_EXIT: "1",
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).not.toContain("OpenClaw gateway already running");
+        expect(result.stderr).toContain("openclaw gateway start failed");
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("validates configuration and lets modern hosts record capability consent", () => {
+      const fixture = createFixture();
+      try {
+        const result = runInstaller(fixture, createValidPackage(fixture), { FAKE_MODERN_HOST: "1" });
+        expect(result.status, result.stderr).toBe(0);
+        expect(gatewayCalls(fixture)).toEqual([
+          "gateway stop --help", "gateway stop --force --disable", "config --help", "config validate", "plugins enable --help",
+          "plugins enable memos-local-plugin --accept-capabilities", "gateway start",
+        ]);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      { FAKE_CONFIG_EXIT: "1" }, { FAKE_ENABLE_EXIT: "1" },
+    ])("does not report success after host validation or enablement fails: %j", (failure) => {
+      const fixture = createFixture();
+      try {
+        const result = runInstaller(fixture, createValidPackage(fixture), { FAKE_MODERN_HOST: "1", ...failure });
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).not.toContain("OpenClaw install complete");
+        expect(gatewayCalls(fixture).filter((call) => call === "gateway start")).toHaveLength(1);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts a successful authenticated health probe after a service start race", () => {
+      const fixture = createFixture();
+      try {
+        const result = runInstaller(fixture, createValidPackage(fixture), {
+          FAKE_GATEWAY_START_EXIT: "17", FAKE_GATEWAY_HEALTH_EXIT: "0",
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw gateway already running");
+        expect(gatewayCalls(fixture)).toContain("health");
       } finally {
         rmSync(fixture.root, { recursive: true, force: true });
       }
@@ -213,7 +283,10 @@ describe.skipIf(process.platform === "win32")(
 
         expect(result.status).toBe(0);
         expect(gatewayCalls(fixture)).toEqual([
+          "gateway stop --help",
           "gateway stop",
+          "config --help",
+          "plugins enable --help",
           "gateway start",
         ]);
         expectTemporaryDirectoriesCleaned(fixture);

@@ -243,3 +243,7 @@ test_file_pipeline.py
 # spec
 .ai-tasks/
 openspecs/
+
+# Local tool versions and root-level Node dependencies / test caches.
+/mise.toml
+/node_modules/

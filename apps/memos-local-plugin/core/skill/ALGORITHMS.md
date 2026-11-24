@@ -285,7 +285,10 @@ still under trial.
 
 `cooldownMs` debounces repeat runs for the same policy triggered by
 rapid-fire upstream events (e.g. a burst of `reward.updated`). The
-subscriber holds a simple in-memory `{policyId → lastRunAt}` table.
+subscriber holds an in-memory `{policyId → lastRunAt}` table plus a pending
+policy set. A reward event received during cooldown is coalesced and drained
+when that policy becomes eligible; it is not silently discarded. Different
+policies have independent cooldowns and queue entries.
 
 If `cooldownMs === 0` (as in unit tests), every event triggers a run.
 

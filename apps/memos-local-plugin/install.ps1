@@ -59,7 +59,12 @@ function Invoke-OpenClawGatewayChecked {
     $PreviousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $GatewayOutput = @(& cmd.exe /d /c "openclaw gateway $Action" 2>&1)
+        $GatewayCommand = "openclaw gateway $Action"
+        if ($Action -eq "stop") {
+            $StopHelp = @(& cmd.exe /d /c "openclaw gateway stop --help" 2>&1) | Out-String
+            if ($StopHelp -match '--force') { $GatewayCommand += " --force" }
+        }
+        $GatewayOutput = @(& cmd.exe /d /c $GatewayCommand 2>&1)
         $ExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $PreviousErrorActionPreference
@@ -69,6 +74,45 @@ function Invoke-OpenClawGatewayChecked {
     }
     if ($ExitCode -ne 0) {
         throw "openclaw gateway $Action failed (exit code $ExitCode)"
+    }
+}
+
+function Enable-OpenClawMemoryPlugin {
+    # Host state formats change independently of the plugin. Let the host own
+    # validation and capability consent; do not edit its SQLite install index.
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $PreviousStateDir = $env:OPENCLAW_STATE_DIR
+    $PreviousConfigPath = $env:OPENCLAW_CONFIG_PATH
+    $ProbeDir = Join-Path $env:TEMP ("memos-openclaw-help-" + [guid]::NewGuid().ToString("N"))
+    $ErrorActionPreference = "Continue"
+    try {
+        $ConfigHelp = @(& cmd.exe /d /c "openclaw config --help" 2>&1) | Out-String
+        if ($ConfigHelp -match 'validate') {
+            $Output = @(& cmd.exe /d /c "openclaw config validate" 2>&1)
+            $ExitCode = $LASTEXITCODE
+            $Output | ForEach-Object { Write-Host "$_" }
+            if ($ExitCode -ne 0) { throw "OpenClaw config validation failed; run openclaw doctor --fix and retry." }
+        }
+        # Older plugin CLI help can load configured plugins. Probe with plugins
+        # disabled, then restore the real host paths before accepting consent.
+        New-Item -ItemType Directory -Path $ProbeDir -ErrorAction Stop | Out-Null
+        Set-Content -Path (Join-Path $ProbeDir "openclaw.json") -Value '{"plugins":{"enabled":false}}' -Encoding ASCII -ErrorAction Stop
+        $env:OPENCLAW_STATE_DIR = $ProbeDir
+        $env:OPENCLAW_CONFIG_PATH = Join-Path $ProbeDir "openclaw.json"
+        $EnableHelp = @(& cmd.exe /d /c "openclaw plugins enable --help" 2>&1) | Out-String
+        $env:OPENCLAW_STATE_DIR = $PreviousStateDir
+        $env:OPENCLAW_CONFIG_PATH = $PreviousConfigPath
+        if ($EnableHelp -match '--accept-capabilities') {
+            $Output = @(& cmd.exe /d /c "openclaw plugins enable memos-local-plugin --accept-capabilities" 2>&1)
+            $ExitCode = $LASTEXITCODE
+            $Output | ForEach-Object { Write-Host "$_" }
+            if ($ExitCode -ne 0) { throw "OpenClaw could not enable the MemOS plugin (exit code $ExitCode)." }
+        }
+    } finally {
+        $env:OPENCLAW_STATE_DIR = $PreviousStateDir
+        $env:OPENCLAW_CONFIG_PATH = $PreviousConfigPath
+        $ErrorActionPreference = $PreviousErrorActionPreference
+        if (Test-Path $ProbeDir) { Remove-Item -Recurse -Force $ProbeDir -ErrorAction SilentlyContinue }
     }
 }
 
@@ -131,6 +175,9 @@ Write-Host ""
 try {
     $NodeVersionStr = (node -v 2>$null)
     if (-not $NodeVersionStr) { Stop-Die "Node.js is not installed or not in PATH." }
+    if ([int]($NodeVersionStr.TrimStart('v').Split('.')[0]) -lt 22) {
+        Stop-Die "Node.js >=22 is required. Upgrade the actual host runtime before replacing the existing plugin."
+    }
     Write-Success "Node.js $NodeVersionStr"
 } catch {
     Stop-Die "Node.js is not installed or not in PATH."
@@ -297,6 +344,9 @@ function Prepare-StagedPackage {
         Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
         throw "Node.js executable not found for staged install"
     }
+    & $NodeForBridge -e 'if (Number(process.versions.node.split(".")[0]) < 22) { console.error("MemOS requires Node.js >=22 in the bridge runtime"); process.exit(1); }'
+    if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $StagedPrefix; throw "Bridge Node.js runtime is unsupported; existing installation is unchanged." }
+
     $NpmCommand = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
     if (-not $NpmCommand) { $NpmCommand = (Get-Command "npm" -ErrorAction SilentlyContinue).Source }
     if (-not $NpmCommand) {
@@ -320,7 +370,7 @@ function Prepare-StagedPackage {
             # npm 11 still resolves omitted DSH development peer trees unless
             # legacy peer resolution is requested for the packed runtime.
             Invoke-NativeChecked -Command $NpmCommand -Arguments @(
-                "install", "--omit=dev", "--legacy-peer-deps", "--no-fund", "--no-audit", "--loglevel=error"
+                "install", "--omit=dev", "--legacy-peer-deps", "--strict-allow-scripts", "--engine-strict", "--no-fund", "--no-audit", "--loglevel=error"
             ) -FailureMessage "npm install failed"
         } finally {
             if ($null -eq $PreviousSkipSetup) {
@@ -332,18 +382,7 @@ function Prepare-StagedPackage {
         }
 
         if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
-            Write-Info "Rebuilding better-sqlite3 in staging..."
-            Push-Location $StagedPrefix
-            try {
-                Invoke-NativeChecked -Command $NpmCommand -Arguments @(
-                    "rebuild", "better-sqlite3", "--loglevel=error"
-                ) -FailureMessage "better-sqlite3 rebuild failed"
-            } finally {
-                Pop-Location
-            }
-            if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
-                throw "better-sqlite3 is not loadable after rebuild"
-            }
+            throw "better-sqlite3 is not loadable: SQLite prebuilt failed its staging smoke test. No source rebuild was attempted; existing installation is unchanged."
         }
 
         Set-Content -Path (Join-Path $StagedPrefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
@@ -662,6 +701,7 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
         Write-Success "openclaw.json patched"
 
         if ($OcBin) {
+            Enable-OpenClawMemoryPlugin
             Write-Info "Starting OpenClaw gateway"
             try {
                 Invoke-OpenClawGatewayChecked -Action "start"

@@ -88,7 +88,7 @@ OPENCLAW_PORT="18799"
 HERMES_PORT="18800"
 DSH_PORT="18801"
 DSH_PNPM_VERSION="11.7.0"
-REQUIRED_NODE_MAJOR=20
+REQUIRED_NODE_MAJOR=22
 OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"
 # Older plugin IDs disabled on install so they don't fight for the
 # memory slot. We never touch the old plugin's data.
@@ -134,6 +134,12 @@ Usage:
 
 "all" keeps its existing meaning: installed OpenClaw + Hermes targets.
 Select DSH explicitly with --agent dsh.
+
+Hermes desktop/custom installs (environment variables):
+  HERMES_INSTALL_DIR  Actual Hermes backend source directory
+  HERMES_PYTHON       Python executable used by that Hermes installation
+  HERMES_HOME         Hermes data/config directory (default: ~/.hermes)
+Paths containing spaces are supported; quote environment variable values.
 
 Each agent runs its viewer on a fixed port:
   openclaw → http://127.0.0.1:${OPENCLAW_PORT}
@@ -205,22 +211,9 @@ install_node_linux() {
 ensure_node() {
   local current; current="$(node_major)"
   if ! [[ "${current}" =~ ^[0-9]+$ ]] || (( current < REQUIRED_NODE_MAJOR )); then
-    warn "Node.js >= ${REQUIRED_NODE_MAJOR} required (have ${current}). Auto-installing..."
-    case "${OS_NAME}" in
-      Darwin) install_node_mac ;;
-      Linux)  install_node_linux ;;
-    esac
-    current="$(node_major)"
-    [[ "${current}" =~ ^[0-9]+$ ]] && (( current >= REQUIRED_NODE_MAJOR )) \
-      || die "Node.js install failed. Install ≥ ${REQUIRED_NODE_MAJOR} and re-run."
+    die "Node.js >= ${REQUIRED_NODE_MAJOR} is required. Upgrade the actual host runtime before installing; the existing plugin has not been replaced."
   fi
 
-  # Node 25+ has no better-sqlite3 prebuilts → must compile. Warn the
-  # user (but don't block; the rebuild step below tries regardless).
-  if (( current >= 25 )); then
-    warn "Node $(node -v) — no better-sqlite3 prebuild available, will compile from source."
-    printf "       ${DIM}Tip: switch to Node LTS for prebuilt binaries:  nvm install 22${NC}\n" >&2
-  fi
   success "Node.js $(node -v)"
 }
 
@@ -229,7 +222,10 @@ HAS_OPENCLAW="false"
 HAS_HERMES="false"
 HAS_DSH="false"
 [[ -d "${HOME}/.openclaw" ]] && HAS_OPENCLAW="true"
-[[ -d "${HOME}/.hermes"   ]] && HAS_HERMES="true"
+if [[ -d "${HERMES_HOME:-${HOME}/.hermes}" || -n "${HERMES_INSTALL_DIR:-}" || -n "${HERMES_PYTHON:-}" ]] \
+   || command -v hermes >/dev/null 2>&1; then
+  HAS_HERMES="true"
+fi
 
 find_openclaw_cli() {
   command -v openclaw 2>/dev/null && return 0
@@ -301,8 +297,15 @@ SOURCE_KIND=""   # "path" for a local file, "npm" otherwise
 SOURCE_SPEC=""
 GATEWAY_RECOVERY_BIN=""
 GATEWAY_RECOVERY_STATE="inactive"
+HERMES_STAGED_PREFIX=""
+HERMES_PREFIX_BACKUP_ROOT=""
+HERMES_LIVE_PREFIX=""
+HERMES_PREFIX_SWAPPED="false"
 
 cleanup_install_state() {
+  if declare -F rollback_hermes_install >/dev/null 2>&1; then
+    rollback_hermes_install
+  fi
   if [[ "${GATEWAY_RECOVERY_STATE:-inactive}" == "needs_recovery" \
         && -n "${GATEWAY_RECOVERY_BIN:-}" ]]; then
     local recovery_out=""
@@ -366,13 +369,37 @@ resolve_tarball() {
 # the user's memory DB on every re-install.
 #
 # We mitigate that by preserving a well-known allowlist of user-data
-# artefacts across the rm/extract cycle. node_modules is preserved too
-# so npm install stays fast on re-install.
+# artefacts across replacement. Dependencies are staged afresh and verified
+# before any existing deployment is changed.
 deploy_tarball_to_prefix() {
   local prefix="$1"
+  local staged_prefix
+  staged_prefix="$(mktemp -d)"
+  tar xzf "${BUILT_TARBALL}" -C "${staged_prefix}" --strip-components=1 \
+    || { rm -rf "${staged_prefix}"; die "Package extraction failed; existing installation is unchanged."; }
+  [[ -f "${staged_prefix}/package.json" ]] \
+    || { rm -rf "${staged_prefix}"; die "Staged package.json missing; existing installation is unchanged."; }
+  step "Installing npm dependencies"
+  local node_bin node_dir node_version
+  node_bin="$(command -v node || true)"
+  [[ -n "${node_bin}" && -x "${node_bin}" ]] || die "Node.js not found after bootstrap."
+  node_dir="$(dirname "${node_bin}")"
+  node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
+  printf "%s\n" "${node_bin}" > "${staged_prefix}/.memos-node-bin"
+  # npm 11 still resolves omitted devDependency peer trees unless legacy peer
+  # resolution is requested. DSH peers are intentionally absent from the
+  # standalone OpenClaw/Hermes runtime.
+  ( cd "${staged_prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --legacy-peer-deps --strict-allow-scripts --engine-strict --no-fund --no-audit --loglevel=error ) || { rm -rf "${staged_prefix}"; die "Dependency staging failed; existing installation is unchanged."; }
+  [[ -d "${staged_prefix}/node_modules" ]] || die "npm install failed in ${staged_prefix}"
+
+  step "Verifying SQLite prebuilt runtime"
+  ( cd "${staged_prefix}" && "${node_bin}" -e 'const Database = require("better-sqlite3"); const db = new Database(":memory:"); try { db.exec("CREATE TABLE probe (value TEXT)"); db.prepare("INSERT INTO probe VALUES (?)").run("ok"); if (db.prepare("SELECT value FROM probe").get().value !== "ok") throw new Error("SQLite probe failed"); } finally { db.close(); }' ) \
+    || { rm -rf "${staged_prefix}"; die "SQLite prebuilt cannot load in ${node_bin}. Existing installation is unchanged; no source rebuild was attempted."; }
+  success "better-sqlite3 native module OK"
+  success "Dependencies ready"
   step "Deploying to ${prefix}"
   local saved_dir=""
-  local preserve=(node_modules data logs skills daemon .migrations config.yaml .auth.json .memos-node-bin)
+  local preserve=(data logs skills daemon .migrations config.yaml .auth.json)
   if [[ -d "${prefix}" ]]; then
     saved_dir="$(mktemp -d)"
     local item
@@ -384,7 +411,7 @@ deploy_tarball_to_prefix() {
     done
     rm -rf "${prefix}"
     mkdir -p "${prefix}"
-    tar xzf "${BUILT_TARBALL}" -C "${prefix}" --strip-components=1
+    cp -R "${staged_prefix}/." "${prefix}/"
     for item in "${preserve[@]}"; do
       if [[ -e "${saved_dir}/${item}" ]]; then
         rm -rf "${prefix}/${item}"
@@ -394,37 +421,12 @@ deploy_tarball_to_prefix() {
     rm -rf "${saved_dir}"
   else
     mkdir -p "${prefix}"
-    tar xzf "${BUILT_TARBALL}" -C "${prefix}" --strip-components=1
+    cp -R "${staged_prefix}/." "${prefix}/"
   fi
   [[ -f "${prefix}/package.json" ]] || die "Extraction failed: ${prefix}/package.json missing"
-  success "Package extracted"
+  rm -rf "${staged_prefix}"
+  success "Verified package deployed"
 
-  step "Installing npm dependencies"
-  local node_bin node_dir node_version
-  node_bin="$(command -v node || true)"
-  [[ -n "${node_bin}" && -x "${node_bin}" ]] || die "Node.js not found after bootstrap."
-  node_dir="$(dirname "${node_bin}")"
-  node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
-  printf "%s\n" "${node_bin}" > "${prefix}/.memos-node-bin"
-  # npm 11 still resolves omitted devDependency peer trees unless legacy peer
-  # resolution is requested. DSH peers are intentionally absent from the
-  # standalone OpenClaw/Hermes runtime.
-  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --legacy-peer-deps --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
-  [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
-
-  if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then
-    step "Rebuilding better-sqlite3 for Node ${node_version}"
-    ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
-      || ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
-      || warn "better-sqlite3 rebuild did not complete cleanly."
-    if ( cd "${prefix}" && "${node_bin}" -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
-      success "better-sqlite3 native module OK"
-    else
-      warn "better-sqlite3 not loadable — plugin will fail at startup."
-      printf "       ${DIM}Fix: cd ${prefix} && PATH=${node_dir}:\$PATH npm rebuild better-sqlite3${NC}\n" >&2
-    fi
-  fi
-  success "Dependencies ready"
   warn "Local MiniLM model weights are not bundled."
   printf "       ${DIM}If embedding.provider is local, the first Viewer test or use downloads about 23 MB from Hugging Face.${NC}\n"
 }
@@ -501,7 +503,14 @@ install_openclaw() {
   GATEWAY_RECOVERY_STATE="inactive"
   if oc_bin="$(find_openclaw_cli)"; then
     step "Stopping OpenClaw gateway"
-    "${oc_bin}" gateway stop >/dev/null 2>&1 || true
+    local stop_help
+    local -a stop_args=(gateway stop)
+    stop_help="$("${oc_bin}" gateway stop --help 2>/dev/null || true)"
+    # New hosts require an explicit non-interactive stop; suppress launchd
+    # respawn during the package swap when the host supports it.
+    if grep -q -- '--force' <<< "${stop_help}"; then stop_args+=(--force); fi
+    if grep -q -- '--disable' <<< "${stop_help}"; then stop_args+=(--disable); fi
+    "${oc_bin}" "${stop_args[@]}" >/dev/null 2>&1 || true
     sleep 1
     success "Gateway stopped"
     GATEWAY_RECOVERY_BIN="${oc_bin}"
@@ -556,18 +565,12 @@ EOF
 
   step "Patching ${config_path}"
   PLUGIN_ID="${PLUGIN_ID}" \
-  INSTALL_PATH="${prefix}" \
-  SOURCE_KIND="${SOURCE_KIND}" \
-  SOURCE_SPEC="${SOURCE_SPEC}" \
-  PLUGIN_VERSION="${plugin_version}" \
   LEGACY_JSON="$(printf '%s,' "${LEGACY_PLUGIN_IDS[@]}")" \
   CONFIG_PATH="${config_path}" \
   node - <<'NODE'
 const fs = require('fs');
 const {
-  CONFIG_PATH: configPath, PLUGIN_ID: pluginId, INSTALL_PATH: installPath,
-  SOURCE_KIND: sourceKind, SOURCE_SPEC: sourceSpec,
-  PLUGIN_VERSION: pluginVersion, LEGACY_JSON: legacyCsv,
+  CONFIG_PATH: configPath, PLUGIN_ID: pluginId, LEGACY_JSON: legacyCsv,
 } = process.env;
 const legacyIds = (legacyCsv || '').split(',').filter(Boolean);
 const MEMOS_TOOL_NAMES = [
@@ -615,7 +618,6 @@ if (!config.plugins.allow.includes(pluginId)) config.plugins.allow.push(pluginId
 // can delete it themselves if desired.
 for (const legacyId of legacyIds) {
   if (config.plugins.entries?.[legacyId]) delete config.plugins.entries[legacyId];
-  if (config.plugins.installs?.[legacyId]) delete config.plugins.installs[legacyId];
   if (Array.isArray(config.plugins.allow)) {
     config.plugins.allow = config.plugins.allow.filter((x) => x !== legacyId);
   }
@@ -646,20 +648,24 @@ if (
 }
 config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
-if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
-const installsEntry = {
-  source: sourceKind === 'path' ? 'path' : 'npm',
-  installPath,
-  version: pluginVersion,
-  resolvedVersion: pluginVersion,
-  installedAt: new Date().toISOString(),
-};
-if (sourceKind !== 'path') {
-  installsEntry.spec = sourceSpec;
-  installsEntry.resolvedName = '@memtensor/memos-local-plugin';
-  installsEntry.resolvedSpec = sourceSpec;
+// Older OpenClaw releases allow `plugins.installs`; current hosts keep that
+// metadata in machine-managed state instead. The extension already lives
+// in OpenClaw's standard discovery directory, so neither generation requires a
+// hand-written MemOS install record. Remove only records owned by this installer
+// so older OpenClaw releases retain metadata for unrelated plugins.
+if (
+  config.plugins.installs &&
+  typeof config.plugins.installs === 'object' &&
+  !Array.isArray(config.plugins.installs)
+) {
+  delete config.plugins.installs[pluginId];
+  for (const legacyId of legacyIds) delete config.plugins.installs[legacyId];
+  if (Object.keys(config.plugins.installs).length === 0) delete config.plugins.installs;
+} else if (Object.prototype.hasOwnProperty.call(config.plugins, 'installs')) {
+  // A malformed legacy value is invalid on old hosts and cannot carry records
+  // worth preserving.
+  delete config.plugins.installs;
 }
-config.plugins.installs[pluginId] = installsEntry;
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 NODE
@@ -669,6 +675,26 @@ NODE
     warn "openclaw CLI not on PATH — restart manually: openclaw gateway start"
     return 1
   fi
+  # Validate before accepting an already-running process: an old process may
+  # still answer while the newly written configuration is invalid.
+  if "${oc_bin}" config --help 2>/dev/null | grep -q 'validate'; then
+    "${oc_bin}" config validate || die "OpenClaw config validation failed; run openclaw doctor --fix and retry."
+  fi
+  # Recent hosts persist capability consent outside openclaw.json. Let their
+  # CLI own that state; older hosts do not expose this flag.
+  # Some older CLIs load configured plugins even for subcommand help. Probe
+  # against an empty, disabled plugin configuration to avoid starting a runtime.
+  local probe_dir enable_help
+  probe_dir="$(mktemp -d)"
+  printf '%s\n' '{"plugins":{"enabled":false}}' > "${probe_dir}/openclaw.json"
+  enable_help="$(OPENCLAW_STATE_DIR="${probe_dir}" OPENCLAW_CONFIG_PATH="${probe_dir}/openclaw.json" \
+    "${oc_bin}" plugins enable --help 2>/dev/null || true)"
+  rm -rf -- "${probe_dir}"
+  if grep -q -- '--accept-capabilities' <<< "${enable_help}"; then
+    step "Enabling MemOS memory tools and conversation hooks"
+    "${oc_bin}" plugins enable "${PLUGIN_ID}" --accept-capabilities \
+      || die "OpenClaw could not enable the MemOS plugin."
+  fi
   step "Starting OpenClaw gateway"
   local start_out
   if ! start_out="$("${oc_bin}" gateway start 2>&1)"; then
@@ -676,8 +702,7 @@ NODE
     # the stop above, making "gateway start" fail with a kickstart
     # conflict. Check if the gateway is actually running before
     # treating this as a real error.
-    if curl -fsS --max-time 2 "http://127.0.0.1:18789" >/dev/null 2>&1 \
-       || (command -v lsof >/dev/null 2>&1 && lsof -i ":18789" -t >/dev/null 2>&1); then
+    if "${oc_bin}" health >/dev/null 2>&1; then
       success "OpenClaw gateway already running"
     else
       # The intended final start already ran and failed; do not repeat the same
@@ -721,15 +746,263 @@ NODE
   return 1
 }
 
+# Probe only: do not stop processes or write host files until this succeeds.
+# The bootstrap Python uses only the standard library; each candidate is
+# validated in its own interpreter, independently of the bootstrap environment.
+resolve_hermes_environment() {
+  local bootstrap="${HERMES_PYTHON:-$(command -v python3 || true)}"
+  [[ -x "${bootstrap}" ]] || { printf '%s\n' "Cannot run Python: ${bootstrap}. Set HERMES_PYTHON to the Hermes interpreter." >&2; return 1; }
+  "${bootstrap}" - <<'PY'
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+def absolute(value):
+    return Path(os.path.abspath(os.path.expanduser(value)))
+
+
+explicit_root = os.environ.get("HERMES_INSTALL_DIR", "")
+explicit_python = os.environ.get("HERMES_PYTHON", "")
+host_home = absolute(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
+roots = []
+candidates = []
+
+
+def add_root(root):
+    root = absolute(str(root))
+    if root not in roots:
+        roots.append(root)
+
+
+def add_python(python, root=None):
+    # Do not resolve the Python symlink: that would escape its virtualenv.
+    pair = (str(absolute(str(python))), str(root) if root else "")
+    if pair not in candidates:
+        candidates.append(pair)
+
+
+if explicit_root:
+    add_root(explicit_root)
+else:
+    launchers = [shutil.which("hermes"), str(Path.home() / ".local/bin/hermes")]
+    for launcher in launchers:
+        if not launcher or not Path(launcher).is_file():
+            continue
+        entry = Path(launcher).resolve()
+        for parent in entry.parents:
+            if (parent / "hermes_cli").is_dir():
+                add_root(parent)
+                break
+        try:
+            lines = entry.read_text().splitlines()
+        except (OSError, UnicodeError):
+            continue
+        for line in lines:
+            try:
+                words = shlex.split(line[2:] if line.startswith("#!") else line)
+            except ValueError:
+                continue
+            # Recognize literal Python shebangs and official `exec "...python"`
+            # launchers. Never source/eval a wrapper or expand shell expressions.
+            value = words[1] if len(words) > 1 and words[0] == "exec" else (
+                words[0] if words and line.startswith("#!") else ""
+            )
+            if not value.startswith("/") or not Path(value).name.startswith("python"):
+                continue
+            python = absolute(value)
+            root = next((p for p in python.parents if (p / "hermes_cli").is_dir()), None)
+            if root:
+                add_root(root)
+            if not explicit_python:
+                add_python(python, root)
+    add_root(host_home / "hermes-agent")
+
+if explicit_python:
+    candidates = []
+    for root in roots:
+        add_python(explicit_python, root)
+    if not explicit_root:
+        add_python(explicit_python)
+else:
+    for root in roots:
+        for venv in ("venv", ".venv"):
+            for name in ("python", "python3"):
+                add_python(root / venv / "bin" / name, root)
+    # A PATH interpreter is acceptable only if it really imports the host API.
+    # Do not combine a system interpreter with a guessed source checkout.
+    if not explicit_root:
+        for name in ("python3", "python"):
+            value = shutil.which(name)
+            if value:
+                add_python(value)
+
+probe = '''
+import sys
+from pathlib import Path
+if sys.argv[1]:
+    sys.path.insert(0, sys.argv[1])
+import hermes_cli
+import plugins.memory as memory
+from plugins.memory import load_memory_provider
+if not callable(load_memory_provider):
+    raise ImportError("Hermes load_memory_provider is not callable")
+directory = Path(memory.__file__).resolve().parent
+if sys.argv[1] and directory != Path(sys.argv[1]).resolve() / "plugins" / "memory":
+    raise ImportError("Memory API resolved outside the selected Hermes source directory")
+print(directory)
+print(directory.parent.parent)
+'''
+child_env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+for python, root in candidates:
+    if not os.access(python, os.X_OK):
+        print("Not executable: " + python, file=sys.stderr)
+        continue
+    try:
+        result = subprocess.run(
+            [python, "-c", probe, root], env=child_env, cwd="/",
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print("Cannot probe {}: {}".format(python, exc), file=sys.stderr)
+        continue
+    paths = result.stdout.strip().splitlines()
+    if result.returncode == 0 and len(paths) == 2 and Path(paths[0]).is_dir():
+        print(python)
+        print("\n".join(paths))
+        sys.exit(0)
+    print("Hermes import failed using {} (root: {}):\n{}".format(
+        python, root or "interpreter default", result.stderr.strip() or result.stdout.strip()
+    ), file=sys.stderr)
+print("Cannot locate a compatible Hermes environment. Set HERMES_INSTALL_DIR to the actual "
+      "backend source directory and HERMES_PYTHON to its Python executable. "
+      "HERMES_HOME is the data/config directory, not the application bundle. "
+      "If imports still fail, repair/update that Hermes environment first.", file=sys.stderr)
+sys.exit(1)
+PY
+}
+
 # ─── Hermes install ───────────────────────────────────────────────────────
+HERMES_PROVIDER_BACKUP_DIR=""
+HERMES_PROVIDER_BACKUP_TARGETS=()
+HERMES_PROVIDER_BACKUP_PATHS=()
+
+rollback_hermes_install() {
+  if ((${#HERMES_PROVIDER_BACKUP_TARGETS[@]} > 0)); then
+    restore_hermes_provider_targets
+  fi
+  if [[ "${HERMES_PREFIX_SWAPPED}" == "true" \
+        && "${HERMES_LIVE_PREFIX:-}" == "${HOME}/.hermes/memos-plugin" ]]; then
+    if [[ -d "${HERMES_LIVE_PREFIX}" ]]; then
+      rm -rf "${HERMES_LIVE_PREFIX}"
+    fi
+    if [[ -d "${HERMES_PREFIX_BACKUP_ROOT:-}" && -d "${HERMES_PREFIX_BACKUP_ROOT}/live" ]]; then
+      mv "${HERMES_PREFIX_BACKUP_ROOT}/live" "${HERMES_LIVE_PREFIX}" \
+        || warn "Failed to restore the previous Hermes plugin prefix."
+    fi
+  fi
+  if [[ -n "${HERMES_STAGED_PREFIX:-}" && -d "${HERMES_STAGED_PREFIX}" ]]; then
+    rm -rf "${HERMES_STAGED_PREFIX}"
+  fi
+  if [[ -n "${HERMES_PREFIX_BACKUP_ROOT:-}" && -d "${HERMES_PREFIX_BACKUP_ROOT}" ]]; then
+    rm -rf "${HERMES_PREFIX_BACKUP_ROOT}"
+  fi
+  HERMES_STAGED_PREFIX=""
+  HERMES_PREFIX_BACKUP_ROOT=""
+  HERMES_LIVE_PREFIX=""
+  HERMES_PREFIX_SWAPPED="false"
+}
+
+restore_hermes_provider_targets() {
+  local index target backup
+  for ((index=${#HERMES_PROVIDER_BACKUP_TARGETS[@]}-1; index>=0; index--)); do
+    target="${HERMES_PROVIDER_BACKUP_TARGETS[index]}"
+    backup="${HERMES_PROVIDER_BACKUP_PATHS[index]}"
+    if [[ -L "${target}" ]]; then
+      rm -f "${target}"
+    elif [[ -e "${target}" ]]; then
+      warn "Cannot restore Hermes provider target because it changed after installation: ${target}"
+      continue
+    fi
+    if [[ -e "${backup}" || -L "${backup}" ]]; then
+      mv "${backup}" "${target}" || warn "Failed to restore Hermes provider target: ${target}"
+    fi
+  done
+  if [[ -n "${HERMES_PROVIDER_BACKUP_DIR}" && -d "${HERMES_PROVIDER_BACKUP_DIR}" ]]; then
+    rm -rf "${HERMES_PROVIDER_BACKUP_DIR}"
+  fi
+  HERMES_PROVIDER_BACKUP_DIR=""
+  HERMES_PROVIDER_BACKUP_TARGETS=()
+  HERMES_PROVIDER_BACKUP_PATHS=()
+}
+
+prepare_hermes_provider_targets() {
+  local backup_root="$1"
+  shift
+  HERMES_PROVIDER_BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/memos-hermes-provider.XXXXXX")" \
+    || die "Unable to create a Hermes provider rollback directory."
+  local index=0 target backup
+  for target in "$@"; do
+    backup=""
+    if [[ -e "${target}" || -L "${target}" ]]; then
+      backup="${HERMES_PROVIDER_BACKUP_DIR}/target-${index}"
+      mv "${target}" "${backup}" \
+        || { restore_hermes_provider_targets; die "Unable to back up Hermes provider target: ${target}"; }
+    fi
+    HERMES_PROVIDER_BACKUP_TARGETS+=("${target}")
+    HERMES_PROVIDER_BACKUP_PATHS+=("${backup}")
+    ln -sfn "${backup_root}" "${target}" \
+      || { restore_hermes_provider_targets; die "Unable to link Hermes memtensor provider: ${target}"; }
+    success "Symlinked → ${target}"
+    index=$((index + 1))
+  done
+}
+
 install_hermes() {
   STEP_CURRENT=0
   header "Hermes Install"
+  step "Locating and validating Hermes Python environment"
+  local resolved python_bin plugin_dir hermes_source
+  resolved="$(resolve_hermes_environment)" || die "Hermes preflight failed; host files and processes were not changed."
+  python_bin="$(printf '%s\n' "${resolved}" | sed -n '1p')"
+  plugin_dir="$(printf '%s\n' "${resolved}" | sed -n '2p')"
+  hermes_source="$(printf '%s\n' "${resolved}" | sed -n '3p')"
+  success "Python: ${python_bin}"
+  success "plugins/memory: ${plugin_dir}"
+  # Keep all subsequent Python operations in the validated host context.
+  local PYTHONPATH="${hermes_source}" PYTHONHOME=""
+  export PYTHONPATH PYTHONHOME
+  local hermes_host_home="${HERMES_HOME:-${HOME}/.hermes}"
   local prefix="${HOME}/.hermes/memos-plugin"
-  local home="${prefix}"
-  local config_file="${HOME}/.hermes/config.yaml"
-  local adapter_dir="${prefix}/adapters/hermes"
+  local config_file="${hermes_host_home}/config.yaml"
+  HERMES_LIVE_PREFIX="${prefix}"
   mkdir -p "${HOME}/.hermes"
+  HERMES_STAGED_PREFIX="$(mktemp -d "${HOME}/.hermes/.memos-plugin-stage.XXXXXX")" \
+    || die "Unable to create a staged Hermes plugin directory."
+  local staged_prefix="${HERMES_STAGED_PREFIX}"
+  local home="${prefix}"
+  local adapter_dir="${prefix}/adapters/hermes"
+  local staged_adapter_dir="${staged_prefix}/adapters/hermes"
+  deploy_tarball_to_prefix "${staged_prefix}"
+
+  step "Preparing staged Hermes runtime"
+  ensure_runtime_home "hermes" "${staged_prefix}" "${staged_prefix}"
+  local staged_bridge_entry="${staged_prefix}/dist/bridge.cjs"
+  [[ -f "${staged_bridge_entry}" ]] || staged_bridge_entry="${staged_prefix}/bridge.cts"
+  echo "${prefix}/dist/bridge.cjs" > "${staged_adapter_dir}/bridge_path.txt"
+  [[ -f "${staged_adapter_dir}/plugin.yaml" ]] || die "Staged Hermes adapter manifest is missing."
+  local staged_version_sync="${staged_prefix}/scripts/sync-hermes-version.cjs"
+  if [[ -f "${staged_version_sync}" ]]; then
+    node "${staged_version_sync}" "${staged_prefix}" >/dev/null \
+      || die "Failed to synchronize staged Hermes plugin version metadata."
+  else
+    warn "Hermes version sync helper missing; using packaged plugin.yaml as-is."
+  fi
+  cp "${staged_adapter_dir}/plugin.yaml" "${staged_adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null \
+    || die "Failed to prepare the staged memtensor provider."
 
   step "Stopping existing bridge daemon"
   local bridge_pids=""
@@ -769,49 +1042,41 @@ install_hermes() {
     fi
   fi
 
-  deploy_tarball_to_prefix "${prefix}"
-
-  step "Configuring runtime environment"
-  ensure_runtime_home "hermes" "${home}" "${prefix}"
+  # Copy user data only after the host processes are stopped. The old prefix
+  # remains intact until the staged prefix has been handed off successfully.
+  step "Handing off staged Hermes runtime"
+  local preserved_item
+  local preserved_items=(data logs skills daemon .migrations config.yaml .auth.json)
+  mkdir -p "${prefix%/*}"
+  for preserved_item in "${preserved_items[@]}"; do
+    if [[ -e "${prefix}/${preserved_item}" ]]; then
+      rm -rf "${staged_prefix:?}/${preserved_item}"
+      cp -a "${prefix}/${preserved_item}" "${staged_prefix}/${preserved_item}" \
+        || die "Failed to stage Hermes runtime data: ${preserved_item}"
+    fi
+  done
+  HERMES_PREFIX_BACKUP_ROOT="$(mktemp -d "${HOME}/.hermes/.memos-plugin-backup.XXXXXX")" \
+    || die "Unable to create a Hermes rollback directory."
+  if [[ -d "${prefix}" ]]; then
+    mv "${prefix}" "${HERMES_PREFIX_BACKUP_ROOT}/live" \
+      || die "Unable to move the existing Hermes plugin prefix into rollback storage."
+  fi
+  HERMES_PREFIX_SWAPPED="true"
+  mv "${staged_prefix}" "${prefix}" \
+    || { rollback_hermes_install; die "Unable to activate the staged Hermes plugin prefix."; }
+  HERMES_STAGED_PREFIX=""
+  adapter_dir="${prefix}/adapters/hermes"
+  home="${prefix}"
+  staged_bridge_entry=""
+  success "Staged Hermes runtime activated"
 
   local bridge_entry="${prefix}/dist/bridge.cjs"
   [[ -f "${bridge_entry}" ]] || bridge_entry="${prefix}/bridge.cts"
   echo "${bridge_entry}" > "${adapter_dir}/bridge_path.txt"
   success "Bridge path recorded"
 
-  step "Locating Hermes Python environment"
-  local python_bin=""
-  if command -v hermes >/dev/null 2>&1; then
-    local shebang; shebang="$(head -1 "$(command -v hermes)" 2>/dev/null || true)"
-    [[ "${shebang}" == "#!"*python* ]] && python_bin="$(echo "${shebang}" | sed 's/^#!\s*//')"
-  fi
-  if [[ -z "${python_bin}" || ! -x "${python_bin}" ]] \
-     && [[ -x "${HOME}/.hermes/hermes-agent/venv/bin/python3" ]]; then
-    python_bin="${HOME}/.hermes/hermes-agent/venv/bin/python3"
-  fi
-  [[ -z "${python_bin}" || ! -x "${python_bin}" ]] && python_bin="$(command -v python3 || true)"
-  [[ -n "${python_bin}" && -x "${python_bin}" ]] || die "Cannot locate Python for Hermes."
-  success "Python: ${python_bin}"
-
-  local plugin_dir=""
-  plugin_dir="$("${python_bin}" -c "
-from pathlib import Path
-try:
-    import plugins.memory as pm
-    print(Path(pm.__file__).parent)
-except Exception:
-    pass
-" 2>/dev/null || true)"
-  if [[ -z "${plugin_dir}" || ! -d "${plugin_dir}" ]]; then
-    for d in "${HOME}/.hermes/hermes-agent/plugins/memory"; do
-      [[ -d "${d}" && -f "${d}/__init__.py" ]] && { plugin_dir="${d}"; break; }
-    done
-  fi
-  [[ -n "${plugin_dir}" && -d "${plugin_dir}" ]] || die "plugins/memory not found"
-  success "plugins/memory: ${plugin_dir}"
-
   step "Linking memtensor provider"
-  local user_plugin_dir="${HOME}/.hermes/plugins/memory"
+  local user_plugin_dir="${hermes_host_home}/plugins/memory"
   mkdir -p "${user_plugin_dir}"
   local version_sync="${prefix}/scripts/sync-hermes-version.cjs"
   if [[ -f "${version_sync}" ]]; then
@@ -820,20 +1085,13 @@ except Exception:
   else
     warn "Hermes version sync helper missing; using packaged plugin.yaml as-is."
   fi
-  # Ensure the provider directory is fully populated before symlinking so
-  # the second symlink (user-level) already points at a complete tree.
-  cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
+  # The provider directory was populated while the package was staged, before
+  # any host link was changed.
   local provider_targets=(
     "${plugin_dir}/memtensor"
     "${user_plugin_dir}/memtensor"
   )
-  local target
-  for target in "${provider_targets[@]}"; do
-    # Use `ln -sfn` for atomic, idempotent replace; matches install.hermes.sh.
-    if [[ -e "${target}" && ! -L "${target}" ]]; then rm -rf "${target}"; fi
-    ln -sfn "${adapter_dir}/memos_provider" "${target}"
-    success "Symlinked → ${target}"
-  done
+  prepare_hermes_provider_targets "${adapter_dir}/memos_provider" "${provider_targets[@]}"
 
   step "Verifying provider & patching config"
   local verify
@@ -842,8 +1100,13 @@ from plugins.memory import load_memory_provider
 p = load_memory_provider('memtensor')
 print('OK' if p and p.name == 'memtensor' else 'FAIL')
 " 2>/dev/null || true)"
-  [[ "${verify}" == "OK" ]] && success "Provider verification passed" \
-    || warn "Provider verification didn't return OK"
+  if [[ "${verify}" == "OK" ]]; then
+    success "Provider verification passed"
+  else
+    restore_hermes_provider_targets
+    rollback_hermes_install
+    die "Hermes memtensor provider verification failed. Existing provider targets and plugin prefix were restored."
+  fi
 
   step "Installing Hermes profile defaults hook"
   "${python_bin}" - <<'PYEOF' || warn "Hermes profile defaults hook install failed"
@@ -992,7 +1255,7 @@ PYEOF
 
   if [[ -f "${config_file}" ]]; then
     local patched_configs
-    patched_configs="$("${python_bin}" - "${HOME}/.hermes" 2>/dev/null <<'PYEOF'
+    patched_configs="$("${python_bin}" - "${hermes_host_home}" 2>/dev/null <<'PYEOF'
 import sys
 from pathlib import Path
 
@@ -1110,17 +1373,29 @@ CFGEOF
   else
     printf "       ${DIM}Next:${NC}      ${BOLD}hermes chat${NC}\n"
   fi
+  # Keep rollback material until the daemon smoke test and all post-swap
+  # configuration work have completed successfully.
+  if [[ -n "${HERMES_PROVIDER_BACKUP_DIR}" ]]; then
+    rm -rf "${HERMES_PROVIDER_BACKUP_DIR}"
+  fi
+  if [[ -n "${HERMES_PREFIX_BACKUP_ROOT}" && -d "${HERMES_PREFIX_BACKUP_ROOT}" ]]; then
+    rm -rf "${HERMES_PREFIX_BACKUP_ROOT}"
+  fi
+  HERMES_PROVIDER_BACKUP_DIR=""
+  HERMES_PROVIDER_BACKUP_TARGETS=()
+  HERMES_PROVIDER_BACKUP_PATHS=()
+  HERMES_PREFIX_BACKUP_ROOT=""
+  HERMES_LIVE_PREFIX=""
+  HERMES_PREFIX_SWAPPED="false"
   return 0
 }
 
 # ─── DeepSeek Harness install ─────────────────────────────────────────────
 # DSH owns its profile dependency graph and bundle reconciliation. We never
 # unpack into the profile or edit package.json/cordis.patch.yml ourselves.
-# pnpm 11 deliberately blocks unreviewed lifecycle scripts. On that one
-# expected failure we approve only the exact dependency names reviewed for
-# this package, deny unnecessary scripts (including ONNX Runtime's optional
-# Linux CUDA download), and repeat the same add so DSH can reconcile the
-# bundle after pnpm exits successfully.
+# Preseed the reviewed pnpm 11 build policy before the first add. Unknown
+# scripts and conflicting explicit denials stop installation for review;
+# no pending package is approved automatically after a failed install.
 read_pending_dsh_builds() {
   local workspace="$1"
   [[ -f "${workspace}" ]] || return 0
@@ -1179,10 +1454,45 @@ resolve_dsh_home_for_installer() {
   node -e 'const path = require("node:path"); const os = require("node:os"); const MEMOS_DSH_HOME = true; const configured = process.env.DSH_HOME; const selected = configured !== undefined && configured.trim().length > 0 ? configured : path.join(os.homedir(), ".dsh"); const expanded = selected === "~" ? os.homedir() : selected.startsWith("~/") || selected.startsWith("~\\") ? path.join(os.homedir(), selected.slice(2)) : selected; process.stdout.write(path.resolve(expanded));'
 }
 
-deny_existing_dsh_onnx_build() {
+prepare_dsh_build_policy() {
   local workspace="$1"
-  [[ -f "${workspace}" ]] || return 0
-  node -e 'const fs = require("node:fs"); const MEMOS_DSH_POLICY = true; const file = process.argv[1]; const raw = fs.readFileSync(file, "utf8"); const eol = raw.includes("\r\n") ? "\r\n" : "\n"; const hadFinalEol = raw.endsWith(eol); const lines = raw.split(/\r?\n/); if (hadFinalEol) lines.pop(); let inAllowBuilds = false; let changed = false; const key = /^(\s+)(["\x27]?)onnxruntime-node\2:\s*(?:true|false|set this to true or false)(\s*(?:#.*)?)$/; for (let i = 0; i < lines.length; i += 1) { if (/^allowBuilds:\s*(?:#.*)?$/.test(lines[i])) { inAllowBuilds = true; continue; } if (inAllowBuilds && /^[^\s#]/.test(lines[i])) break; if (!inAllowBuilds) continue; const match = key.exec(lines[i]); if (!match) continue; const replacement = `${match[1]}${match[2]}onnxruntime-node${match[2]}: false${match[3]}`; if (replacement !== lines[i]) { lines[i] = replacement; changed = true; } break; } if (changed) fs.writeFileSync(file, `${lines.join(eol)}${hadFinalEol ? eol : ""}`, "utf8");' "${workspace}"
+  node -e 'const fs = require("node:fs");
+const path = require("node:path");
+const MEMOS_DSH_POLICY = true;
+const file = process.argv[1];
+let raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+const lines = raw.split(/\r?\n/);
+const policy = {"better-sqlite3": false, "esbuild@0.27.7": true, "esbuild@0.21.5": true, "sharp@0.34.5": true, "onnxruntime-node": false, "protobufjs": false, "@memtensor/memos-local-plugin": false};
+let block = -1, end = -1;
+const seen = new Set();
+for (let i = 0; i < lines.length; i++) {
+  if (/^strictDepBuilds:/.test(lines[i]) && !/^strictDepBuilds:\s*true\s*(#.*)?$/.test(lines[i])) throw new Error("Preserve existing strictDepBuilds policy; review it before installing");
+  if (/^allowBuilds:/.test(lines[i])) {
+    if (block >= 0 || !/^allowBuilds:\s*(#.*)?$/.test(lines[i])) throw new Error("Unsupported allowBuilds YAML; review before installing");
+    block = i; end = i + 1;
+    while (end < lines.length && (!/^[^\s#]/.test(lines[end]) || !lines[end].trim())) end++;
+    for (let j = i + 1; j < end; j++) {
+      if (!lines[j].trim() || /^\s*#/.test(lines[j])) continue;
+      const match = lines[j].match(/^\s+(["\x27]?)(.+?)\1:\s*(true|false|set this to true or false)\s*(#.*)?$/);
+      if (!match || seen.has(match[2])) throw new Error("Unsupported/duplicate allowBuilds entry");
+      const key = match[2]; seen.add(key);
+      if (match[3] === "false" && key.includes("*")) throw new Error("Existing wildcard script denial requires explicit review");
+      if ((key === "esbuild" || key.startsWith("esbuild@") || key === "sharp" || key.startsWith("sharp@")) && match[3] === "false") throw new Error("Existing script denial for " + key + "; explicit review required");
+      if (key in policy) {
+        if (policy[key] === true && match[3] === "false") throw new Error("Existing script denial for " + key);
+        lines[j] = "  " + JSON.stringify(key) + ": " + policy[key];
+        delete policy[key];
+      }
+    }
+  }
+}
+const additions = Object.entries(policy).map(([k,v]) => "  " + JSON.stringify(k) + ": " + v);
+if (block < 0) lines.push("allowBuilds:", ...additions);
+else lines.splice(end, 0, ...additions);
+if (!/^strictDepBuilds:/m.test(raw)) lines.push("strictDepBuilds: true");
+fs.mkdirSync(path.dirname(file), {recursive: true});
+fs.writeFileSync(file, lines.join(eol).replace(/(?:\r?\n)*$/, eol));' "${workspace}"
 }
 
 run_dsh_plugin_without_onnx_cuda() {
@@ -1193,7 +1503,7 @@ verify_dsh_better_sqlite3() {
   local profile_dir="$1"
   (
     cd "${profile_dir}"
-    node -e 'const Database = require("better-sqlite3"); const db = new Database(":memory:"); try { db.prepare("SELECT 1").get(); } finally { db.close(); }'
+    node -e 'const { createRequire } = require("node:module"); const fromPlugin = createRequire(require.resolve("@memtensor/memos-local-plugin/dist/adapters/deepseek-harness/index.js")); const Database = fromPlugin("better-sqlite3"); const db = new Database(":memory:"); try { db.exec("CREATE TABLE probe (v TEXT)"); db.prepare("INSERT INTO probe VALUES (?)").run("ok"); if (db.prepare("SELECT v FROM probe").get().v !== "ok") throw new Error("SQLite probe failed"); } finally { db.close(); }'
   )
 }
 
@@ -1201,7 +1511,7 @@ verify_dsh_onnx_cpu() {
   local profile_dir="$1"
   (
     cd "${profile_dir}"
-    node -e 'const ort = require("onnxruntime-node"); const cpu = ort.listSupportedBackends().find((backend) => backend.name === "cpu"); if (!cpu || cpu.bundled !== true) throw new Error("onnxruntime-node CPU backend is unavailable");'
+    node -e 'const { createRequire } = require("node:module"); const fromPlugin = createRequire(require.resolve("@memtensor/memos-local-plugin/dist/adapters/deepseek-harness/index.js")); const fromTransformers = createRequire(fromPlugin.resolve("@huggingface/transformers")); const ort = fromTransformers("onnxruntime-node"); const cpu = ort.listSupportedBackends().find((backend) => backend.name === "cpu"); if (!cpu || cpu.bundled !== true) throw new Error("onnxruntime-node CPU backend is unavailable");'
   )
 }
 
@@ -1234,8 +1544,8 @@ install_dsh() {
   profile_dir="${dsh_home}/profiles/${DSH_PROFILE}"
   profile_workspace="${profile_dir}/pnpm-workspace.yaml"
 
-  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
-    error "Unable to disable the unnecessary onnxruntime-node CUDA installer in ${profile_workspace}."
+  if ! prepare_dsh_build_policy "${profile_workspace}"; then
+    error "Unable to prepare the reviewed dependency script policy in ${profile_workspace}."
     return 1
   fi
 
@@ -1275,34 +1585,14 @@ install_dsh() {
       return 1
     fi
 
-    local -a approval_args=()
-    for package in better-sqlite3 esbuild sharp; do
-      if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("${package}"); fi
-    done
-    for package in onnxruntime-node protobufjs "${NPM_PACKAGE}"; do
-      if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("!${package}"); fi
-    done
-
-    info "pnpm requested build-script review for this fresh DSH profile."
-    info "Allowing reviewed native installers: better-sqlite3, esbuild, sharp"
-    info "Denying unnecessary scripts: onnxruntime-node CUDA download, protobufjs, ${NPM_PACKAGE}"
-    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" approve-builds "${approval_args[@]}"; then
-      rm -f "${add_log}"
-      error "DSH dependency build approval failed."
-      return 1
-    fi
-
-    step "Completing DSH bundle activation"
-    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}"; then
-      rm -f "${add_log}"
-      error "DSH plugin installation still failed after reviewed build approval."
-      return 1
-    fi
+    rm -f "${add_log}"
+    error "DSH reported pending scripts after policy preparation. Review the package versions before changing the allowlist."
+    return 1
   fi
   rm -f "${add_log}"
 
-  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
-    error "Unable to persist the onnxruntime-node CUDA build denial in ${profile_workspace}."
+  if ! prepare_dsh_build_policy "${profile_workspace}"; then
+    error "Unable to persist the reviewed dependency script policy in ${profile_workspace}."
     return 1
   fi
 
@@ -1325,20 +1615,11 @@ install_dsh() {
     return 1
   fi
 
-  if verify_dsh_better_sqlite3 "${profile_dir}"; then
-    success "better-sqlite3 native binding OK"
-  else
-    warn "better-sqlite3 native binding is not loadable; rebuilding it in the DSH profile."
-    if ! (cd "${profile_dir}" && pnpm rebuild better-sqlite3); then
-      error "better-sqlite3 rebuild failed in ${profile_dir}."
-      return 1
-    fi
-    if ! verify_dsh_better_sqlite3 "${profile_dir}"; then
-      error "better-sqlite3 native binding is not loadable after rebuild."
-      return 1
-    fi
-    success "better-sqlite3 native binding repaired"
+  if ! verify_dsh_better_sqlite3 "${profile_dir}"; then
+    error "better-sqlite3 native binding is not loadable in the selected runtime; no source rebuild was attempted."
+    return 1
   fi
+  success "better-sqlite3 native binding OK"
 
   if ! verify_dsh_onnx_cpu "${profile_dir}"; then
     error "onnxruntime-node CPU binding is not loadable."

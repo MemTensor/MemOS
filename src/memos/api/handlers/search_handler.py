@@ -12,6 +12,7 @@ import os
 from contextlib import suppress
 from typing import Any
 
+from memos.api.handlers import project_view
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
@@ -79,6 +80,7 @@ class SearchHandler(BaseHandler):
         Returns:
             SearchResponse with formatted results
         """
+        project_view.require_plugin_or_400(search_req)
         self.logger.info(
             "[SearchHandler] Search request summary: %s",
             summarize_search_request(search_req),
@@ -106,6 +108,10 @@ class SearchHandler(BaseHandler):
             search_req_local.relativity = 0
         self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
         results = self._apply_relativity_threshold(results, search_req_local.relativity)
+        # Plugin-registered result kinds (e.g. project memory) follow the same threshold
+        from memos.plugins.result_kinds import apply_relativity_to_plugin_kinds
+
+        results = apply_relativity_to_plugin_kinds(results, search_req_local.relativity)
 
         if search_req_local.dedup == "sim":
             results = self._dedup_text_memories(results, search_req.top_k)
@@ -255,7 +261,7 @@ class SearchHandler(BaseHandler):
         if relativity <= 0:
             return results
 
-        for key in ("text_mem", "pref_mem"):
+        for key in ("text_mem", "pref_mem", "project_mem"):
             buckets = results.get(key)
             if not isinstance(buckets, list):
                 continue

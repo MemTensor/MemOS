@@ -1,4 +1,4 @@
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -195,8 +195,7 @@ class PostgresGraphDBConfig(BaseConfig):
     Does NOT require Apache AGE or other graph extensions.
 
     Schema:
-    - memos_memories: Main table for memory nodes (id, memory, properties JSONB, embedding vector)
-    - memos_edges: Edge table for relationships (source_id, target_id, type)
+    - {schema}_graph_{n}."Memory" and "Edges", one physical shard per tenant
 
     Example:
     ---
@@ -223,12 +222,32 @@ class PostgresGraphDBConfig(BaseConfig):
         default=False,
         description="If False: use single database with logical isolation by user_name",
     )
-    embedding_dimension: int = Field(
-        default=768, description="Dimension of vector embedding (768 for all-mpnet-base-v2)"
+    embedding_dimension: int = Field(default=1024, description="Dimension of vector embedding")
+    shard_count: int = Field(
+        default=400,
+        ge=1,
+        le=4096,
+        description="Number of MD5 tenant shards",
     )
     maxconn: int = Field(
         default=20,
         description="Maximum number of connections in the connection pool",
+    )
+    minconn: int = Field(
+        default=8,
+        ge=1,
+        description="Warm connections kept in the pool",
+    )
+    vector_index_type: Literal["hnsw", "ivfflat"] = Field(
+        default="hnsw",
+        description="pgvector approximate index type",
+    )
+    hnsw_m: int = Field(default=16, ge=2, le=100)
+    hnsw_ef_construction: int = Field(default=64, ge=4, le=1000)
+    ivfflat_lists: int = Field(default=100, ge=1)
+    fulltext_config: str = Field(
+        default="jiebacfg",
+        description="PostgreSQL text search configuration used to build search_vector",
     )
 
     @model_validator(mode="after")
@@ -238,7 +257,27 @@ class PostgresGraphDBConfig(BaseConfig):
             raise ValueError("`db_name` must be provided")
         if not self.use_multi_db and not self.user_name:
             raise ValueError("In single-database mode, `user_name` must be provided")
+        if self.minconn > self.maxconn:
+            raise ValueError(f"`minconn` ({self.minconn}) must be <= `maxconn` ({self.maxconn})")
+        if not self.fulltext_config.replace(".", "_").isidentifier():
+            raise ValueError("`fulltext_config` must be a valid PostgreSQL configuration name")
         return self
+
+
+class SQLiteGraphDBConfig(BaseConfig):
+    """
+    SQLite configuration (single file, no server). Tables mirror the old `Memory` / `Edges` tables;
+    full-text via FTS5 (trigram, works for Chinese) and vectors via sqlite-vec when installed.
+
+    Example:
+    ---
+    db_path = "/data/memos/project_memory.db"
+    embedding_dimension = 1024
+    """
+
+    db_path: str = Field(..., description="Path of the SQLite file (':memory:' for tests)")
+    embedding_dimension: int = Field(default=1024, description="Dimension of vector embedding")
+    user_name: str | None = Field(default=None, description="Default user_name (logical isolation)")
 
 
 class GraphDBConfigFactory(BaseModel):
@@ -250,6 +289,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "polardb": PolarDBGraphDBConfig,
         "postgres": PostgresGraphDBConfig,
+        "sqlite": SQLiteGraphDBConfig,
     }
 
     @field_validator("backend")

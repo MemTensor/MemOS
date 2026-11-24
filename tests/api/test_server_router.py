@@ -415,3 +415,11 @@ class TestServerRouterGetAll:
         data = response.json()
         assert data["message"] == "Memories retrieved successfully"
         assert isinstance(data["data"], list)
+
+
+def test_project_reads_without_database_do_not_return_sample_data(mock_init_server, monkeypatch):
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_DSN", raising=False)
+    with TestClient(mock_init_server) as http:
+        response = http.post("/product/get_memory", json={"space_id": "unconfigured"})
+        assert response.status_code == 503
+        assert not hasattr(mock_init_server.state, "project_retrieval")

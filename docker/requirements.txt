@@ -4,7 +4,7 @@ attrs==25.4.0
 Authlib==1.6.5
 beartype==0.22.5
 cachetools==6.2.2
-certifi==2025.11.12
+certifi==2026.10.19
 cffi==2.0.0
 charset-normalizer==3.4.4
 chonkie==1.1.0

@@ -29,6 +29,46 @@ const captureRunnerCalls: Array<{
   llm: LlmClient | null;
   reflectLlm: LlmClient | null;
 }> = [];
+const evolutionSubscriberCalls: Array<{
+  l2Llm: LlmClient | null;
+  skillLlm: LlmClient | null;
+}> = [];
+
+vi.mock("../../../core/memory/l2/index.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../core/memory/l2/index.js")
+  >("../../../core/memory/l2/index.js");
+  return {
+    ...actual,
+    attachL2Subscriber: (deps: { llm: LlmClient | null; [k: string]: unknown }) => {
+      evolutionSubscriberCalls.push({
+        l2Llm: deps.llm,
+        skillLlm: null,
+      });
+      return actual.attachL2Subscriber(
+        deps as Parameters<typeof actual.attachL2Subscriber>[0],
+      );
+    },
+  };
+});
+
+vi.mock("../../../core/skill/index.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../core/skill/index.js")
+  >("../../../core/skill/index.js");
+  return {
+    ...actual,
+    attachSkillSubscriber: (deps: { llm: LlmClient | null; [k: string]: unknown }) => {
+      evolutionSubscriberCalls.push({
+        l2Llm: null,
+        skillLlm: deps.llm,
+      });
+      return actual.attachSkillSubscriber(
+        deps as Parameters<typeof actual.attachSkillSubscriber>[0],
+      );
+    },
+  };
+});
 
 vi.mock("../../../core/capture/index.js", async () => {
   const actual = await vi.importActual<
@@ -141,6 +181,7 @@ function buildDepsWithDistinctLlms(
 beforeEach(() => {
   dbHandle = makeTmpDb();
   captureRunnerCalls.length = 0;
+  evolutionSubscriberCalls.length = 0;
 });
 
 afterEach(() => {
@@ -189,4 +230,27 @@ describe("pipeline/deps captureRunner wiring (issue #2148)", () => {
     expect(call.reflectLlm).toBe(call.llm);
     expect(call.reflectLlm?.model).toBe("main-llm");
   });
+
+  it("passes the dedicated skill-evolver model to L2 induction and skill crystallization", () => {
+    const buses = buildPipelineBuses();
+    const deps = buildDepsWithDistinctLlms(dbHandle!, false);
+    const algorithm = extractAlgorithmConfig(deps);
+    const session = buildPipelineSession(deps, buses.session);
+    buildPipelineSubscribers(deps, buses, algorithm, session);
+
+    expect(evolutionSubscriberCalls[0].l2Llm?.model).toBe("skill-evolver-llm");
+    expect(evolutionSubscriberCalls[1].skillLlm?.model).toBe("skill-evolver-llm");
+    expect(evolutionSubscriberCalls[0].l2Llm).toBe(evolutionSubscriberCalls[1].skillLlm);
+  });
+
+  it("inherits the main model when no dedicated evolver client is available", () => {
+    const buses = buildPipelineBuses();
+    const deps = buildDepsWithDistinctLlms(dbHandle!, false);
+    deps.reflectLlm = null;
+    buildPipelineSubscribers(deps, buses, extractAlgorithmConfig(deps));
+
+    expect(evolutionSubscriberCalls[0].l2Llm?.model).toBe("main-llm");
+    expect(evolutionSubscriberCalls[1].skillLlm?.model).toBe("main-llm");
+  });
+
 });

@@ -257,6 +257,14 @@ export interface ProviderCallInput {
   maxTokens: number;
   jsonMode: boolean;
   stop?: string[];
+  /**
+   * Logical call site (e.g. `capture.summarize`, `retrieval.filter`,
+   * `skill.evolve`). Forwarded from `LlmCallOptions.op` so providers
+   * can apply per-op behavior (request-body tweaks, routing overrides,
+   * reasoning kill-switches, per-op budget caps). Optional — providers
+   * must not assume it is set.
+   */
+  op?: string;
 }
 
 /** What providers return — pre-facade post-processing. */

@@ -106,6 +106,11 @@ def hookable(name: str):
     Auto-declares before/after Hooks (idempotent); no need to manually define_hook in hook_defs.py.
     Supports piped return values: before can modify request, after can modify result.
     Compatible with both sync and async methods.
+
+    Also declares a single-provider ``name.intercept`` hook: when a plugin registers it and
+    the callback returns a value other than ``None``, that value is the result and the
+    decorated method (and ``name.after``) is skipped. A plugin that serves a whole request
+    kind on its own (e.g. a memory view) uses it instead of editing the handler body.
     """
     from memos.plugins.hook_defs import define_hook
 
@@ -116,11 +121,29 @@ def hookable(name: str):
         pipe_key="request",
     )
     define_hook(
+        f"{name}.intercept",
+        description=f"Serve {name} instead of the core; return None to fall through",
+        params=["request"],
+    )
+    define_hook(
         f"{name}.after",
         description=f"After {name} executes; can modify result",
         params=["request", "result"],
         pipe_key="result",
     )
+
+    def _intercept(request):
+        if not _hooks.get(f"{name}.intercept"):
+            return None
+        callbacks = _hooks[f"{name}.intercept"]
+        if len(callbacks) > 1:
+            raise RuntimeError(
+                f"Multiple plugins registered single-provider hook: {name}.intercept"
+            )
+        # Called directly rather than via trigger_single_hook: a plugin answering with an
+        # HTTP 4xx (e.g. "Space not found") is a normal outcome, not an error to log with a
+        # traceback. Unexpected exceptions still reach the global exception handler.
+        return callbacks[0](request=request)
 
     def decorator(func):
         if asyncio.iscoroutinefunction(func):
@@ -129,6 +152,9 @@ def hookable(name: str):
             async def async_wrapper(self, request, *args, **kwargs):
                 rv = trigger_hook(f"{name}.before", request=request)
                 request = rv if rv is not None else request
+                early = _intercept(request)
+                if early is not None:
+                    return early
                 result = await func(self, request, *args, **kwargs)
                 rv = trigger_hook(f"{name}.after", request=request, result=result)
                 result = rv if rv is not None else result
@@ -140,6 +166,9 @@ def hookable(name: str):
         def sync_wrapper(self, request, *args, **kwargs):
             rv = trigger_hook(f"{name}.before", request=request)
             request = rv if rv is not None else request
+            early = _intercept(request)
+            if early is not None:
+                return early
             result = func(self, request, *args, **kwargs)
             rv = trigger_hook(f"{name}.after", request=request, result=result)
             result = rv if rv is not None else result

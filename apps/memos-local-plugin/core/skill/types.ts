@@ -214,6 +214,7 @@ export interface SkillVerificationPassedEvent
 export interface SkillVerificationFailedEvent
   extends SkillEventBase<"skill.verification.failed"> {
   skillId: SkillId;
+  policyId: string;
   reason: string;
 }
 

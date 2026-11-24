@@ -30,7 +30,7 @@ on:
         type: boolean
         default: true
       recover_existing_npm_release:
-        description: "Allow reconstructing a missing tag for an existing npm version. Keep false for normal releases."
+        description: "Recover a verified partial publish only; keep false for normal releases."
         required: true
         type: boolean
         default: false
@@ -388,19 +388,17 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: bash ../../.github/scripts/retry.sh --label "npm ci" -- npm ci
-
-      - name: Rebuild for x64 under Rosetta (darwin-x64 only)
-        if: matrix.platform == 'darwin-x64'
-        shell: bash
-        run: bash ../../.github/scripts/retry.sh --label "npm rebuild better-sqlite3 under Rosetta" -- arch -x86_64 npm rebuild better-sqlite3
+        run: |
+          npm install --global npm@11.17.0 --ignore-scripts --no-audit --no-fund
+          npm run lock:check
+          bash ../../.github/scripts/retry.sh --label "npm ci" -- npm ci
 
       - name: Collect prebuild
         shell: bash
         run: |
           bash ../../.github/scripts/retry.sh --label "collect ${{ matrix.platform }} prebuild" -- bash -euo pipefail -c '
             mkdir -p prebuilds/${{ matrix.platform }}
-            cp node_modules/better-sqlite3/build/Release/better_sqlite3.node prebuilds/${{ matrix.platform }}/
+            cp node_modules/better-sqlite3/prebuilds/${{ matrix.platform }}.node prebuilds/${{ matrix.platform }}/better_sqlite3.node
           '
 
       - name: Upload prebuild artifact
@@ -492,16 +490,12 @@ jobs:
             find . -name "*.node" -exec ls -lh {} \;
           '
 
-      - name: Install dependencies (skip native build)
-        run: bash ../../.github/scripts/retry.sh --label "npm ci --ignore-scripts" -- npm ci --ignore-scripts
-
-      - name: Install Linux sqlite binding for validation
+      - name: Install dependencies with reviewed scripts
         run: |
-          bash ../../.github/scripts/retry.sh --label "install linux sqlite binding for validation" -- bash -euo pipefail -c '
-            test -s prebuilds/linux-x64/better_sqlite3.node
-            mkdir -p node_modules/better-sqlite3/build/Release
-            cp prebuilds/linux-x64/better_sqlite3.node node_modules/better-sqlite3/build/Release/better_sqlite3.node
-          '
+          npm install --global npm@11.17.0 --ignore-scripts --no-audit --no-fund
+          npm run lock:check
+          bash ../../.github/scripts/retry.sh --label "npm ci" -- npm ci
+          npm run verify:native
 
       - name: Generate telemetry credentials for a real publish
         if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') != 'stage_release' }}
@@ -799,7 +793,7 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.tag }}
           RECOVER_EXISTING_NPM_RELEASE: ${{ inputs.recover_existing_npm_release }}
           RELEASE_METADATA_STATE: ${{ steps.release_state.outputs.state }}
-          NPM_VISIBILITY_TIMEOUT_SECONDS: "150"
+          NPM_VISIBILITY_TIMEOUT_SECONDS: "600"
           NPM_VISIBILITY_INTERVAL_SECONDS: "10"
           NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS: "8"
           ALLOW_STAGED_TAG_BEFORE_NPM: ${{ (inputs.publish_phase || 'full') == 'publish_npm_only' && 'true' || 'false' }}

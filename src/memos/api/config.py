@@ -906,8 +906,8 @@ class APIConfig:
     def get_postgres_config(user_id: str | None = None) -> dict[str, Any]:
         """Get PostgreSQL + pgvector configuration for MemOS graph storage.
 
-        Uses standard PostgreSQL with pgvector extension.
-        Schema: memos.memories, memos.edges
+        Uses standard PostgreSQL with pgvector. Shard count, index, and
+        full-text configuration keep the backend defaults unless overridden.
         """
         user_name = os.getenv("MEMOS_USER_NAME", "default")
         if user_id:
@@ -922,8 +922,29 @@ class APIConfig:
             "schema_name": os.getenv("MEMOS_SCHEMA", "memos"),
             "user_name": user_name,
             "use_multi_db": False,
-            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "384")),
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
             "maxconn": int(os.getenv("POSTGRES_MAX_CONN", "20")),
+        }
+
+    @staticmethod
+    def get_project_postgres_config() -> dict[str, Any]:
+        """Read PostgreSQL settings for project memory."""
+        host = os.getenv("PROJECT_DB_HOST")
+        if not host:
+            raise ValueError("PROJECT_DB_HOST is required for the postgres project DB backend")
+        return {
+            "host": host,
+            "port": int(os.getenv("PROJECT_DB_PORT", "5432")),
+            "user": os.getenv("PROJECT_DB_USER", "postgres"),
+            "password": os.getenv("PROJECT_DB_PASSWORD", ""),
+            "db_name": os.getenv("PROJECT_DB_NAME", "memos_project"),
+            "minconn": int(os.getenv("PROJECT_DB_MIN_CONN", "1")),
+            "maxconn": int(os.getenv("PROJECT_DB_MAX_CONN", "10")),
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+            "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
+            .strip()
+            .lower(),
+            "auto_init": os.getenv("PROJECT_DB_AUTO_INIT", "true").lower() == "true",
         }
 
     @staticmethod

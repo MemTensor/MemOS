@@ -43,6 +43,13 @@ const EmbeddingSchema = Type.Object({
   ], { default: "local" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
+  local: Type.Optional(Type.Object({
+    remoteHost: StringWithDefault(""),
+    modelPath: StringWithDefault(""),
+    cacheDir: StringWithDefault(""),
+    offline: Bool(false),
+    loadTimeoutMs: NumberInRange(120_000, 1, 3_600_000),
+  }, { default: {} })),
   apiKey: StringWithDefault(""),
   /** OpenRouter provider routing — providers to skip. */
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
@@ -326,6 +333,10 @@ const AlgorithmSchema = Type.Object({
      * are ignored (policies too disparate to share a world model).
      */
     clusterMinSimilarity: NumberInRange(0.6, 0, 1),
+    /** Maximum policies included in one L3 abstraction prompt. */
+    maxPoliciesPerCluster: NumberInRange(20, 1, 100),
+    /** Hard total character cap for one L3 abstraction prompt. */
+    maxPromptChars: NumberInRange(32_000, 4_000, 128_000),
     /** Chars of L2 body handed to `l3.abstraction`. */
     policyCharCap: NumberInRange(800, 200, 4_000),
     /** Chars of trace body handed per evidence trace. */

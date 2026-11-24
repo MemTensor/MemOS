@@ -92,6 +92,24 @@ class H:
     # dream — single-provider business hook
     DREAM_EXECUTE = "dream.execute"
 
+    # project memory (memory view `project`) — single-provider business hooks.
+    # The core only validates fields, routes requests, and runs the scheduler entry;
+    # the active project-memory plugin implements all of them.
+    PROJECT_MEMORY_ACCEPT = "project_memory.accept"
+    PROJECT_MEMORY_EXECUTE = "project_memory.execute"
+    PROJECT_MEMORY_PROCESS = "project_memory.process"
+    PROJECT_MEMORY_SPACE = "project_memory.space"
+    PROJECT_MEMORY_MERGE = "project_memory.merge"
+    PROJECT_MEMORY_MERGE_RESULT = "project_memory.merge_result"
+    PROJECT_MEMORY_SEARCH = "project_memory.search"
+    PROJECT_MEMORY_GET = "project_memory.get"
+    PROJECT_MEMORY_GET_BY_ID = "project_memory.get_by_id"
+    PROJECT_MEMORY_DELETE = "project_memory.delete"
+    PROJECT_MEMORY_TASK_STATUS = "project_memory.task_status"
+    PROJECT_MEMORY_MESSAGES = "project_memory.messages"
+    # optional: distributed lock for multi-replica deployments (see project_memory/locks.py)
+    PROJECT_MEMORY_LOCK = "project_memory.lock"
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CE custom Hook declarations (@hookable-generated ones need not be declared here)
@@ -182,4 +200,71 @@ define_hook(
         "text_mem",
         "scheduler_context",
     ],
+)
+
+# ── project memory ────────────────────────────────────────────────────────────
+
+define_hook(
+    H.PROJECT_MEMORY_ACCEPT,
+    description="Accept an add request for the `project` view: store messages, enqueue work",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_EXECUTE,
+    description="Run project-memory organization for one space (scheduler entry)",
+    params=["space_id", "batch", "scheduler_context"],
+)
+
+for hook, purpose in (
+    (H.PROJECT_MEMORY_PROCESS, "Extract one closed Episode"),
+    (H.PROJECT_MEMORY_SPACE, "Recall and organize an Episode in its Space"),
+    (H.PROJECT_MEMORY_MERGE, "Prepare entry changes for an Episode"),
+    (H.PROJECT_MEMORY_MERGE_RESULT, "Finalize and commit the prepared changes"),
+):
+    define_hook(hook, description=purpose, params=["space_id", "batch", "scheduler_context"])
+
+define_hook(
+    H.PROJECT_MEMORY_SEARCH,
+    description="Search project memory and return topic_detail_list",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_GET,
+    description="List topics of a project space (get_memory with space_id)",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_MESSAGES,
+    description="Read the conversation messages stored for project memory",
+    params=["conversation_id", "space_id", "limit"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_GET_BY_ID,
+    description="Read one topic by id; return None when the id is not a project topic",
+    params=["memory_id"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_DELETE,
+    description="Delete topics of a project space (by memory_ids or whole space)",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_LOCK,
+    description=(
+        "Optional. Return a context manager that holds a lock on `key` across processes; "
+        "when not registered, project memory uses in-process locks"
+    ),
+    params=["key"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_TASK_STATUS,
+    description="Status and memory_views of a project-memory task; None when unknown",
+    params=["task_id", "user_id"],
 )

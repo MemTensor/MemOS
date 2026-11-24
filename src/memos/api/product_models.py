@@ -5,6 +5,7 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
+from memos.api.project_fields import ProjectAddFields, ProjectScopeFields, ProjectSearchFields
 from memos.log import get_logger
 from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
 
@@ -363,7 +364,7 @@ class SearchRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
 
-class APISearchRequest(BaseRequest):
+class APISearchRequest(BaseRequest, ProjectSearchFields):
     """Request model for searching memories."""
 
     # ==== Basic inputs ====
@@ -372,6 +373,9 @@ class APISearchRequest(BaseRequest):
         description="User search query",
     )
     user_id: str = Field(..., description="User ID")
+
+    # Project fields (include_memory_view, space_ids, domains, conversation_id,
+    # memory_limit_number, project_item_types, project_result_format) come from ProjectSearchFields.
 
     # ==== Cube scoping ====
     readable_cube_ids: list[str] | None = Field(
@@ -605,7 +609,7 @@ class APISearchRequest(BaseRequest):
         return self
 
 
-class APIADDRequest(BaseRequest):
+class APIADDRequest(BaseRequest, ProjectAddFields):
     """Request model for creating memories."""
 
     # Model-level example so the interactive docs (/docs) show a copy-paste-ready
@@ -940,7 +944,23 @@ class AddStatusRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID")
 
 
-class GetMemoryRequest(BaseRequest):
+class ProjectListRequest(BaseRequest):
+    space_id: str
+    mem_cube_id: str | None = None
+    page: int = Field(1, ge=1)
+    size: int | None = Field(None, ge=1)
+    page_size: int | None = Field(None, ge=1)
+    filter: dict[str, Any] | None = None
+
+
+class ProjectMessagesRequest(BaseRequest):
+    conversation_id: str = Field(min_length=1)
+    space_id: str | None = None
+    message_limit_number: int | None = Field(None, ge=1)
+    user_id: str | None = None
+
+
+class GetMemoryRequest(BaseRequest, ProjectScopeFields):
     """Request model for getting memories."""
 
     mem_cube_id: str = Field(..., description="Cube ID")
@@ -995,6 +1015,10 @@ class DeleteMemoryRequest(BaseRequest):
             "(Internal) Whether to automatically delete related WorkingMemory nodes "
             "based on working_binding metadata when deleting by memory_ids."
         ),
+    )
+    space_id: str | None = Field(
+        None,
+        description="Project memory: delete topics of this space (keeps the space itself).",
     )
 
     @model_validator(mode="after")
@@ -1054,6 +1078,13 @@ class GetCreateKnowledgebaseData(BaseModel):
 class SearchMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
+    topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    project_item_list: list[MemoryDetail] = Field(default_factory=list)
+    trajectory_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=list)
+    degraded: list[str] = Field(default_factory=list)
+    truncated: bool = False
+
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )
@@ -1098,6 +1129,7 @@ class GetKnowledgebaseFileData(BaseModel):
 class GetMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
+    topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )

@@ -710,3 +710,41 @@ def test_chat_stream_yields_sse_data_and_closes_response(monkeypatch, client_mod
     assert chunks == ['{"response":"first"}', "[DONE]"]
     assert stream_response.json_called is False
     assert stream_response.closed is True
+
+
+def test_project_sdk_parameters(client, posted_requests, fetched_requests):
+    client.search_memory(
+        query="rollout",
+        user_id="member",
+        include_memory_view=["project"],
+        space_ids=["A", "B"],
+        domains="ops",
+    )
+    body = _json_payload(posted_requests[-1])
+    assert (body["space_ids"], body["domains"], body["memory_limit_number"]) == (
+        ["A", "B"],
+        "ops",
+        9,
+    )
+    client.get_memory_by_id("decision-1", space_id="A", view="metadata")
+    assert fetched_requests[-1]["params"] == {"space_id": "A", "view": "metadata"}
+
+
+def test_project_review_sdk_views_and_scope(client, posted_requests):
+    client.search_memory(
+        query="migration",
+        user_id="member",
+        space_ids="space-a",
+        include_memory_view=["project"],
+        project_result_format="item",
+        project_item_types=["decision"],
+    )
+    req = _json_payload(posted_requests[-1])
+    assert req["project_result_format"] == "item" and req["project_item_types"] == ["decision"]
+    client.get_memory(space_id="space-a", page=2, size=3, filter={"related_id": "agent"})
+    assert _json_payload(posted_requests[-1]) == {
+        "space_id": "space-a",
+        "page": 2,
+        "size": 3,
+        "filter": {"related_id": "agent"},
+    }
