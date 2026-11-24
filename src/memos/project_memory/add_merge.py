@@ -113,6 +113,15 @@ def _has_newer_stance(option: ConflictItem, times: dict[str, str], received_time
     )
 
 
+def _own_revision(before: Decision, after: Decision, user_id: str) -> tuple[str, str] | None:
+    """The speaker's own position before and after, when this change replaced it."""
+    old_key, new_key = before.item_of(user_id), after.item_of(user_id)
+    if old_key is None or new_key is None:
+        return None
+    old, new = before.items()[old_key].content, after.items()[new_key].content
+    return (old, new) if old != new else None
+
+
 def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) -> None:
     topic_id = snapshot["id"]
     draft = _decision_draft(item)
@@ -172,9 +181,9 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
         history.reason = reason
     if memory.content != target.content:
         memory.reason = reason
-    if applied.action == decision.OP_REWRITE and memory.content != target.content:
-        # A member revising their own decision is also progress others should see.
-        change = f"{draft.name} 将决策从「{target.content}」改为「{memory.content}」"
+    if revised := _own_revision(target, memory, draft.user_id):
+        # A member changing their own position (current or conflicting) is progress too.
+        change = f"{draft.name} 将结论从「{revised[0]}」改为「{revised[1]}」"
         record = {
             "id": stable_uuid(f"timeline:{topic_id}:{item['draft_id']}:rewrite"),
             "content": change[:300],

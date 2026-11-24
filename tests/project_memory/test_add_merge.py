@@ -536,3 +536,47 @@ def test_decision_update_keeps_parallel_variants_and_name_differences_apart():
 
     assert "再加一个并列的变体" in DECISION_UPDATE
     assert "接口名或参数名有一处不同就算不同" in DECISION_UPDATE
+
+
+@pytest.mark.parametrize(
+    ("author", "recorded"),
+    [("other", True), ("newcomer", False)],
+    ids=["own-conflict-updated", "new-conflict-appended"],
+)
+def test_changing_ones_own_conflicting_position_is_recorded(author, recorded):
+    stored = {
+        "id": "same-decision",
+        "content": "池大小设为 8",
+        "time": "2026-11-19T01:00:00Z",
+        "user_ids": ["user"],
+        "source": {},
+        "history": [],
+        "conflicts": [
+            {
+                "seq": 1,
+                "content": "池大小设为 12",
+                "time": "2026-11-19T02:00:00Z",
+                "user_ids": ["other"],
+                "source": {},
+            }
+        ],
+    }
+    data = plan_for(
+        {"kind": "decision", "content": "池大小设为 16", "authors": [author], "author_name": author}
+    )
+    data["assignments"][0]["topic"]["decisions"] = [stored]
+    writer = Writer(
+        {
+            "dec.update": {
+                "results": [
+                    {"n": 1, "decision_id": "same-decision", "same_as": None, "action": "conflict"}
+                ]
+            }
+        }
+    )
+    proposed = prepare_merge(writer, data)["topics"][0]["topic"]
+    changes = [row["content"] for row in proposed["timeline"]]
+    if recorded:
+        assert changes == [f"{author} 将结论从「池大小设为 12」改为「池大小设为 16」"]
+    else:
+        assert changes == []
