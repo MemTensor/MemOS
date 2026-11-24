@@ -190,7 +190,7 @@ def test_task_topic_rates_allow_pure_split_or_pure_merge_but_reject_mixed_compon
     assert rubric["tasks"]["merge-missing"]["shape"] == "merge"
     assert rubric["tasks"]["merge-missing"]["omitted"] is False
     assert rubric["tasks"]["merge-missing"]["unassigned_turns"] == [
-        {"turn_id": "merge-missing-1", "status": "staged"}
+        {"turn_id": "merge-missing-1", "status": "staged", "memory_worthy": True}
     ]
     assert rubric["topic_turn_ids"]["mixed"]["mixed-b"] == ["mixed-b-0"]
 
@@ -236,3 +236,53 @@ def test_cli_reads_one_replay_and_writes_both_rubrics(tmp_path):
     report = json.loads(score_path.read_text())
     assert set(report["rubrics"]) == {"source_task", "gold_work"}
     assert report["turns"][0]["status"] == "missing"
+
+
+def test_acknowledgement_turns_need_no_topic_for_full_coverage():
+    turns = [turn("a", "u1", "t", "w"), {**turn("b", "u1", "t", "w"), "memory_worthy": False}]
+    observations = [prediction("a", ("x",)), prediction("b", (), status="no_drafts")]
+    rubric = score.score_replay({"turns": turns}, replay(observations, ("x",)))["rubrics"]
+    full = rubric["gold_work"]["task_topic_attribution"]["rates_full_coverage"]
+    assert full["strict_one_to_one"]["correct"] == 1
+
+
+def _decision(did, current, conflicts=(), history=()):
+    return {
+        "decision_id": did,
+        "current": current,
+        "conflicts": list(conflicts),
+        "history": list(history),
+    }
+
+
+@pytest.mark.parametrize(
+    ("kind", "decisions", "outcome", "correct"),
+    [
+        ("cross_user", [_decision("d", "a", conflicts=["b"])], "conflict_kept", True),
+        ("cross_user", [_decision("d", "b", history=["a"])], "revised_to_latest", False),
+        ("same_user", [_decision("d", "b", history=["a"])], "revised_to_latest", True),
+        ("same_user", [_decision("d", "a", conflicts=["b"])], "conflict_kept", False),
+        ("cross_user", [_decision("d", "a"), _decision("e", "b")], "separate_decisions", False),
+        ("cross_user", [_decision("d", "a")], "position_missing", False),
+    ],
+)
+def test_conflicts_are_scored_by_who_stated_each_position(kind, decisions, outcome, correct):
+    turns = [turn("a", "u1", "t", "w"), turn("b", "u2", "t", "w"), turn("c", "u3", "t", "v")]
+    manifest = {
+        "turns": turns,
+        "conflicts": [{"id": "k", "gold_work": "w", "kind": kind, "turn_ids": ["b", "a"]}],
+    }
+    observations = [prediction("a", ("x",)), prediction("b", ("x",)), prediction("c", ("y",))]
+    topics = replay(observations, ("x", "y"))
+    topics["topics"][0]["decisions"] = decisions
+    report = score.score_replay(manifest, topics)
+    (row,) = report["conflicts"]["conflicts"]
+    assert (row["outcome"], row["correct"]) == (outcome, correct)
+    assert report["conflicts"]["summary"][kind]["correct"] == int(correct)
+    split = report["rubrics"]["gold_work"]["task_topic_attribution"]["by_conflict"]
+    assert split["with_conflict"]["rates"]["strict_one_to_one"]["total"] == 1
+    assert split["without_conflict"]["rates_full_coverage"]["strict_one_to_one"] == {
+        "correct": 1,
+        "total": 1,
+        "rate": 1.0,
+    }

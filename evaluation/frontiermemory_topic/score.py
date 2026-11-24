@@ -88,6 +88,8 @@ def _join_turns(manifest: dict, replay: dict, topics: dict) -> list[dict]:
                 "conversation_id": label.get("conversation_id"),
                 "trace_url": label.get("trace_url"),
                 "source_ordinal": label.get("source_ordinal"),
+                # Pure acknowledgements have nothing to remember and need no Topic.
+                "memory_worthy": label.get("memory_worthy", True) is not False,
                 **{key: prediction[key] for key in _RESULT_DETAILS if key in prediction},
                 "status": status,
                 "topic_ids": topic_ids,
@@ -148,7 +150,13 @@ def _task_topic_attribution(turns: list[dict], gold_field: str) -> dict[str, Any
         task, topic_ids = turn[gold_field], turn["topic_ids"]
         task_topics[task].update(topic_ids)
         if not topic_ids:
-            unassigned[task].append({"turn_id": turn["turn_id"], "status": turn["status"]})
+            unassigned[task].append(
+                {
+                    "turn_id": turn["turn_id"],
+                    "status": turn["status"],
+                    "memory_worthy": turn["memory_worthy"],
+                }
+            )
         for topic_id in topic_ids:
             topic_turns[topic_id][task].append(turn["turn_id"])
 
@@ -184,7 +192,7 @@ def _task_topic_attribution(turns: list[dict], gold_field: str) -> dict[str, Any
             "allow_split_or_merge": shape in {"one_to_one", "split", "merge"},
         }
         counts.update(rule for rule, passed in passes.items() if passed)
-        if not unassigned[task]:
+        if not any(row["memory_worthy"] for row in unassigned[task]):
             full.update(rule for rule, passed in passes.items() if passed)
         tasks[task] = {
             "complete": not unassigned[task],
@@ -264,14 +272,114 @@ def _score_rubric(turns: list[dict], pairs: list[dict], gold_field: str) -> dict
     }
 
 
+def _positions(topics: dict[str, dict]) -> dict[str, list[dict[str, Any]]]:
+    """Every decision position by source message: which Topic, decision and role holds it."""
+    found: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for topic_id, topic in topics.items():
+        for decision in topic.get("decisions") or []:
+            roles = [("current", decision.get("current"))]
+            roles += [("conflict", m) for m in decision.get("conflicts") or []]
+            roles += [("history", m) for m in decision.get("history") or []]
+            for role, message in roles:
+                if message:
+                    found[message].append(
+                        {"topic_id": topic_id, "decision_id": decision["decision_id"], "role": role}
+                    )
+    return found
+
+
+def _conflict_outcome(conflict: dict, order: dict[str, int], positions: dict) -> str:
+    """Classify how a labelled conflict ended up in the committed decisions."""
+    turns = sorted(conflict["turn_ids"], key=order.__getitem__)
+    held = {turn: positions.get(turn, []) for turn in turns}
+    if any(not rows for rows in held.values()):
+        return "position_missing"
+    decisions = set.intersection(*({row["decision_id"] for row in rows} for rows in held.values()))
+    if not decisions:
+        topics = set.intersection(*({row["topic_id"] for row in rows} for rows in held.values()))
+        return "separate_decisions" if topics else "separate_topics"
+    roles = {
+        turn: {row["role"] for row in rows if row["decision_id"] in decisions}
+        for turn, rows in held.items()
+    }
+    if all(role & {"current", "conflict"} for role in roles.values()):
+        return "conflict_kept"
+    if "current" in roles[turns[-1]] and all("history" in roles[t] for t in turns[:-1]):
+        return "revised_to_latest"
+    return "overwritten_otherwise"
+
+
+# Who may change a decision: a member revises their own; another member's view stays open.
+_EXPECTED_CONFLICT = {"cross_user": "conflict_kept", "same_user": "revised_to_latest"}
+
+
+def _score_conflicts(manifest: dict, turns: list[dict], topics: dict) -> dict[str, Any]:
+    order = {turn["turn_id"]: index for index, turn in enumerate(turns)}
+    positions = _positions(topics)
+    rows = []
+    for conflict in manifest.get("conflicts") or []:
+        outcome = _conflict_outcome(conflict, order, positions)
+        expected = _EXPECTED_CONFLICT[conflict["kind"]]
+        rows.append(
+            {
+                "id": conflict["id"],
+                "gold_work": conflict["gold_work"],
+                "kind": conflict["kind"],
+                "outcome": outcome,
+                "correct": outcome == expected,
+                # Both views survive in one Topic, as a conflict or as two decisions.
+                "both_retained": outcome in {"conflict_kept", "separate_decisions"},
+            }
+        )
+    summary = {}
+    for kind in _EXPECTED_CONFLICT:
+        group = [row for row in rows if row["kind"] == kind]
+        summary[kind] = {
+            "total": len(group),
+            "correct": sum(row["correct"] for row in group),
+            "both_retained": sum(row["both_retained"] for row in group),
+            "outcomes": dict(sorted(Counter(row["outcome"] for row in group).items())),
+        }
+    return {"summary": summary, "conflicts": rows}
+
+
+def _subset_rates(attribution: dict, tasks: set[str]) -> dict[str, dict[str, Any]]:
+    rows = [row for task, row in attribution["tasks"].items() if task in tasks]
+    out = {}
+    for key, needs_complete in (("rates", False), ("rates_full_coverage", True)):
+        out[key] = {
+            rule: {
+                "correct": (
+                    correct := sum(
+                        row["passes"][rule] and (row["complete"] or not needs_complete)
+                        for row in rows
+                    )
+                ),
+                "total": len(rows),
+                "rate": _ratio(correct, len(rows)),
+            }
+            for rule in _ATTRIBUTION_RULES
+        }
+    return out
+
+
 def score_replay(manifest: dict[str, Any], replay: dict[str, Any]) -> dict[str, Any]:
     """Score cross-user pairs on the same replay, treating absent Turn rows as uncovered."""
     topics = _index(replay, "topics", "topic_id")
     turns = _join_turns(manifest, replay, topics)
     pairs = _pair_records(turns)
+    rubrics = {field: _score_rubric(turns, pairs, field) for field in _RUBRICS}
+    conflicts = _score_conflicts(manifest, turns, topics)
+    contested = {row["gold_work"] for row in conflicts["conflicts"]}
+    attribution = rubrics["gold_work"]["task_topic_attribution"]
+    attribution["by_conflict"] = {
+        "with_conflict": _subset_rates(attribution, contested),
+        "without_conflict": _subset_rates(attribution, set(attribution["tasks"]) - contested),
+    }
     return {
         "turn_counts": _turn_counts(turns),
-        "rubrics": {field: _score_rubric(turns, pairs, field) for field in _RUBRICS},
+        "rubrics": rubrics,
+        "conflicts": conflicts,
         "rubric_disagreements": [
             pair for pair in pairs if pair["same_source_task"] != pair["same_gold_work"]
         ],
