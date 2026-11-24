@@ -1,4 +1,4 @@
-import { access, cp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ import type { AdapterProfile } from './types.ts';
 const run=promisify(execFile);
 const marker='memos-project-memory';
 interface Options { home?:string; cwd?:string; dshHome?:string }
-interface Manifest { configPath?:string; entries?:Record<string,unknown>; skillFile:string; skillHash:string; previousEnabled?:unknown; installedAt:string }
+interface Manifest { configPath?:string; entries?:Record<string,unknown>; skillFile:string; skillHash:string; skillFiles?:Array<{path:string;hash:string}>; previousEnabled?:unknown; installedAt:string }
 export interface InstallResult { installed:boolean; files:string[]; instructions:string[] }
 const digest=(value:string):string=>createHash('sha256').update(value).digest('hex');
 const quote=(value:string):string=>`'${value.replace(/'/g,"'\\''")}'`;
@@ -53,8 +53,8 @@ async function handlers(profile:AdapterProfile):Promise<Record<string,unknown>>{
  const entry=fileURLToPath(new URL(`./${profile.id}/index.${suffix}`,import.meta.url));
  return Object.fromEntries((hookEvents[profile.id] ?? []).map(event=>{
   const command=`${quote(executable)} ${quote(entry)} ${quote(event)}`;
-  const handler={type:'command',command,timeout:10};
-  if(profile.id==='cursor-cli')return [event,event==='preToolUse'?{command,matcher:'Shell'}:{command}];
+  const handler={type:'command',command,timeout:profile.sessionStartBlocking&&event==='SessionStart'?20:10};
+  if(profile.id==='cursor-cli')return [event,{command}];
   if(profile.id==='copilot-cli')return [event,{type:'command',exec:executable,args:[entry,event],timeoutSec:10}];
   if(profile.id==='zcode')return [event,{hooks:[{type:'process',command:executable,args:[entry,event],timeoutMs:10000}]}];
   if(profile.id==='antigravity-cli'&&!event.includes('ToolUse'))return [event,handler];
@@ -68,30 +68,42 @@ function kimiBlock(entries:Record<string,unknown>):string{
  }).join('\n')+`# ${marker}:end\n`;
 }
 function stripKimi(text:string):string{return text.replace(new RegExp(`(?:\\n)?# ${marker}:start\\n[\\s\\S]*?# ${marker}:end\\n?`,'g'),'');}
-async function installSkill(profile:AdapterProfile,options:Options):Promise<{path:string;hash:string}>{
- const source=fileURLToPath(new URL('../../skills/project-memory',import.meta.url));
- const directory=targetPath(profile,join(profile.skillPath,marker),options);const path=join(directory,'SKILL.md');
- const previous=object(await json(manifestPath(profile,options.home??homedir())));
- if(await exists(path)){
-  const current=await readFile(path,'utf8');
-  const incoming=await readFile(join(source,'SKILL.md'),'utf8');
-  if(current!==incoming&&digest(current)!==previous.skillHash)throw new Error(`Skill already exists and is not owned by this installer: ${path}`);
+async function installSkills(profile:AdapterProfile,options:Options):Promise<Array<{path:string;hash:string}>>{
+ const previous=await json(manifestPath(profile,options.home??homedir()));
+ const owned=Array.isArray(previous.skillFiles)?previous.skillFiles.map(object):[];
+ if(typeof previous.skillFile==='string')owned.push({path:previous.skillFile,hash:previous.skillHash});
+ const writes:Array<{path:string;text:string}>=[];
+ for(const [sourceName,installedName] of [['project-memory',marker],['create-project-space','memos-create-project-space'],['bind-project-space','memos-bind-project-space'],['list-project-spaces','memos-list-project-spaces'],['unbind-project-space','memos-unbind-project-space']]){
+  const source=fileURLToPath(new URL(`../../skills/${sourceName}/`,import.meta.url));
+  const directory=targetPath(profile,join(profile.skillPath,installedName!),options);
+  for(const relative of ['SKILL.md','references/cli-contract.md']){
+   let text=await readFile(join(source,relative),'utf8');
+   if(relative==='SKILL.md'&&['project-memory','create-project-space'].includes(sourceName!)&&['cursor-cli','grok-build'].includes(profile.id)){
+    text+=sourceName==='project-memory'
+     ? "\n## Host-provided search identity\n\nUse the command below on this host. Before the Shell tool executes, the adapter supplies the current session and user-turn variables through the host's native preToolUse input rewriting. These values come from the local service, not from historical identifiers, directories, or shared files. Do not replace them with literal IDs from an earlier turn.\n\n```sh\nmemos-pm search --session-id \"$MEMOS_PM_SESSION_ID\" --conversation-id \"$MEMOS_PM_CONVERSATION_ID\" --query \"a specific question\"\n```\n"
+     : "\n## Host-provided creation identity\n\nUse the command below on this host. The adapter supplies the current-turn variable before Shell execution, including for an unbound project. Do not set this variable yourself or replace it with a historical identifier.\n\n```sh\nmemos-pm create --context \"$MEMOS_PM_CREATE_CONTEXT\" --name \"<user-confirmed name>\" --domain \"<user-confirmed domain>\"\n```\n";
+   }
+   writes.push({path:join(directory,relative),text});
+  }
  }
- await mkdir(directory,{recursive:true});await cp(source,directory,{recursive:true});
- if(['cursor-cli','grok-build'].includes(profile.id)){
-  const base=await readFile(path,'utf8');
-  await writeFile(path,base+'\n## 当前宿主身份交付\n\n本宿主 search 使用下面命令。适配器在 Shell 工具执行前，通过原生 preToolUse 输入修改机制绑定当前会话与当前轮变量；变量由本地服务提供，不从历史标识、目录或共享文件推测。不要替换为上一轮字面 ID。\n\n```sh\nmemos-pm search --session-id "$MEMOS_PM_SESSION_ID" --conversation-id "$MEMOS_PM_CONVERSATION_ID" --query "具体问题"\n```\n');
+ // Check every file before writing any Skill, so a user edit cannot leave a partial update.
+ for(const item of writes){
+  if(!await exists(item.path))continue;
+  const current=await readFile(item.path,'utf8');
+  if(current!==item.text&&!owned.some(file=>file.path===item.path&&file.hash===digest(current)))throw new Error(`Skill already exists and is not owned by this installer: ${item.path}`);
  }
- return {path,hash:digest(await readFile(path,'utf8'))};
+ for(const item of writes){await mkdir(dirname(item.path),{recursive:true});await writeFile(item.path,item.text);}
+ return writes.map(item=>({path:item.path,hash:digest(item.text)}));
 }
 
 export async function installAdapter(id:string,options:Options={}):Promise<InstallResult>{
  const profile=getProfile(id);const home=options.home??homedir();const cwd=options.cwd??process.cwd();
+ if(id==='prime-agent')return (await import('./prime-agent/install.ts')).installPrime(options);
  if(profile.kind!=='hook'){
   const {installNative}=await import('./_shared/native-install.ts');return installNative(profile,{home,cwd,dshHome:options.dshHome??(options.home?undefined:process.env.DSH_HOME)});
  }
- const skill=await installSkill(profile,options);const entries=await handlers(profile);const files=[skill.path];
- const manifest:Manifest={skillFile:skill.path,skillHash:skill.hash,installedAt:new Date().toISOString()};
+ const skills=await installSkills(profile,options);const skill=skills[0]!;const entries=await handlers(profile);const files=skills.map(file=>file.path);
+ const manifest:Manifest={skillFile:skill.path,skillHash:skill.hash,skillFiles:skills,installedAt:new Date().toISOString()};
  if(profile.configPath){
   const path=targetPath(profile,profile.configPath,options);manifest.configPath=path;files.push(path);
   if(id==='kimi-code'){
@@ -131,10 +143,15 @@ export async function uninstallAdapter(id:string,options:Options={}):Promise<Ins
   }
   files.push(configPath);
  }
- if(typeof manifest.skillFile==='string'&&await exists(manifest.skillFile)&&digest(await readFile(manifest.skillFile,'utf8'))===manifest.skillHash){
-  // Codex and dcode share one official skill root; leave shared installation while another profile owns it.
-  const others=await Promise.all(profiles.filter(p=>p.id!==id).map(p=>json(manifestPath(p,home))));
-  if(!others.some(other=>other.skillFile===manifest.skillFile || (Array.isArray(other.files)&&other.files.some(file=>object(file).path===manifest.skillFile)))){await rm(dirname(manifest.skillFile),{recursive:true});files.push(manifest.skillFile);}
+ const skills=Array.isArray(manifest.skillFiles)?manifest.skillFiles.map(object)
+  : typeof manifest.skillFile==='string'?[{path:manifest.skillFile,hash:manifest.skillHash}]:[];
+ // Codex and dcode share official Skill roots; leave files while another profile owns them.
+ const others=await Promise.all(profiles.filter(p=>p.id!==id).map(p=>json(manifestPath(p,home))));
+ for(const skill of skills){
+  if(typeof skill.path!=='string'||!await exists(skill.path)||digest(await readFile(skill.path,'utf8'))!==skill.hash)continue;
+  const shared=others.some(other=>other.skillFile===skill.path
+   || [other.skillFiles,other.files].some(list=>Array.isArray(list)&&list.some(file=>object(file).path===skill.path)));
+  if(!shared){await rm(skill.path);files.push(skill.path);}
  }
  await rm(path,{force:true});return {installed:false,files,instructions:[]};
 }

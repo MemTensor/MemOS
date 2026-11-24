@@ -6,6 +6,8 @@ import { createInterface } from 'node:readline';
 import { DatabaseSync } from 'node:sqlite';
 import { createZstdDecompress } from 'node:zlib';
 import { object } from './_shared/transcript.ts';
+import { workbuddyConfigDir } from './workbuddy/paths.ts';
+import { discoverPrimeProjects } from './prime-agent/projects.ts';
 
 export type Project = { name: string; root: string };
 
@@ -49,8 +51,32 @@ function parse(text: string): Record<string, unknown> {
   catch { return {}; }
 }
 
+/** Extract only the top-level cwd scalar emitted by Copilot's workspace writer. */
+function copilotDirectory(text: string): string | undefined {
+  const lines = text.split('\n');
+  const index = lines.findIndex(line => /^cwd:/.test(line));
+  if (index < 0 || index === lines.length - 1) return undefined;
+  const value = lines[index]!.slice(4).trim();
+  if (value.startsWith('"')) {
+    try { const decoded: unknown = JSON.parse(value); return typeof decoded === 'string' ? decoded : undefined; }
+    catch { return undefined; }
+  }
+  if (value.startsWith("'")) return /^'(?:[^']|'')*'$/.test(value) ? value.slice(1, -1).replaceAll("''", "'") : undefined;
+  if (/^\|[+-]?$/.test(value)) {
+    const content: string[] = [];
+    for (const line of lines.slice(index + 1, -1)) {
+      if (line && !line.startsWith('  ')) break;
+      content.push(line.slice(2));
+    }
+    const body = content.join('\n') + '\n';
+    return value === '|+' ? body : body.replace(/\n+$/, '') + (value === '|' ? '\n' : '');
+  }
+  return value;
+}
+
 /** Discover existing host projects without starting agents or registering local state. */
 export async function discoverProjects(agentType: string, options: { home?: string } = {}): Promise<Project[]> {
+  if (agentType === 'prime-agent') return discoverPrimeProjects(options);
   const home = options.home ?? homedir();
   const base = (variable: string, fallback: string) => options.home ? join(home, fallback) : process.env[variable] || join(home, fallback);
   const projects = new Map<string, Project>();
@@ -82,6 +108,24 @@ export async function discoverProjects(agentType: string, options: { home?: stri
   };
   if (agentType === 'claude-code') {
     await fromDirectories(join(base('CLAUDE_CONFIG_DIR', '.claude'), 'projects'), row => row.cwd);
+  } else if (agentType === 'copilot-cli') {
+    for (const path of await files(join(base('COPILOT_HOME', '.copilot'), 'session-state'), 1, name => name === 'workspace.yaml'))
+      add(copilotDirectory(await header(path)));
+  } else if (agentType === 'cursor-cli') {
+    const chats = join(home, '.cursor/chats'), workspaces = join(home, '.cursor/projects');
+    for (const group of await entries(chats)) {
+      if (!group.isDirectory()) continue;
+      for (const session of await entries(join(chats, group.name))) {
+        if (!session.isDirectory()) continue;
+        for (const path of await files(join(chats, group.name, session.name), 0, name => name === 'meta.json'))
+          add(parse(await readFile(path, 'utf8').catch(() => '{}')).cwd);
+      }
+    }
+    for (const project of await entries(workspaces)) {
+      if (!project.isDirectory()) continue;
+      for (const path of await files(join(workspaces, project.name), 0, name => name === '.workspace-trusted'))
+        add(parse(await readFile(path, 'utf8').catch(() => '{}')).workspacePath);
+    }
   } else if (agentType === 'codex-cli') {
     const codexHome = base('CODEX_HOME', '.codex');
     for (const directory of ['sessions', 'archived_sessions']) {
@@ -118,9 +162,17 @@ export async function discoverProjects(agentType: string, options: { home?: stri
     catch { /* Missing or malformed indexes simply have no discoverable projects. */ }
     finally { lines.close(); stream.destroy(); }
   } else if (agentType === 'workbuddy') {
-    for (const path of await files(join(base('WORKBUDDY_CONFIG_DIR', '.workbuddy'), 'projects'), 3, name => name.endsWith('.meta.json'))) {
+    const root = await workbuddyConfigDir(options.home);
+    await fromDirectories(join(root, 'projects'), row => row.cwd);
+    for (const path of await files(join(root, 'projects'), 3, name => name.endsWith('.meta.json'))) {
       add(parse(await header(path)).cwd);
     }
+    let db: DatabaseSync | undefined;
+    try {
+      db = new DatabaseSync(join(root, 'workbuddy.db'), { readOnly: true });
+      for (const row of db.prepare("SELECT name,COALESCE(NULLIF(primary_folder_path,''),create_folder_path) AS path FROM spaces WHERE status='active' AND deleted_at=-1 AND transport='local'").all()) add(row.path, row.name);
+    } catch { /* Keep transcript discovery when the native index is absent or unavailable. */ }
+    finally { db?.close(); }
   } else if (agentType === 'pi') {
     await fromDirectories(join(base('PI_CODING_AGENT_DIR', '.pi/agent'), 'sessions'),
       row => row.type === 'session' ? row.cwd : undefined);

@@ -1,16 +1,16 @@
-# CLI 契约
+# Search CLI Contract
 
 ```sh
-memos-pm search --session-id '<session_id>' --conversation-id '<conversation_id>' --query '问题'
+memos-pm search --session-id '<session_id>' --conversation-id '<conversation_id>' --query 'question'
 ```
 
-三个参数均必填。`session_id` 表示当前会话窗口；`conversation_id` 表示当前用户输入轮。两者只用于本地定位及检索归属，不是云端同名参数。适配器负责逐轮交付，不写入静态 Skill。
+All three arguments are required. `session_id` identifies the current host session; `conversation_id` identifies the current user-input turn. They are used for local routing and search attribution and are not the cloud API parameters with the same names. The adapter supplies them for each turn; do not place live identifiers in this static Skill.
 
-一条命令覆盖项目当前绑定的全部 Space：本地服务一次性补齐云端请求的 `space_ids` 列表。无需按 Space 多次调用，也不由模型填写或管理 Space ID；绑定列表为空时返回 `UNAVAILABLE`。
+One command searches all Spaces currently bound to the project: the local service supplies the complete `space_ids` list in a single cloud request. Do not issue a separate search for each Space or have the model supply or manage Space IDs. An empty binding list returns `UNAVAILABLE`.
 
-参数可由宿主的运行上下文交付。历史中保留的旧上下文不代表当前参数；使用当前生效的会话与轮次标识。本轮标识不可用时，不能回退到历史标识。Skill 简介与动态参数均不替代完整使用说明。
+The host's runtime context may supply these arguments. Old context retained in history is not the current invocation context. Use the currently effective session and turn identifiers; do not fall back to historical ones when this turn's identifiers are unavailable. Neither the Skill description nor dynamic parameters replace the full usage instructions.
 
-stdout 仅含 JSON，stderr 为简短诊断。典型成功结构：
+stdout contains only JSON; stderr may contain a short diagnostic. A successful response has this shape:
 
 ```json
 {
@@ -23,14 +23,14 @@ stdout 仅含 JSON，stderr 为简短诊断。典型成功结构：
 }
 ```
 
-此处空数组仅展示结构，不是实际命中。主题可能包含决策、经验、时间线及各决策所属的历史与冲突；保留其关联，不将多项结论压成单一事实。仅引用实际返回的作者与时间，不补造来源。
+The empty array above illustrates the schema, not an actual match. Topics may include decisions, experiences, a timeline, and history or conflicts attached to particular decisions. Preserve these relationships rather than flattening multiple conclusions into a single fact. Cite only authors and timestamps actually returned; do not invent provenance.
 
-| status | 退出码 | 处理 |
+| status | Exit code | Handling |
 |---|---:|---|
-| FOUND | 0 | 有匹配结果，核对适用性后使用 |
-| EMPTY | 0 | 查询成功但无匹配结果 |
-| UNAVAILABLE | 非零 | 暂不可用，不能伪装为无记忆 |
-| INVALID_QUERY | 非零 | query 缺失或为空白，修正 query |
-| CONTEXT_MISSING | 非零 | 标识缺失、未知、错配或过期；使用当前适配器交付标识 |
+| FOUND | 0 | Matches were returned; check applicability before using them |
+| EMPTY | 0 | The search succeeded without matching results |
+| UNAVAILABLE | Nonzero | Search is unavailable; do not present this as absence of memory |
+| INVALID_QUERY | Nonzero | query is missing or blank; correct it |
+| CONTEXT_MISSING | Nonzero | Identifiers are missing, unknown, mismatched, or expired; use the current adapter-supplied identifiers |
 
-不提供额外配置参数或管理子命令。用户、Agent 及项目归属由本地服务负责。记忆不可用不阻止宿主继续原任务。
+No additional configuration arguments or management subcommands are provided by this Skill. The local service resolves the user, Agent, and project. Unavailable memory does not prevent the host from continuing the original task.

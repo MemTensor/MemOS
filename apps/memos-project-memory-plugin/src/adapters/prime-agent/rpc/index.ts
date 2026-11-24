@@ -1,16 +1,33 @@
-import { observed } from '../../_shared/transcript.ts';
+import { observed, object } from '../../_shared/transcript.ts';
+import type { AgentEvent, TraceInput } from '../../types.ts';
+import { filterPrimeSkills } from '../skill-filter.ts';
 import { readFile } from 'node:fs/promises';
 import { executionMessage } from '../../_shared/task-trace.ts';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { Bridge, message, type Data, type Send } from '../../opencode-v1/extension/bridge.ts';
+import { Bridge, message, sendEvent, type Data, type Send } from '../../opencode-v1/extension/bridge.ts';
 export interface RPC {request(type:string,payload?:Data):Promise<Data>}
 /** One controller owns one stdio session. All user prompts must pass submit(). */
 export class PrimeController {
  readonly rpc:RPC; readonly bridge:Bridge; sessionId=''; sessionFile:string|undefined; busy=false; private readonly seenEntries=new Set<string>();
- constructor(rpc:RPC,cwd:string,send?:Send){this.rpc=rpc;this.bridge=new Bridge('prime-agent',cwd,send);}
+ private skillCalls:TraceInput[]=[];
+ constructor(rpc:RPC,cwd:string,send:Send=sendEvent){
+  this.rpc=rpc;
+  const transport=Object.assign(async(event:AgentEvent)=>{
+   const records=filterPrimeSkills([...this.skillCalls,...event.records??[]]);
+   const projected=records.slice(this.skillCalls.length);
+   // Only already projected invocation metadata survives between RPC events.
+   this.skillCalls=[...new Map(records.filter(record=>record.message?.tool_calls?.some(call=>object(object(call).function).name==='skill')
+    ||Array.isArray(record.message?.content)&&record.message.content.some(part=>object(part).name==='skill'&&typeof object(object(part).arguments).skill_name==='string'))
+    .map(record=>[`${record.nativeTurnId??''}\0${record.sourceId}`,record])).values()];
+   const result=await send({...event,...(event.records?{records:projected}:{})});
+   if(event.event==='turn-end'||event.event==='session-end')this.skillCalls=[];
+   return result;
+  },{activation:send.activation,delivered:send.delivered,createContext:send.createContext});
+  this.bridge=new Bridge('prime-agent',cwd,transport);
+ }
  async initialize(){const state=await this.rpc.request('get_state');if(typeof state.sessionId!=='string')throw new Error('Prime get_state missing persistent sessionId');this.sessionId=state.sessionId;this.sessionFile=typeof state.sessionFile==='string'?state.sessionFile:undefined;await this.bridge.start(this.sessionId);await this.replay();return state;}
  async submit(text:string,inputId:string=randomUUID(),images?:unknown[]) {
   if(this.busy)throw new Error('Prime is processing an input; wait for agent_end before submitting another');

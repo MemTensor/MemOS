@@ -1,10 +1,18 @@
+import { filterBindRecords, isBindControl } from '../adapters/_shared/bind-records.ts';
+import { hasTaskContent } from '../adapters/_shared/message-content.ts';
+import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import type { CodexSnapshot, CodexTurn, CodexExpectedChild, CodexSourceKind } from '../adapters/codex-cli/types.ts';
+import type { Message } from '../adapters/types.ts';
 import type { Store, Session } from './store.ts';
 import { hasCodexActivity } from '../adapters/codex-cli/rollout.ts';
 import { orderTraceRecords } from './trace-order.ts';
+import { filterUploadTraces } from './upload-filter.ts';
+import { uploadValidationError } from '../adapters/_shared/message-content.ts';
+import { filterCodexSkills } from '../adapters/codex-cli/skill-filter.ts';
+import { hasIncompleteSkill } from '../adapters/_shared/skill-records.ts';
 
 type Row = Record<string, unknown>;
 interface Source { sourcePath: string; nativeSessionId: string; cwd: string; parentNativeSessionId?: string; agentPath?: string; sourceKind: CodexSourceKind; startedAt?: string; gaps: string[] }
@@ -98,15 +106,19 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                 for (const turn of snapshot.turns) {
                     if (turn.sourceKind === 'background' || turn.sourceKind === 'unknown') continue;
                     this.store.db.prepare('INSERT INTO codex_execution_sources VALUES(?,?,?,?,?,?,?,?,?,?)').run(snapshot.sourcePath, snapshot.nativeSessionId, turn.nativeTurnId, turn.rootTurnId, turn.parentTurnId ?? null, turn.startedAt ?? null, turn.completedAt ?? null, turn.status, JSON.stringify(turn.expectedChildren), JSON.stringify(turn.gaps));
-                    for (const record of turn.records) {
+                    for (const record of filterBindRecords(filterCodexSkills(turn.records))) {
                         const sourceId = JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId]);
                         if (!sourceId || !record.message) continue;
+                        const normalized = isBindControl(record) ? record : normalizeTaskTrace('codex-cli', record);
+                        if (!normalized?.message || !isBindControl(normalized) && !hasTaskContent(normalized.message)) continue;
+                        if (Array.isArray((record.raw as Record<string, unknown>).bindCallIds)) normalized.raw = { ...(normalized.raw as Record<string, unknown>), bindCallIds: (record.raw as Record<string, unknown>).bindCallIds };
                         let meta = this.store.row('SELECT traceId FROM codex_event_meta WHERE sourceId=?', sourceId);
                         if (!meta) {
-                            const inserted = this.store.db.prepare('INSERT INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(NULL,NULL,?,?,?,?)').run(`codex:v2:${sourceId}`, JSON.stringify(record.raw), JSON.stringify(record.message), now());
+                            const inserted = this.store.db.prepare('INSERT INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(NULL,NULL,?,?,?,?)').run(`codex:v2:${sourceId}`, JSON.stringify(normalized.raw), JSON.stringify(normalized.message), now());
                             meta = { traceId: Number(inserted.lastInsertRowid) };
-                        } else {
-                            this.store.db.prepare('UPDATE traces SET raw=?,message=? WHERE id=?').run(JSON.stringify(record.raw), JSON.stringify(record.message), Number(meta.traceId));
+                        } else if ((isBindControl(record) || hasTaskContent(record.message))
+                            && (!(isBindControl(record) || Array.isArray((record.raw as Record<string, unknown>).bindCallIds)) || !this.bindingAuditFrozen(Number(meta.traceId)))) {
+                            this.store.db.prepare('UPDATE traces SET raw=?,message=? WHERE id=?').run(JSON.stringify(normalized.raw), JSON.stringify(normalized.message), Number(meta.traceId));
                         }
                         this.store.db.prepare(`INSERT INTO codex_event_meta VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(sourceId) DO UPDATE SET originSessionId=excluded.originSessionId,nativeTurnId=excluded.nativeTurnId,rootTurnId=excluded.rootTurnId,occurredAt=excluded.occurredAt,sourceOrdinal=excluded.sourceOrdinal,agentPath=excluded.agentPath`).run(sourceId, Number(meta.traceId), record.originSessionId || snapshot.nativeSessionId, record.nativeTurnId ?? turn.nativeTurnId, turn.rootTurnId, record.occurredAt ?? null, record.sourceOrdinal, record.agentPath ?? snapshot.agentPath ?? null);
                         this.store.db.prepare('INSERT OR REPLACE INTO codex_event_sources(sourcePath,sourceId,messageHash) VALUES(?,?,?)').run(snapshot.sourcePath, sourceId, hash(record.message));
@@ -118,6 +130,11 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
             if (options.prepareUploads) this.prepareUploads(options.requireBinding);
             return { rounds: Number(this.store.row('SELECT count(*) AS n FROM codex_rounds')?.n ?? 0) };
         });
+    }
+    private bindingAuditFrozen(traceId: number): boolean {
+        if (this.store.row('SELECT 1 FROM traces t JOIN batches b ON b.id=t.batchId WHERE t.id=? AND (b.attempts>0 OR b.uploaded=1)', traceId)) return true;
+        return !!this.store.row("SELECT 1 FROM sqlite_master WHERE name='batch_traces'")
+            && !!this.store.row('SELECT 1 FROM batch_traces bt JOIN batches b ON b.id=bt.batchId WHERE bt.traceId=? AND (b.attempts>0 OR b.uploaded=1)', traceId);
     }
     /** Remove only proven initialization-only sources, never unresolved or audit-bearing work. */
     pruneEmptySessions() {
@@ -320,9 +337,10 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                 const scope = owner && this.store.memory.get(owner.objectId);
                 if (scope ? !scope.spaceIds.length : requireBinding) continue;
                 const id = String(round.conversationId), existing = batches.get(id);
+                if (this.store.creation?.turnExcluded(String(round.ownerSessionId), id)) continue;
                 if (existing?.attempts || existing?.uploaded) {
                     if (!round.snapshotHash) {
-                        const messages = this.orderedRoundRecords(id).map(row => row.message);
+                        const messages = filterUploadTraces(this.orderedRoundRecords(id)).map(row => row.message);
                         const originalHash = JSON.stringify(existing.messages) === JSON.stringify(messages) ? String(round.eventSetHash) : `legacy:${hash(existing.messages)}`;
                         this.store.db.prepare('UPDATE codex_rounds SET snapshotHash=? WHERE conversationId=?').run(originalHash, id);
                     }
@@ -332,11 +350,12 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                     if (existing) this.store.updateBatch(existing.id, { status: 'blocked', error: 'Codex 整轮轨迹尚未收齐' });
                     continue;
                 }
-                if (existing && round.snapshotHash === round.eventSetHash && (existing.status === 'pending' || existing.error === '整轮轨迹超出保守上传容量；完整内容已保留')) continue;
-                const messages = this.orderedRoundRecords(id).map(row => row.message), payload = JSON.stringify(messages);
+                if (existing && round.snapshotHash === round.eventSetHash && (['pending', 'cancelled'].includes(existing.status) || existing.error === '整轮轨迹超出保守上传容量；完整内容已保留')) continue;
+                const messages = filterUploadTraces(this.orderedRoundRecords(id)).map(row => row.message), payload = JSON.stringify(messages);
                 if (!messages.length) continue;
-                const oversized = Buffer.byteLength(payload, 'utf8') > 39000;
-                const status = oversized ? 'blocked' : 'pending', error = oversized ? '整轮轨迹超出保守上传容量；完整内容已保留' : null;
+                const oversized = Buffer.byteLength(payload, 'utf8') > this.store.uploadMaxBytes;
+                const error = uploadValidationError(messages as import('../adapters/types.ts').Message[]) ?? (messages.some(message => hasIncompleteSkill(message as import('../adapters/types.ts').Message)) ? 'Skill 与业务输出无法可靠拆分；正文未采集，轨迹不完整' : oversized ? '整轮轨迹超出保守上传容量；完整内容已保留' : null);
+                const status = error ? 'blocked' : 'pending';
                 const batchId = existing?.id ?? randomUUID(), session = this.store.session(String(round.ownerSessionId))!;
                 if (existing) this.store.db.prepare('UPDATE batches SET messages=?,status=?,error=? WHERE id=? AND attempts=0 AND uploaded=0').run(payload, status, error, batchId);
                 else this.store.db.prepare('INSERT INTO batches(id,sessionId,objectId,conversationId,messages,status,error,createdAt) VALUES(?,?,?,?,?,?,?,?)').run(batchId, session.id, session.objectId, id, payload, status, error, typeof round.startedAt === 'string' ? round.startedAt : now());
@@ -390,7 +409,7 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
     }
     detail(id: string, page: number, size: number, unit: 'trace' | 'turn') {
         const all = this.rounds(id), selected = unit === 'turn' ? all.slice((page - 1) * size, page * size) : all;
-        const groups = selected.map(round => ({ ...round, captureStatus: String(round.captureStatus), executionStatus: String(round.executionStatus), id: String(round.conversationId), roundNumber: all.findIndex(item => item.conversationId === round.conversationId) + 1, gaps: JSON.parse(String(round.gaps)), uploadOutOfDate: !!round.snapshotHash && round.snapshotHash !== round.eventSetHash, traces: this.orderedRoundRecords(String(round.conversationId)) }));
+        const groups = selected.map(round => ({ ...round, captureStatus: String(round.captureStatus), executionStatus: String(round.executionStatus), id: String(round.conversationId), roundNumber: all.findIndex(item => item.conversationId === round.conversationId) + 1, gaps: JSON.parse(String(round.gaps)), uploadOutOfDate: !!round.snapshotHash && round.snapshotHash !== round.eventSetHash, traces: this.orderedRoundRecords(String(round.conversationId)).filter(row => !isBindControl({ sourceId: String(row.sourceId), raw: row.raw, message: row.message as Message })) }));
         const completeTraces = groups.flatMap(group => group.traces);
         const traces = unit === 'turn' ? completeTraces : completeTraces.slice((page - 1) * size, page * size);
         const session = this.decorateSessions([this.store.session(id)! as unknown as Row])[0] ?? this.store.session(id);

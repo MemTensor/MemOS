@@ -1,0 +1,16 @@
+{
+  "status": "blocked",
+  "score": 0,
+  "threshold": 90,
+  "threshold_pass": false,
+  "verdict": "fail",
+  "category_match": false,
+  "differences": [],
+  "suggestions": [
+    "Capture the confirmation in a browser when the preview service is available."
+  ],
+  "reasoning": "Visual verification could not run: CUA reported no browsers and a native service startup failure. No screenshot-based appearance score is available; zero indicates unverified, not a measured visual mismatch.",
+  "next_actions": [
+    "Visually inspect the dialog at desktop and narrow widths when browser access is restored."
+  ]
+}

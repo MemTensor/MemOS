@@ -12,7 +12,7 @@ import type { Store } from '../storage/store.ts';
 
 export interface CodexCaptureOptions { codexRoots?: string[] }
 type Header = { path: string; id: string; cwd: string; parent?: string; agentPath?: string; sourceKind: CodexSnapshot['sourceKind'] };
-type Source = { path: string; state: string | null; error: string | null };
+type Source = { path: string; state: string | null; nativeSessionId: string | null; error: string | null; updatedAt: string };
 type Receipt = { id: string; event: string };
 const now = () => new Date().toISOString();
 
@@ -128,7 +128,7 @@ export class CodexCapture {
     private async collect(forceDiscovery: boolean) {
         const receipts = this.store.rows("SELECT id,event FROM codex_receipts WHERE status='pending' ORDER BY createdAt,id") as unknown as Receipt[];
         const events = receipts.map(receipt => ({ receipt, event: JSON.parse(receipt.event) as AgentEvent }));
-        const previous = new Map((this.store.rows('SELECT path,state,error FROM codex_sources') as unknown as Source[]).map(source => [source.path, source]));
+        const previous = new Map((this.store.rows('SELECT path,state,nativeSessionId,error,updatedAt FROM codex_sources') as unknown as Source[]).map(source => [source.path, source]));
         if (!this.store.memory.all().some(scope => scope.agentType === 'codex-cli' && scope.spaceIds.length)) { this.pendingSources.clear(); return; }
         const explicit = new Map<string, { session: string; parent?: string }>();
         for (const { event } of events) {
@@ -160,18 +160,23 @@ export class CodexCapture {
         // A replaced path must be quarantined using its header alone. Never read
         // a replacement body just because this path used to belong to a bound project.
         for (const [path, source] of previous) {
-            const session = this.store.row("SELECT objectId,agentType FROM sessions WHERE agentType='codex-cli' AND nativeSessionId=?", source.state ? (JSON.parse(source.state) as CodexReaderState).parser.snapshot.nativeSessionId : '');
+            const nativeSessionId = source.nativeSessionId ?? (source.state ? (JSON.parse(source.state) as CodexReaderState).parser.snapshot.nativeSessionId : '');
+            const session = this.store.row("SELECT objectId,agentType FROM sessions WHERE agentType='codex-cli' AND nativeSessionId=?", nativeSessionId);
             if (session && this.store.memory.forSession({ objectId: String(session.objectId), agentType: String(session.agentType) })) selected.add(path);
         }
         for (const path of this.pendingSources.keys()) if (!selected.has(path)) this.pendingSources.delete(path);
         const snapshots: CodexSnapshot[] = [], readable: CodexSnapshot[] = [], missing: CodexSnapshot[] = [];
         const updates: { path: string; state: CodexReaderState | null; error: string | null }[] = [];
         // Reconcile persisted identities once after startup, even without new bytes.
-        let changed = receipts.length > 0 || this.lastRead === 0;
+        let changed = this.lastRead === 0;
         for (const path of [...selected].sort()) {
             if (this.closed) return;
             const saved = previous.get(path), state = saved?.state ? JSON.parse(saved.state) as CodexReaderState : this.pendingSources.get(path);
-            const captured = this.capturedSnapshot(path);
+            const scope = this.scopeFor(this.headers.get(path)?.id ?? '');
+            const rebound = !!saved && !!scope && (!!scope.enabledAt && scope.enabledAt > saved.updatedAt
+                || !!this.store.row('SELECT 1 FROM capture_windows WHERE scopeId=? AND endedAt>=? LIMIT 1', scope.id, saved.updatedAt));
+            const recover = this.lastRead === 0 || !!saved?.error || state?.version !== 3 || rebound;
+            const captured = recover ? this.capturedSnapshot(path) : undefined;
             let restored = false;
             if (state && captured) {
                 const turns = new Map(state.parser.snapshot.turns.map(turn => [turn.nativeTurnId, turn]));
@@ -192,6 +197,14 @@ export class CodexCapture {
                     continue;
                 }
                 const read = await readCodexRollout(path, state);
+                if (!read.changed && saved && !recover) {
+                    // The verified reader already contains this binding window's
+                    // admitted records. Keep it available for archive/receipt
+                    // resolution without rebuilding or refiltering history.
+                    read.snapshot.turns = read.snapshot.turns.filter(turn => turn.records.length);
+                    snapshots.push(read.snapshot); readable.push(read.snapshot);
+                    continue;
+                }
                 const scope = this.scopeFor(read.snapshot.nativeSessionId);
                 if (!scope) continue;
                 this.filter(read.snapshot, scope.id, false, captured ?? state?.parser.snapshot);
@@ -221,7 +234,7 @@ export class CodexCapture {
                 }
                 snapshots.push(read.snapshot);
                 readable.push(read.snapshot);
-                if (read.changed || restored || !saved || saved.error) { updates.push({ path, state: read.state, error: null }); changed = true; }
+                if (read.changed || restored || !saved || saved.error || rebound) { updates.push({ path, state: read.state, error: null }); changed = true; }
             } catch (error) {
                 if (!saved && state && !state.parser.snapshot.turns.some(turn => turn.records.length) && object(error).code === 'ENOENT') {
                     this.pendingSources.delete(path); this.headers.delete(path); continue;
@@ -240,7 +253,7 @@ export class CodexCapture {
         if (this.closed) return;
         const retired = new Set(missing.filter(prior => readable.some(next => coversSource(next, prior))).map(prior => prior.sourcePath));
         if (retired.size) changed = true;
-        if (!changed) { this.store.prepareCodexUploads(true); return; }
+        if (!changed && !receipts.length) return;
         this.store.db.exec('BEGIN');
         try {
             // Remove only source associations. Canonical traces and sent payloads
@@ -253,7 +266,7 @@ export class CodexCapture {
             const changedPaths = new Set(updates.map(update => update.path));
             // Unchanged sources already exist in canonical storage. Reconcile all
             // identities, but do not rewrite every historical event on each append.
-            this.store.applyCodexSnapshots(retainedSnapshots.filter(snapshot => changedPaths.has(snapshot.sourcePath)), { prepareUploads: false, requireBinding: true });
+            if (changed) this.store.applyCodexSnapshots(retainedSnapshots.filter(snapshot => changedPaths.has(snapshot.sourcePath)), { prepareUploads: false, requireBinding: true });
             for (const update of updates) {
                 if (retired.has(update.path)) continue;
                 this.store.db.prepare(`INSERT INTO codex_sources(path,state,nativeSessionId,error,updatedAt) VALUES(?,?,?,?,?)
@@ -272,7 +285,7 @@ export class CodexCapture {
                 const resolved = found?.sourceKind === 'background' || !!found && (!event.nativeTurnId || sources.some(snapshot => snapshot.turns.some(turn => turn.nativeTurnId === event.nativeTurnId)));
                 this.store.db.prepare('UPDATE codex_receipts SET status=?,error=? WHERE id=?').run(resolved ? found!.sourceKind === 'background' ? 'filtered' : 'processed' : 'pending', resolved ? null : '等待原始会话和对应执行轮落盘', receipt.id);
             }
-            this.store.prepareCodexUploads(true);
+            if (changed) this.store.prepareCodexUploads(true);
             this.store.db.exec('COMMIT');
             for (const path of retired) this.headers.delete(path);
             for (const update of updates) this.pendingSources.delete(update.path);
@@ -292,6 +305,24 @@ export class CodexCapture {
         return undefined;
     }
     /** The original session header, rather than a tool's cwd, controls activation. */
+    async sessionDirectory(nativeSessionId: string): Promise<string | undefined> {
+        const headers: Header[] = [];
+        for (const root of this.roots) for (const path of await sourceFiles(root)) {
+            try { const header = await sourceHeader(path); if (header) headers.push(header); } catch { /* An incomplete header grants no identity. */ }
+        }
+        const seen = new Set<string>();
+        let id: string | undefined = nativeSessionId;
+        while (id && !seen.has(id)) {
+            seen.add(id);
+            const candidates = headers.filter(header => header.id === id);
+            const header = candidates[0];
+            if (!header || candidates.some(candidate => candidate.cwd !== header.cwd || candidate.sourceKind !== header.sourceKind || candidate.parent !== header.parent)) return undefined;
+            if (header.sourceKind === 'user') return header.cwd;
+            if (header.sourceKind !== 'subagent') return undefined;
+            id = header.parent;
+        }
+        return undefined;
+    }
     async activation(input: { agentType: string; cwd: string; nativeSessionId?: string; parentNativeSessionId?: string }): Promise<boolean> {
         if (!input.nativeSessionId) return false;
         for (const root of this.roots) for (const path of await sourceFiles(root)) {

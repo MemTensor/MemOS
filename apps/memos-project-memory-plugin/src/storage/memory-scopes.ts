@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync } from 'node:fs';
+import { chmodSync, realpathSync } from 'node:fs';
+import { sep } from 'node:path';
 import type { Store, Session } from './store.ts';
 
 export interface MemoryScope {
@@ -9,6 +10,7 @@ export interface MemoryScope {
     name: string;
     root: string;
     baseUrl: string;
+    connectionId: string;
     spaceIds: string[];
     enabledAt: string | null;
 }
@@ -66,7 +68,7 @@ ON CONFLICT(projectId,agentType) DO UPDATE SET id=excluded.id`).run(projectId, a
         if (!scope) return undefined;
         const binding = this.store.binding(id);
         const open = this.store.row('SELECT startedAt FROM capture_windows WHERE scopeId=? AND endedAt IS NULL', id);
-        return { ...scope, baseUrl: binding?.baseUrl ?? '', spaceIds: binding?.spaceIds ?? [], enabledAt: open ? String(open.startedAt) : null } as MemoryScope;
+        return { ...scope, baseUrl: binding?.baseUrl ?? '', connectionId: binding?.connectionId ?? '', spaceIds: binding?.spaceIds ?? [], enabledAt: open ? String(open.startedAt) : null } as MemoryScope;
     }
 
     all(): MemoryScope[] {
@@ -74,21 +76,37 @@ ON CONFLICT(projectId,agentType) DO UPDATE SET id=excluded.id`).run(projectId, a
             .map(row => this.get(String(row.id))!);
     }
 
-    resolve(agentType: string, cwd: string): MemoryScope | undefined {
-        const project = this.store.projectForDirectory(cwd);
-        if (!project) return undefined;
-        const row = this.store.row('SELECT id FROM project_agents WHERE projectId=? AND agentType=?', project.id, agentType);
+    resolve(agentType: string, cwd: string, requireCurrentConnection = true): MemoryScope | undefined {
+        let projectId = this.store.projectForDirectory(cwd)?.id;
+        if (agentType === 'workbuddy') {
+            try {
+                const directory = realpathSync.native(cwd);
+                let depth = 0;
+                for (const project of this.store.rows('SELECT id,root FROM projects ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END,createdAt,rowid', projectId ?? null)) {
+                    try {
+                        const root = realpathSync.native(String(project.root));
+                        if (root.length > depth && (directory === root || directory.startsWith(root.endsWith(sep) ? root : root + sep))) {
+                            projectId = String(project.id); depth = root.length;
+                        }
+                    } catch { /* An unavailable directory cannot establish a new match. */ }
+                }
+                if (!depth) projectId = undefined;
+            } catch { /* Keep the existing path lookup when the source directory is unavailable. */ }
+        }
+        if (!projectId) return undefined;
+        const row = this.store.row('SELECT id FROM project_agents WHERE projectId=? AND agentType=?', projectId, agentType);
         const scope = row?.id ? this.get(String(row.id)) : undefined;
-        return scope?.spaceIds.length ? scope : undefined;
+        return scope?.spaceIds.length && (!requireCurrentConnection || this.store.matchesConnection(scope.connectionId)) ? scope : undefined;
     }
 
     forSession(session: Pick<Session, 'objectId' | 'agentType'>): MemoryScope | undefined {
         const scope = this.get(session.objectId);
-        return scope?.agentType === session.agentType && scope.spaceIds.length ? scope : undefined;
+        return scope?.agentType === session.agentType && scope.spaceIds.length && this.store.matchesConnection(scope.connectionId) ? scope : undefined;
     }
 
     allows(scopeId: string, occurredAt: string | undefined): boolean {
-        if (!occurredAt || !this.get(scopeId)?.spaceIds.length) return false;
+        const scope = this.get(scopeId);
+        if (!occurredAt || !scope?.spaceIds.length || !this.store.matchesConnection(scope.connectionId)) return false;
         const milliseconds = Date.parse(occurredAt);
         if (!Number.isFinite(milliseconds)) return false;
         const time = new Date(milliseconds).toISOString();

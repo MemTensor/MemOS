@@ -17,7 +17,7 @@ export function createLocalServer(service: PluginService) {
         try {
             if (req.method === 'GET' && !path.startsWith('/api/')) {
                 const name = path === '/' ? 'index.html' : path.slice(1);
-                if (!['index.html', 'app.js', 'view.js', 'style.css'].includes(name))
+                if (!['index.html', 'app.js', 'view.js', 'i18n.js', 'style.css'].includes(name))
                     return json({ error: 'Not found' }, 404);
                 const content = await readFile(fileURLToPath(new URL(`../../viewer/${name}`, import.meta.url)));
                 res.writeHead(200, { 'Content-Type': name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'", 'Cache-Control': 'no-store' });
@@ -35,6 +35,27 @@ export function createLocalServer(service: PluginService) {
             }
             if (path === '/api/health')
                 return json({ ok: true, service: 'memos-project-memory-plugin', apiVersion: LOCAL_API_VERSION, runtimeRevision, pid: process.pid });
+            if (path === '/api/diagnostics' && req.method === 'GET')
+                return json(service.store.cloudDiagnostics.list({ endpoint: url.searchParams.get('endpoint') ?? '', page: Number(url.searchParams.get('page') ?? 1), size: Number(url.searchParams.get('size') ?? 50) }));
+            if (path === '/api/diagnostics/export' && req.method === 'GET')
+                return json(service.store.cloudDiagnostics.export());
+            const diagnostic = path.match(/^\/api\/diagnostics\/([^/]+)$/);
+            if (diagnostic && req.method === 'GET') {
+                const record = service.store.cloudDiagnostics.detail(decodeURIComponent(diagnostic[1]!));
+                return record ? json(record) : json({ error: '诊断记录不存在' }, 404);
+            }
+            if (path === '/api/create-context' && req.method === 'POST')
+                return json(await service.createContext(body as import('../storage/create-contexts.ts').CreationIdentity));
+            if (path === '/api/create' && req.method === 'POST')
+                return json(await service.create(body));
+            if (path === '/api/bind-project' && req.method === 'POST')
+                return json(await service.bindDialog(body));
+            if (path === '/api/unbind-project' && req.method === 'POST')
+                return json(service.unbindDialog(body));
+            if (path === '/api/project-spaces' && req.method === 'POST')
+                return json(service.projectSpacesDialog(body));
+            if (path === '/api/bind-context' && req.method === 'POST')
+                return json(service.bindContext(body));
             if (path === '/api/config' && req.method === 'GET')
                 return json(service.config.public());
             if (path === '/api/activation' && req.method === 'GET')
@@ -42,6 +63,11 @@ export function createLocalServer(service: PluginService) {
                     nativeSessionId: url.searchParams.get('nativeSessionId') ?? undefined, parentNativeSessionId: url.searchParams.get('parentNativeSessionId') ?? undefined }) });
             if (path === '/api/config' && req.method === 'PUT')
                 return json(service.configure(body));
+            if (path === '/api/connection-test' && req.method === 'POST') {
+                if (body.spaceId !== undefined && typeof body.spaceId !== 'string')
+                    return json({ error: 'Space ID 须为字符串' }, 400);
+                return json(await service.cloud.probe(body.spaceId));
+            }
             if (path === '/api/projects' && req.method === 'GET')
                 return json(url.searchParams.has('agentType') ? await service.projects(url.searchParams.get('agentType')!, url.searchParams.get('refresh') === '1') : service.store.state().projects);
             if (path === '/api/projects' && req.method === 'POST')
@@ -88,6 +114,11 @@ export function createLocalServer(service: PluginService) {
             if (path === '/api/context-delivery' && req.method === 'POST') {
                 const session = service.store.session(String(body.sessionId ?? ''));
                 if (session && service.store.memory.forSession(session)) service.store.markContextDelivered(session.id);
+                else if (typeof body.agentType === 'string' && typeof body.nativeSessionId === 'string') {
+                    const host = service.store.row('SELECT cwd FROM create_hosts WHERE agentType=? AND nativeSessionId=?', body.agentType, body.nativeSessionId);
+                    if (host && service.store.memory.resolve(body.agentType, String(host.cwd)))
+                        service.store.markHostContextDelivered(body.agentType, body.nativeSessionId);
+                }
                 return json({ ok: true });
             }
             if (path === '/api/search' && req.method === 'POST')

@@ -9,6 +9,48 @@ export function textField(value: Record<string, unknown>, ...keys: string[]): st
   for (const key of keys) if (typeof value[key] === 'string' && value[key]) return value[key] as string;
   return undefined;
 }
+/** Copy only metadata backed by the source message, never a tool/event identity or inferred member. */
+export function messageMetadata(message: Message, raw: unknown): Message {
+  const row = object(raw), payload = object(row.payload), data = object(row.data);
+  const sameRole = (value: Record<string, unknown>) => value.role === message.role
+    || message.role === 'tool' && value.role === 'toolResult'
+    || message.role === 'user' && value.type === 'UserMessage'
+    || message.role === 'assistant' && value.type === 'AgentMessage';
+  const sources = [object(row.message), object(data.message), ...(row.type === `${message.role}.message` ? [{ ...data, role: message.role }] : []), data, object(payload.message), object(payload.item), payload, row].filter(sameRole);
+  const metadata: Record<string, unknown> = {};
+  for (const key of ['id', 'chat_time', 'role_id', 'role_name']) {
+    if (Object.hasOwn(message, key)) metadata[key] = message[key];
+    else {
+      const source = sources.find(value => Object.hasOwn(value, key));
+      if (source) metadata[key] = source[key];
+    }
+  }
+  if (!Object.hasOwn(metadata, 'id')) {
+    const native = sources.find(value => textField(value, 'message_id', 'messageId'));
+    const wrapper = ['message', 'user', 'assistant'].includes(String(row.type))
+      || !row.type && sameRole(object(row.message)) && !['tool', 'toolResult'].includes(message.role)
+        && message.tool_calls === undefined && !(Array.isArray(message.content) && message.content.some(part =>
+          ['tool_use', 'tool-call', 'tool_call', 'toolCall', 'function_call'].includes(String(object(part).type))));
+    const id = native && textField(native, 'message_id', 'messageId')
+      || wrapper && textField(row, 'uuid', 'message_id', 'messageId', 'id');
+    if (id) metadata.id = id;
+  }
+  const iso = (value: unknown): string | undefined => {
+    if (typeof value !== 'string' && typeof value !== 'number') return;
+    const date = new Date(typeof value === 'number' && value < 1e12 ? value * 1000 : value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  };
+  if (Object.hasOwn(metadata, 'chat_time')) metadata.chat_time = iso(metadata.chat_time) ?? metadata.chat_time;
+  else {
+    const times = [message, ...sources].flatMap(value => [value.timestamp, value.createdAt, object(value.time).created, value.time]);
+    // Host message time precedes live receipt time. Historical rows never receive a new timestamp here.
+    times.push(object(row.info).time && object(object(row.info).time).created, row.timestamp, row.createdAt,
+      object(row.time).created, row.time, payload.timestamp, data.timestamp, row.occurredAt);
+    const time = times.map(iso).find(value => value !== undefined);
+    if (time) metadata.chat_time = time;
+  }
+  return { ...message, ...metadata } as Message;
+}
 /** Only real-time host callbacks may use receipt time; transcript replay never calls this. */
 export function observed(raw: Record<string, any>): Record<string, any> {
   const times = [raw.occurredAt, raw.timestamp, raw.createdAt, raw.time, raw.payload?.timestamp,
@@ -21,6 +63,9 @@ export function asMessage(raw: unknown): Message | undefined {
   const row = object(raw);
   const candidate = object(row.message);
   if (typeof candidate.role === 'string') return { ...candidate, role: candidate.role, content: candidate.content ?? '' } as Message;
+  // Cursor keeps the speaker on the outer record and the body in message.
+  if (typeof row.role === 'string' && candidate.content !== undefined)
+    return { ...candidate, role: row.role, content: candidate.content } as Message;
   if (typeof row.role === 'string') return { ...row, role: row.role, content: row.content ?? '' } as Message;
   const payload = object(row.payload);
   // Kimi Code v2 wire records (new product, distinct from legacy kimi-cli).

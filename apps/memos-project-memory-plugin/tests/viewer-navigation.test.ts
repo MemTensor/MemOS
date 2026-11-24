@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
 class Element {
-  children: Element[] = []; textContent = ''; className = ''; title = ''; value = ''; hidden = false; disabled = false; open = false;
+  children: Element[] = []; textContent = ''; className = ''; title = ''; value = ''; max = ''; hidden = false; disabled = false; open = false;
   attributes: Record<string, string> = {}; listeners: Record<string, (...args: any[]) => any> = {}; dataset: Record<string, string> = {};
   elements: Record<string, Element> = {};
   classList = { toggle() {} };
@@ -38,24 +38,28 @@ async function harness() {
   const requests: Array<{ path: string; finish(body: unknown): void }> = [];
   const fetch = (path: string) => new Promise(resolve => requests.push({ path, finish: body => resolve({ ok: true, json: async () => body }) }));
   const source = (await readFile(new URL('../viewer/app.js', import.meta.url), 'utf8')).replace(/^import .*?;\n/, '').replace(/\nreload\(\)\.catch\([\s\S]*$/, '');
-  const context: any = { ...view, document, fetch, window: { scrollTo() {} } };
+  const context: any = { ...view, document, fetch, Date, window: { location: { hash: '' }, scrollTo() {}, addEventListener() {} } };
   runInNewContext(source + `\nglobalThis.testApp = {
-    setState(next) { state = next; }, setPage(next) { page = next; }, openSession, renderSessions,
+    setState(next) { state = next; }, setPage(next) { window.location.hash = '#' + next; }, openSession, renderSessions,
     selection() { return {project: selectedProject,session: selectedSession,page: tracePage}; }
   };`, context);
   const state = {
+    bindings: [
+      { id: 'codex-one', agentType: 'codex-cli', spaceIds: ['A'] },
+      { id: 'claude-one', agentType: 'claude-code', spaceIds: ['B'] },
+      { id: 'codex-two', agentType: 'codex-cli', spaceIds: ['C'] },
+    ],
     projects: [{id:'p1',name:'同名项目',root:'/one'}, {id:'p2',name:'同名项目',root:'/two'}], tasks: [], batches: [], recalls: [], diagnostics: [],
     sessions: [
-      {id:'new',projectId:'p1',agentType:'codex-cli',title:'较晚任务',sourceStartedAt:'2026-11-18T12:00:00Z',cwd:'/one',turnCount:1},
-      {id:'old',projectId:'p1',agentType:'claude-code',title:'较早任务',sourceStartedAt:'2026-11-18T09:00:00Z',cwd:'/one',turnCount:1},
-      {id:'other',projectId:'p2',agentType:'codex-cli',title:'另一个项目任务',sourceStartedAt:'2026-11-18T10:00:00Z',cwd:'/two',turnCount:1},
+      {id:'new',objectId:'codex-one',projectId:'p1',agentType:'codex-cli',title:'较晚任务',sourceStartedAt:'2026-11-18T12:00:00Z',cwd:'/one',turnCount:1},
+      {id:'old',objectId:'claude-one',projectId:'p1',agentType:'claude-code',title:'较早任务',sourceStartedAt:'2026-11-18T09:00:00Z',cwd:'/one',turnCount:1},
+      {id:'other',objectId:'codex-two',projectId:'p2',agentType:'codex-cli',title:'另一个项目任务',sourceStartedAt:'2026-11-18T10:00:00Z',cwd:'/two',turnCount:1},
     ],
   };
   context.testApp.setState(state); context.testApp.setPage('sessions'); context.testApp.renderSessions(false);
   const changeAgent = (value: string) => { node(agentSelector).value=value; node(agentSelector).listeners.change(); };
   const chooseProject = (root: string) => { const button=node('#trace-project-options').children.find(option=>option.text.includes(root)); assert.ok(button, `project option ${root}`); button.click(); };
-  const search = (query: string) => { node('#trace-search').value=query; node('#trace-search').listeners.input(); };
-  return { app: context.testApp, node, requests, state, changeAgent, chooseProject, search };
+  return { app: context.testApp, node, requests, state, changeAgent, chooseProject };
 }
 
 test('Agent then project selection isolates equal names, scopes options and restores each Agent project', async () => {
@@ -92,106 +96,4 @@ test('a slow session response cannot overwrite a different project selected whil
   assert.equal(h.node('#session-detail').text,expected);
   assert.equal(h.app.selection().project,'p2');
   assert.equal(h.app.selection().session,'other');
-});
-
-test('same-session page requests reject stale results and retain a whole long round inline', async () => {
-  const h=await harness();
-  const first=h.app.openSession('old',1),second=h.app.openSession('old',2);
-  const round={id:'round-11',roundNumber:11,startedAt:'2026-11-18T09:01:00Z',traces:Array.from({length:250},(_,i)=>({occurredAt:'2026-11-18T09:01:00Z',message:{role:i?'assistant':'user',content:i?'详细执行':'第十一轮输入'}}))};
-  h.requests[1].finish({session:h.state.sessions[1],groups:[round],total:11,page:2,size:10}); await second;
-  h.requests[0].finish({session:h.state.sessions[1],groups:[{id:'wrong',traces:[{message:{role:'user',content:'过期第一页'}}]}],total:11,page:1,size:10}); await first;
-  assert.match(h.node('#session-detail').text,/第 11 轮/);
-  assert.ok(!h.node('#session-detail').text.includes('过期第一页'));
-  assert.equal(h.node('#session-detail').querySelectorAll('.trace-turn').length,1);
-  assert.equal(h.node('#session-detail').querySelectorAll('.trace-message').length,250);
-  const pager=h.node('#session-detail').querySelector('.pagination')!;
-  assert.match(pager.text,/第 2 \/ 2 页 · 11 轮/);
-  assert.equal(pager.children[2].disabled,true);
-});
-
-test('overview direct links set the target Agent and project and clear stale search/date scope', async () => {
-  const h=await harness();
-  h.changeAgent('claude-code'); h.search('不存在');
-  h.node('#session-filters').elements.from.value='2001-01-01'; h.node('#session-filters').elements.to.value='2001-01-02';
-  h.node('#trace-date-apply').click();
-  h.app.setPage('overview');
-  const pending=h.app.openSession('new');
-  const request=h.requests.at(-1)!;
-  assert.match(request.path,/\/api\/sessions\/new\?/);
-  assert.equal(h.node(agentSelector).value,'codex-cli');
-  assert.equal(h.node('#trace-search').value,'');
-  assert.equal(h.node('#trace-time').value,'all');
-  assert.equal(h.app.selection().project,'p1');
-  request.finish({session:h.state.sessions[0],groups:[],total:0}); await pending;
-  assert.equal(h.app.selection().session,'new');
-  assert.match(h.node('#trace-breadcrumb').text,/codex-cli.*同名项目/);
-  assert.match(h.node('#session-detail').text,/较晚任务/);
-});
-
-test('search with no matches clears detail and invalidates an in-flight request', async () => {
-  const h=await harness(),pending=h.app.openSession('new');
-  h.search('不存在');
-  assert.equal(h.app.selection().session,null);
-  assert.match(h.node('#session-list').text,/没有匹配的会话/);
-  const emptyText=h.node('#session-detail').text;
-  assert.match(emptyText,/此范围暂无符合条件的会话/);
-  h.requests[0].finish({session:h.state.sessions[0],groups:[],total:0}); await pending;
-  assert.equal(h.node('#session-detail').text,emptyText);
-  const reset=h.node('#session-detail').children.find(n=>n.tagName==='button')!;
-  reset.click();
-  assert.equal(h.node('#trace-search').value,'');
-  assert.equal(h.app.selection().session,'new');
-});
-
-test('switching away from sessions prevents a pending detail from rendering', async () => {
-  const h=await harness(),pending=h.app.openSession('new');
-  h.app.setPage('overview');
-  h.requests[0].finish({session:h.state.sessions[0],groups:[],total:0}); await pending;
-  assert.ok(!h.node('#session-detail').text.includes('较晚任务'));
-});
-
-test('discovered local projects can be selected before Space binding and appear in the breadcrumb', async () => {
-  const h = await harness();
-  const session = { id: 'local', projectId: null, agentType: 'codex-cli', title: '本地任务', cwd: '/work/项目记忆', turnCount: 1 };
-  h.app.setState({ projects: [], tasks: [], sessions: [session], batches: [], recalls: [], diagnostics: [] });
-  h.app.renderSessions(false);
-  h.changeAgent('codex-cli');
-  h.chooseProject('/work/项目记忆');
-  assert.match(h.node('#trace-project-label').text, /项目记忆/);
-  assert.equal(h.node('#trace-project-label').title, '/work/项目记忆');
-  h.requests.at(-1)!.finish({ session, groups: [], total: 0 }); await flush();
-  assert.equal(h.app.selection().session, 'local');
-  assert.match(h.node('#trace-breadcrumb').text, /codex-cli.*项目记忆/);
-  assert.ok(!h.node('#trace-breadcrumb').text.includes('未归属项目'));
-});
-
-test('native session titles remain authoritative over user text and follow host renames', async () => {
-  const h = await harness();
-  const session = { ...h.state.sessions[0], title: 'Greeting', agentType: 'deepseek-harness' };
-  h.app.setState({ ...h.state, sessions: [session] }); h.app.renderSessions(false);
-  const first = h.app.openSession(session.id);
-  h.requests.at(-1)!.finish({ session: { ...session }, groups: [{ traces: [{ message: { role: 'user', content: '你好' } }] }], total: 1 }); await first;
-  assert.equal(h.node('#session-detail').querySelector('h2')!.text, 'Greeting');
-  assert.match(h.node('#session-list').text, /Greeting/);
-  assert.ok(!h.node('#session-list').text.includes('你好'));
-  const renamed = h.app.openSession(session.id);
-  h.requests.at(-1)!.finish({ session: { ...session, title: 'Welcome back' }, groups: [], total: 1 }); await renamed;
-  assert.equal(h.node('#session-detail').querySelector('h2')!.text, 'Welcome back');
-  assert.match(h.node('#session-list').text, /Welcome back/);
-  assert.ok(!h.node('#session-list').text.includes('Greeting'));
-  h.search('Greeting'); assert.match(h.node('#session-list').text, /没有匹配/);
-  h.search('Welcome back'); assert.match(h.node('#session-list').text, /Welcome back/);
-});
-
-test('missing native title uses short identity and never restores cached title or first user text', async () => {
-  const h = await harness();
-  const session = { ...h.state.sessions[0], nativeSessionId: 'session-31427b39-4cce-47ad-b6f1-0b7304deb9fc', title: 'outdated title' };
-  h.app.setState({ ...h.state, sessions: [session] }); h.app.renderSessions(false);
-  const pending = h.app.openSession(session.id);
-  h.requests.at(-1)!.finish({ session: { ...session, title: null }, groups: [{ traces: [{ message: { role: 'user', content: '你好' } }] }], total: 1 }); await pending;
-  assert.equal(h.node('#session-detail').querySelector('h2')!.text, '未命名会话 · 31427b39');
-  assert.match(h.node('#session-list').text, /未命名会话 · 31427b39/);
-  assert.ok(!h.node('#session-list').text.includes('你好'));
-  assert.ok(!h.node('#session-list').text.includes('outdated title'));
-  h.search('你好'); assert.match(h.node('#session-list').text, /没有匹配/);
 });

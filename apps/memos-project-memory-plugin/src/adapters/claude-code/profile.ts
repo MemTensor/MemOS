@@ -10,6 +10,7 @@ export const profile: AdapterProfile = {
   ],
   "skillPath": ".claude/skills",
   "retention": "history",
+  "sessionStartBlocking": true,
   "limitations": [],
   "configPath": ".claude/settings.json"
 };

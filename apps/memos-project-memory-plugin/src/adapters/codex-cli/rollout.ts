@@ -3,6 +3,9 @@ import { open } from 'node:fs/promises';
 import type { Message } from '../types.ts';
 import { stripImages } from '../_shared/image-content.ts';
 import { normalizeCodexContent, codexRecordRaw } from './content-normalizer.ts';
+import { filterCodexSkills } from './skill-filter.ts';
+import { filterBindRecords } from '../_shared/bind-records.ts';
+import { messageMetadata } from '../_shared/transcript.ts';
 import type { CodexExpectedChild, CodexParserState, CodexReaderState, CodexRecord, CodexSnapshot, CodexSourceKind, CodexTurn } from './types.ts';
 
 const object = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
@@ -69,10 +72,10 @@ function comparisonContent(value: unknown): string {
     }));
 }
 function toolMessage(name: string, callId: string, args: unknown): Message {
-    return { role: 'assistant', content: '', tool_calls: [{ id: callId, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}) } }] };
+    return { role: 'assistant', content: '', tool_calls: [{ id: callId, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } }] };
 }
 function toolResult(callId: string, result: unknown, extra: Record<string, unknown> = {}): Message {
-    return { role: 'tool', tool_call_id: callId, content: typeof result === 'string' ? result : JSON.stringify(result ?? ''), ...extra };
+    return { role: 'tool', tool_call_id: callId, content: typeof result === 'string' ? result : JSON.stringify(result === undefined ? '' : result), ...extra };
 }
 function jsonValue(value: unknown): unknown {
     if (typeof value !== 'string') return value;
@@ -109,6 +112,8 @@ function updateChildResult(turn: CodexTurn, callId: string, output: unknown): vo
 }
 
 function appendRecord(state: CodexParserState, turn: CodexTurn, raw: unknown, payload: Record<string, any>, message: Message, ordinal: number, occurredAt: string | undefined, kind: string, eventIdentity?: string): void {
+    message = messageMetadata(message, raw);
+    if (message.chat_time === undefined && occurredAt) message = { ...message, chat_time: occurredAt };
     message = stripImages(message);
     raw = codexRecordRaw(raw, message);
     const nativeId = eventIdentity ?? text(payload.id);
@@ -169,17 +174,17 @@ function parseItem(state: CodexParserState, raw: Record<string, any>, payload: R
         if (!callId) { addGap(state, `tool_identity_missing:${ordinal}`, turn); return; }
         const namespace = text(payload.namespace);
         const name = text(payload.name) ? namespace ? `${namespace}.${payload.name}` : payload.name : type.replace(/_call$/, '');
-        const input = payload.arguments ?? payload.input ?? payload.action;
+        const input = payload.arguments !== undefined ? payload.arguments : payload.input !== undefined ? payload.input : payload.action;
         appendRecord(state, turn, raw, payload, toolMessage(name, callId, input), ordinal, timestamp, 'tool-call', callId);
         registerChild(state, turn, name, callId, input, timestamp, ordinal);
-        if (payload.output !== undefined || payload.result !== undefined) appendRecord(state, turn, raw, payload, toolResult(callId, payload.output ?? payload.result), ordinal, timestamp, 'tool-result', callId);
+        if (payload.output !== undefined || payload.result !== undefined) appendRecord(state, turn, raw, payload, toolResult(callId, payload.output !== undefined ? payload.output : payload.result), ordinal, timestamp, 'tool-result', callId);
         return;
     }
     if (['function_call_output', 'custom_tool_call_output', 'computer_call_output', 'local_shell_call_output'].includes(type)) {
         const callId = text(payload.call_id) ?? text(payload.id);
         if (!callId) { addGap(state, `tool_identity_missing:${ordinal}`, turn); return; }
-        appendRecord(state, turn, raw, payload, toolResult(callId, payload.output ?? payload.result, payload.status ? { status: payload.status } : {}), ordinal, timestamp, 'tool-result', callId);
-        updateChildResult(turn, callId, payload.output ?? payload.result);
+        appendRecord(state, turn, raw, payload, toolResult(callId, payload.output !== undefined ? payload.output : payload.result, payload.status ? { status: payload.status } : {}), ordinal, timestamp, 'tool-result', callId);
+        updateChildResult(turn, callId, payload.output !== undefined ? payload.output : payload.result);
         return;
     }
     if (type === 'SubAgentActivity') {
@@ -207,12 +212,12 @@ function parseItem(state: CodexParserState, raw: Record<string, any>, payload: R
         const callId = text(payload.id);
         if (!callId) { addGap(state, `tool_identity_missing:${ordinal}`, turn); return; }
         const name = type === 'CommandExecution' ? 'exec_command' : type === 'McpToolCall' ? `mcp__${payload.server}__${payload.tool}` : type === 'FileChange' ? 'apply_patch' : type === 'ImageView' ? 'view_image' : 'web_search';
-        const input = type === 'CommandExecution' ? { command: payload.command, cwd: payload.cwd } : payload.arguments ?? payload.changes ?? { path: payload.path, query: payload.query };
+        const input = type === 'CommandExecution' ? { command: payload.command, cwd: payload.cwd } : payload.arguments !== undefined ? payload.arguments : payload.changes !== undefined ? payload.changes : { path: payload.path, query: payload.query };
         const envelope = object(raw.payload);
         const startedAt = iso(envelope.started_at_ms) ?? timestamp;
         const completedAt = iso(envelope.completed_at_ms) ?? timestamp;
         appendRecord(state, turn, raw, payload, toolMessage(name, callId, input), ordinal, startedAt, 'tool-call', callId);
-        const output = payload.aggregated_output ?? payload.result ?? (type === 'FileChange' ? { stdout: payload.stdout, stderr: payload.stderr, status: payload.status } : undefined);
+        const output = payload.aggregated_output !== undefined ? payload.aggregated_output : payload.result !== undefined ? payload.result : type === 'FileChange' ? { stdout: payload.stdout, stderr: payload.stderr, status: payload.status } : undefined;
         if (output !== undefined) appendRecord(state, turn, raw, payload, toolResult(callId, output, { status: payload.status, ...(payload.exit_code !== undefined ? { exit_code: payload.exit_code } : {}) }), ordinal, completedAt, 'tool-result', callId);
         return;
     }
@@ -308,13 +313,18 @@ function consumeLines(state: CodexParserState, content: string): void {
                 addGap(state, `content_unresolved:${ordinal}`, findTurn(state, turnId));
             }
             if (!nonempty(normalized.content)) continue;
-            raw = codexRecordRaw(row, stripImages({ role, content: normalized.content }));
+            raw = codexRecordRaw(row, stripImages(messageMetadata({ role, content: normalized.content }, row)));
         }
         consume(state, stripImages(raw), ordinal);
     }
+    for (const turn of state.snapshot.turns) turn.records = filterBindRecords(filterCodexSkills(turn.records));
 }
 function snapshotOf(state: CodexParserState, partial = false): CodexSnapshot {
-    const snapshot = structuredClone(state.snapshot);
+    // Only the containers normalized below need copying. Task bodies remain
+    // immutable, so polling must not deep-copy every historical tool result.
+    const snapshot = { ...state.snapshot, gaps: [...state.snapshot.gaps], turns: state.snapshot.turns.map(turn => ({
+        ...turn, records: [...turn.records], gaps: [...turn.gaps],
+    })) };
     if (!snapshot.nativeSessionId) snapshot.gaps.push('session_identity_missing');
     if (!snapshot.cwd) snapshot.gaps.push('workspace_missing');
     if (state.pending.length) snapshot.gaps.push(`unbound_records:${state.pending.length}`);
@@ -359,7 +369,10 @@ export async function readCodexRollout(path: string, previous?: CodexReaderState
         // v2 cached turn cwd. Replay it, but retain verified source continuity
         // so the collector can distinguish this upgrade from file replacement.
         const directoryUpgrade = reusable && previous?.version === 2;
-        reusable = reusable && previous?.version === 3;
+        reusable = reusable && previous?.version === 3 && !previous.parser.snapshot.gaps.includes('pending_tool_replay');
+        if (reusable && previous && stat.size === previous.observedSize) {
+            return { snapshot: snapshotOf(previous.parser, previous.byteOffset < stat.size), state: previous, changed: false, directoryUpgrade: false };
+        }
         const parser = reusable && previous ? structuredClone(previous.parser) : initialState(path);
         let byteOffset = reusable && previous ? previous.byteOffset : 0;
         const appended = await bytes(handle, byteOffset, stat.size - byteOffset);
@@ -369,6 +382,16 @@ export async function readCodexRollout(path: string, previous?: CodexReaderState
             byteOffset += newline + 1;
         }
         const prefixLength = Math.min(byteOffset, 4096), tailLength = Math.min(byteOffset, 4096);
+        // A tool without an execution identity cannot yet be associated with its
+        // Skill call. Keep metadata only in persistent pending state; replay the
+        // native file once its context arrives instead of caching an opaque body.
+        for (const pending of parser.pending) {
+            const raw = object(pending.raw), payload = object(raw.payload);
+            if (payload.type === 'message' && ['user', 'assistant'].includes(String(payload.role))) continue;
+            pending.raw = { type: raw.type, timestamp: raw.timestamp, ordinal: raw.ordinal,
+                payload: { type: payload.type, id: payload.id, call_id: payload.call_id } };
+            addGap(parser, 'pending_tool_replay');
+        }
         const state: CodexReaderState = { version: 3, fileIdentity, observedSize: stat.size, modifiedAt: stat.mtimeMs, byteOffset, prefixLength, tailLength,
             prefixDigest: digest(await bytes(handle, 0, prefixLength)), tailDigest: digest(await bytes(handle, byteOffset - tailLength, tailLength)), parser };
         return { snapshot: snapshotOf(parser, byteOffset < stat.size), state, changed: !reusable || byteOffset !== previous?.byteOffset || stat.size !== previous?.observedSize, directoryUpgrade };

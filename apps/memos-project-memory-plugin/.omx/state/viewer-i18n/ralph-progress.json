@@ -1,0 +1,26 @@
+{
+  "score": 95,
+  "threshold": 90,
+  "threshold_pass": true,
+  "verdict": "pass",
+  "category_match": true,
+  "differences": [
+    "English metadata wraps naturally, increasing Agent card height.",
+    "CH / EN shares the existing top-right action group."
+  ],
+  "suggestions": [],
+  "reasoning": "All four pages retain the original dashboard style. Reviewed desktop and mobile screenshots are readable; browser measurements at 320, 390, 768, 1100 and 1440px show no horizontal overflow. Binding-scope spacing was corrected.",
+  "next_actions": [],
+  "reference_images": [
+    "/tmp/memos-viewer-i18n/baseline.png"
+  ],
+  "generated_screenshots": [
+    "/tmp/memos-viewer-i18n/desktop.png",
+    "/tmp/memos-viewer-i18n/mobile.png",
+    "/tmp/memos-viewer-i18n/projects-1440.png",
+    "/tmp/memos-viewer-i18n/projects-390.png",
+    "/tmp/memos-viewer-i18n/sessions-1440.png",
+    "/tmp/memos-viewer-i18n/overview-390.png"
+  ],
+  "status": "complete"
+}

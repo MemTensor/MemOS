@@ -11,7 +11,7 @@ function cleanMessage(value: unknown, raw?: unknown): { message: Message; unreso
     const message = object(value) as Message;
     if (message.role !== 'user') return { message: stripImages(message), unresolved: false };
     const envelope = object(raw), payload = object(envelope.payload ?? raw);
-    const source = object(payload.item ?? payload);
+    const source = object(payload.item ?? (typeof object(payload.message).role === 'string' ? payload.message : payload));
     const normalized = normalizeCodexContent({ ...source, role: 'user', content: source.content ?? source.message ?? message.content });
     const clean = stripImages({ ...message, content: normalized.content });
     return { message: clean, unresolved: normalized.unresolved || clean.content === '' || Array.isArray(clean.content) && !clean.content.length };

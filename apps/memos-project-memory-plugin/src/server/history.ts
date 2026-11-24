@@ -1,11 +1,14 @@
+import { filterBindRecords, isBindControl } from '../adapters/_shared/bind-records.ts';
+import { hasTaskContent } from '../adapters/_shared/message-content.ts';
 import { createReadStream } from 'node:fs';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
 import { object, readTranscript, textField } from '../adapters/_shared/transcript.ts';
 import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
+import { filterAdapterSkills } from '../adapters/skill-filters.ts';
 import { stripImages } from '../adapters/_shared/image-content.ts';
 import { readCodexRollout } from '../adapters/codex-cli/rollout.ts';
 import type { CodexSnapshot } from '../adapters/codex-cli/types.ts';
@@ -13,9 +16,12 @@ import type { TraceInput } from '../adapters/types.ts';
 import type { Store } from '../storage/store.ts';
 import type { MemoryScope } from '../storage/memory-scopes.ts';
 import { sourceFiles, sourceHeader, type CodexCaptureOptions } from './codex-capture.ts';
+import { workbuddyConfigDir } from '../adapters/workbuddy/paths.ts';
+import { primeSources, readPrimeSession } from '../adapters/prime-agent/sessions.ts';
+import { primeIdle, primeStatus } from '../adapters/prime-agent/capture.ts';
 
 type Candidate = { nativeSessionId: string; sourceId: string };
-type Source = { path: string; nativeSessionId: string; cwd: string };
+type Source = { path: string; nativeSessionId: string; cwd: string; startedAt?: string; parentNativeSessionId?: string };
 type Scan = { status: 'pending' | 'scanning' | 'ready' | 'failed'; recordCount: number; error?: string; warning?: string; cutoff?: string; signature?: string; sources: Source[]; records: Candidate[] };
 type HistoricalTurn = { key: string; records: TraceInput[]; completedAt: string };
 
@@ -48,7 +54,7 @@ export class HistoryService {
     }
     private mergeLocalRecords(scopeId: string, scan: Scan) {
         const local = this.store.rows(`SELECT s.nativeSessionId,t.sourceId FROM traces t JOIN sessions s ON s.id=t.sessionId JOIN turns u ON u.id=t.conversationId
-WHERE s.objectId=? AND u.completedAt IS NOT NULL AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=u.id AND r.captureStatus!='complete')`, scopeId)
+WHERE s.objectId=? AND COALESCE(json_extract(t.raw,'$.type'),'')<>'memos-bind-operation' AND u.completedAt IS NOT NULL AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=u.id AND r.captureStatus!='complete')`, scopeId)
             .map(row => ({ nativeSessionId: String(row.nativeSessionId), sourceId: String(row.sourceId) }));
         scan.records = [...new Map([...scan.records, ...local].map(record => [record.sourceId.startsWith('codex:v2:') ? record.sourceId : JSON.stringify(record), record])).values()];
         scan.recordCount = scan.records.length;
@@ -76,16 +82,19 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         this.scans.set(scopeId, scan);
         try {
             const scope = this.active(scopeId);
-            const supported = ['codex-cli', 'claude-code', 'deepseek-harness', 'pi', 'opencode-v1', 'opencode-v2', 'kimi-code', 'workbuddy'].includes(scope.agentType);
+            const supported = ['codex-cli', 'claude-code', 'deepseek-harness', 'pi', 'prime-agent', 'opencode-v1', 'opencode-v2', 'kimi-code', 'workbuddy'].includes(scope.agentType);
             scan.sources = supported ? await this.sources(scope) : [];
             if (!supported) scan.warning = '仅包含插件已采集会话，该 Agent 未提供本地历史读取接口';
             else if (!scan.sources.length) scan.warning = '未发现可读取的本地历史文件，仅包含插件已采集会话';
             if (scope.agentType === 'codex-cli') {
                 const snapshots = await this.codex(scan, scope);
-                scan.records = snapshots.flatMap(snapshot => snapshot.turns.flatMap(turn => turn.records.map(record => ({ nativeSessionId: record.originSessionId || snapshot.nativeSessionId, sourceId: `codex:v2:${JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId])}` }))));
+                scan.records = snapshots.flatMap(snapshot => snapshot.turns.flatMap(turn => turn.records.filter(record => hasTaskContent(stripImages(record.message))).map(record => ({ nativeSessionId: record.originSessionId || snapshot.nativeSessionId, sourceId: `codex:v2:${JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId])}` }))));
             } else {
-                for (const source of scan.sources) for (const turn of await this.turns(scope, source, scan.cutoff!))
-                    scan.records.push(...turn.records.map(record => ({ nativeSessionId: source.nativeSessionId, sourceId: record.sourceId })));
+                for (const source of scan.sources) {
+                    const turns = await this.turns(scope, source, scan.cutoff!);
+                    source.startedAt = turns.flatMap(turn => turn.records.map(record => this.store.memory.recordTime(record.raw))).filter((time): time is string => !!time).sort()[0];
+                    for (const turn of turns) scan.records.push(...turn.records.filter(record => record.message && hasTaskContent(stripImages(record.message))).map(record => ({ nativeSessionId: source.nativeSessionId, sourceId: record.sourceId })));
+                }
             }
             await this.validateSources(scope, scan.sources);
             this.mergeLocalRecords(scopeId, scan);
@@ -93,44 +102,74 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
             scan.status = 'ready';
         } catch (error) { scan.status = 'failed'; scan.error = error instanceof Error ? error.message : String(error); }
     }
-    async materialize(scopeId: string): Promise<Candidate[]> {
+    async materialize(scopeId: string, sessions?: Set<string>): Promise<Candidate[]> {
         const scope = this.active(scopeId), scan = this.scans.get(scopeId);
         if (scan?.status !== 'ready') throw new Error('历史会话尚未扫描完成');
         await this.validateSources(scope, scan.sources);
+        const selected = sessions ? { ...scan, sources: scan.sources.filter(source => sessions.has(source.nativeSessionId)) } : scan;
         const allowed = new Set(scan.records.map(record => JSON.stringify(record)));
         if (scope.agentType === 'codex-cli') {
-            const snapshots = await this.codex(scan, scope);
+            const snapshots = await this.codex(selected, scope);
             for (const snapshot of snapshots) {
                 snapshot.sourcePath = `history:${snapshot.sourcePath}`;
-                for (const turn of snapshot.turns) turn.records = turn.records.filter(record => allowed.has(JSON.stringify({ nativeSessionId: record.originSessionId || snapshot.nativeSessionId, sourceId: `codex:v2:${JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId])}` })));
+                for (const turn of snapshot.turns) turn.records = turn.records.filter(record => isBindControl(record) || allowed.has(JSON.stringify({ nativeSessionId: record.originSessionId || snapshot.nativeSessionId, sourceId: `codex:v2:${JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId])}` })));
+                snapshot.turns = snapshot.turns.filter(turn => turn.records.some(record => !isBindControl(record)));
             }
             await this.validateSources(scope, scan.sources);
             this.store.applyCodexSnapshots(snapshots, { prepareUploads: false, requireBinding: true });
         } else {
-            for (const source of scan.sources) {
-                const turns = await this.turns(scope, source, scan.cutoff!);
+            for (const source of selected.sources) {
+                const turns = (await this.turns(scope, source, scan.cutoff!)).filter(turn => turn.records.some(record => allowed.has(JSON.stringify({ nativeSessionId: source.nativeSessionId, sourceId: record.sourceId }))));
                 this.active(scopeId, scope);
                 if (this.store.memory.resolve(scope.agentType, source.cwd)?.id !== scopeId) throw new Error('历史会话项目归属已变化，请重新扫描');
                 if (!turns.length) continue;
                 const session = this.store.registerSession({ agentType: scope.agentType, nativeSessionId: source.nativeSessionId, cwd: source.cwd });
                 for (const item of turns) {
                     const existing = item.records.map(record => this.store.row('SELECT id,conversationId FROM traces WHERE sessionId=? AND sourceId=?', session.id, record.sourceId));
-                    if (existing.every(Boolean)) continue;
+                    if (existing.every(Boolean) && scope.agentType !== 'workbuddy') continue;
                     const conversations = new Set(existing.flatMap(record => record?.conversationId ? [String(record.conversationId)] : []));
                     const knownTurn = conversations.size === 1 ? this.store.row('SELECT id FROM turns WHERE id=?', [...conversations][0]!) : undefined;
                     const turn = knownTurn ?? this.store.startTurn(session.id, item.key, false);
                     for (const input of item.records) {
-                        if (!allowed.has(JSON.stringify({ nativeSessionId: source.nativeSessionId, sourceId: input.sourceId }))) continue;
-                        const record = stripImages(normalizeTaskTrace(scope.agentType, input));
-                        if (!record?.message) continue;
+                        if (!isBindControl(input) && !allowed.has(JSON.stringify({ nativeSessionId: source.nativeSessionId, sourceId: input.sourceId }))) continue;
+                        const record = isBindControl(input) ? input : stripImages(normalizeTaskTrace(scope.agentType, input));
+                        if (!record?.message || !isBindControl(record) && !hasTaskContent(record.message)) continue;
+                        if (Array.isArray(object(input.raw).bindCallIds)) record.raw = { ...object(record.raw), bindCallIds: object(input.raw).bindCallIds };
+                        if (scope.agentType === 'workbuddy' && this.store.mergeWorkBuddyTrace(session, record)) continue;
                         this.store.db.prepare('INSERT OR IGNORE INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(?,?,?,?,?,?)')
                             .run(session.id, String(turn.id), record.sourceId, JSON.stringify(record.raw), JSON.stringify(record.message), this.store.memory.recordTime(record.raw) ?? item.completedAt);
                     }
                     this.store.db.prepare('UPDATE turns SET completedAt=COALESCE(completedAt,?) WHERE id=?').run(item.completedAt, String(turn.id));
                 }
+                if (scope.agentType === 'workbuddy') this.store.refreshUnsentBatches(session.id);
             }
         }
-        return scan.records;
+        return scan.records.filter(record => !sessions || sessions.has(record.nativeSessionId));
+    }
+    async *materializeSessions(scopeId: string) {
+        const scan = this.scans.get(scopeId);
+        if (scan?.status !== 'ready') throw new Error('历史会话尚未扫描完成');
+        const sources = new Map(scan.sources.map(source => [source.nativeSessionId, source]));
+        const groups = new Map<string, Set<string>>();
+        for (const id of new Set([...scan.records.map(record => record.nativeSessionId), ...sources.keys()])) {
+            let root = id;
+            const seen = new Set<string>();
+            while (sources.get(root)?.parentNativeSessionId && !seen.has(root)) { seen.add(root); root = sources.get(root)!.parentNativeSessionId!; }
+            const group = groups.get(root) ?? new Set<string>(); group.add(id); groups.set(root, group);
+        }
+        const times = new Map<string, string>();
+        for (const [root, ids] of groups) {
+            const values = [...ids].flatMap(id => {
+                const source = sources.get(id);
+                const local = this.store.rows('SELECT t.raw FROM traces t JOIN sessions s ON s.id=t.sessionId WHERE s.nativeSessionId=? AND s.objectId=?', id, scopeId);
+                return [source?.startedAt, ...local.map(row => this.store.memory.recordTime(JSON.parse(String(row.raw))))].filter((time): time is string => !!time);
+            });
+            times.set(root, values.sort()[0] ?? '');
+        }
+        for (const [root, ids] of [...groups].sort(([a], [b]) => times.get(a)!.localeCompare(times.get(b)!) || a.localeCompare(b))) {
+            this.active(scopeId);
+            yield await this.materialize(scopeId, ids);
+        }
     }
     private async validateSources(scope: MemoryScope, sources: Source[]) {
         this.active(scope.id, scope);
@@ -142,6 +181,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         this.active(scope.id, scope);
     }
     private async sources(scope: MemoryScope): Promise<Source[]> {
+        if (scope.agentType === 'prime-agent') return (await primeSources(this.options.home)).filter(source => source.cwd === scope.root);
         const home = this.options.home ?? homedir();
         const base = (variable: string, fallback: string) => this.options.home ? join(home, fallback) : process.env[variable] || join(home, fallback);
         if (scope.agentType === 'codex-cli') {
@@ -153,7 +193,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
             const selected = new Set(headers.filter(header => header.sourceKind === 'user' && this.store.memory.resolve(scope.agentType, header.cwd)?.id === scope.id).map(header => header.id));
             let prior = -1;
             while (prior !== selected.size) { prior = selected.size; for (const header of headers) if (header.sourceKind === 'subagent' && header.parent && selected.has(header.parent)) selected.add(header.id); }
-            return headers.filter(header => selected.has(header.id)).map(header => ({ path: header.path, nativeSessionId: header.id, cwd: header.cwd }));
+            return headers.filter(header => selected.has(header.id)).map(header => ({ path: header.path, nativeSessionId: header.id, cwd: header.cwd, parentNativeSessionId: header.parent }));
         }
         if (scope.agentType.startsWith('opencode-')) {
             const data = this.options.home ? join(home, '.local/share') : process.env.XDG_DATA_HOME || join(home, '.local/share');
@@ -180,7 +220,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         const root = scope.agentType === 'deepseek-harness'  ? join(base('DSH_HOME', '.dsh'), 'sessions')
             : scope.agentType === 'pi' ? join(base('PI_CODING_AGENT_DIR', '.pi/agent'), 'sessions')
             : scope.agentType === 'claude-code' ? join(base('CLAUDE_CONFIG_DIR', '.claude'), 'projects')
-            : scope.agentType === 'workbuddy' ? join(base('WORKBUDDY_CONFIG_DIR', '.workbuddy'), 'projects') : undefined;
+            : scope.agentType === 'workbuddy' ? join(await workbuddyConfigDir(this.options.home), 'projects') : undefined;
         if (!root) throw new Error(`${scope.agentType} 暂无可验证的本地历史读取器，不能上传历史会话`);
         let paths = await this.files(root, scope.agentType === 'deepseek-harness' ? 2 : 1);
         if (scope.agentType === 'deepseek-harness') {
@@ -214,7 +254,10 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         for (const source of scan.sources) {
             this.active(scope.id, scope);
             const { snapshot } = await readCodexRollout(source.path);
+            source.startedAt = snapshot.startedAt ?? snapshot.turns.map(turn => turn.startedAt).filter((time): time is string => !!time).sort()[0];
+            source.parentNativeSessionId = snapshot.parentNativeSessionId;
             if (snapshot.nativeSessionId !== source.nativeSessionId || snapshot.cwd !== source.cwd) throw new Error('历史会话源身份已变化，请重新扫描');
+            for (const turn of snapshot.turns) turn.records = filterBindRecords(turn.records);
             snapshots.push(snapshot);
         }
         const byId = new Map(snapshots.map(snapshot => [snapshot.nativeSessionId, snapshot]));
@@ -244,7 +287,21 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         return snapshots.map(snapshot => ({ ...snapshot, turns: snapshot.turns.filter(turn => complete.has(turn)) })).filter(snapshot => snapshot.turns.length);
     }
     private async turns(scope: MemoryScope, source: Source, cutoff: string): Promise<HistoricalTurn[]> {
+        return (await this.sourceTurns(scope, source, cutoff)).map(turn => ({ ...turn, records: filterBindRecords(turn.records.map(record => ({ ...record, nativeTurnId: record.nativeTurnId ?? turn.key }))) }));
+    }
+    private async sourceTurns(scope: MemoryScope, source: Source, cutoff: string): Promise<HistoricalTurn[]> {
         this.active(scope.id, scope);
+        if (scope.agentType === 'prime-agent') {
+            const before = await stat(source.path);
+            const snapshot = await readPrimeSession(source.path);
+            if (snapshot.nativeSessionId !== source.nativeSessionId || snapshot.cwd !== source.cwd) throw new Error('Prime 历史会话身份发生变化');
+            if (snapshot.partial || !primeIdle(snapshot, await primeStatus(this.options.home))) return [];
+            const after = await stat(source.path);
+            if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs)
+                throw new Error('Prime 历史会话读取期间发生变化，请重新扫描');
+            return snapshot.turns.filter((turn): turn is HistoricalTurn => !!turn.completedAt && turn.completedAt <= cutoff
+                && turn.records.every(record => { const time = this.store.memory.recordTime(record.raw); return !!time && time <= cutoff; }));
+        }
         if (scope.agentType.startsWith('opencode-')) return this.openCodeTurns(scope, source, cutoff);
         const rows = ['claude-code', 'kimi-code', 'workbuddy'].includes(scope.agentType) ? await readTranscript(source.path, `${scope.agentType}:${source.nativeSessionId}`)
             : (await this.content(source.path)).split('\n').filter(Boolean).flatMap((line, index) => {
@@ -265,7 +322,8 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
             if (['turn/end', 'turn.end', 'turn.completed', 'turn.finished'].includes(String(raw.type)) || ['end_turn', 'stop', 'error', 'aborted'].includes(String(stop)) || scope.agentType === 'workbuddy' && record?.message?.role === 'assistant' && raw.status === 'completed') completedAt = time ?? cutoff;
         }
         finish();
-        return turns;
+        return turns.map(turn => ({ ...turn, records: filterAdapterSkills(scope.agentType,
+            turn.records.map(record => ({ ...record, nativeTurnId: record.nativeTurnId ?? turn.key }))) }));
     }
     private openCodeTurns(scope: MemoryScope, source: Source, cutoff: string): HistoricalTurn[] {
         const db = new DatabaseSync(source.path, { readOnly: true });

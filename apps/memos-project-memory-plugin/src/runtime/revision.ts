@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 
-export const LOCAL_API_VERSION = 5;
+export const LOCAL_API_VERSION = 10;
 
 /** Source hooks and built CLIs share one package revision to avoid restart loops. */
 export function currentRuntimeRevision(): string {

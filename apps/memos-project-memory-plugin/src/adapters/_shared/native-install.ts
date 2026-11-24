@@ -15,6 +15,7 @@ const directories:Record<string,string>={
  'prime-agent':'.memos-project-memory/prime-agent','deepseek-harness':'.memos-project-memory/deepseek-harness',
 };
 export async function installNative(profile:AdapterProfile,options:Options):Promise<Result>{
+ if(profile.id==='prime-agent')return (await import('../prime-agent/install.ts')).installPrime(options);
  const suffix=import.meta.url.endsWith('.ts')?'ts':'js';
  const previousText=await read(manifestPath(profile,options));const previous:Manifest=previousText?JSON.parse(previousText):{installed:false,files:[]};
  if(profile.id.startsWith('opencode-')){
@@ -26,14 +27,16 @@ export async function installNative(profile:AdapterProfile,options:Options):Prom
  const text=profile.id==='deepseek-harness'?`export {name,inject,apply} from ${JSON.stringify(entry)};\n`:profile.kind==='rpc'?`await import(${JSON.stringify(entry)});\n`:`export {default} from ${JSON.stringify(entry)};\n`;
  const dshHome=options.dshHome??join(options.home,'.dsh');
  const skillRoot=profile.id==='deepseek-harness'?join(dshHome,'skills'):join(options.home,profile.skillPath);
- const skill=join(skillRoot,'memos-project-memory','SKILL.md');
- const source=await readFile(fileURLToPath(new URL('../../../skills/project-memory/SKILL.md',import.meta.url)),'utf8');
- const reference=await readFile(fileURLToPath(new URL('../../../skills/project-memory/references/cli-contract.md',import.meta.url)),'utf8');
- const writes=[{path:wrapper,text},{path:skill,text:source},{path:join(dirname(skill),'references','cli-contract.md'),text:reference}];
+ const writes=[{path:wrapper,text}];
+ for(const [sourceName,installedName] of [['project-memory','memos-project-memory'],['create-project-space','memos-create-project-space'],['bind-project-space','memos-bind-project-space'],['list-project-spaces','memos-list-project-spaces'],['unbind-project-space','memos-unbind-project-space']]){
+  for(const relative of ['SKILL.md','references/cli-contract.md']){
+   const content=await readFile(fileURLToPath(new URL(`../../../skills/${sourceName}/${relative}`,import.meta.url)),'utf8');
+   writes.push({path:join(skillRoot,installedName!,relative),text:content});
+  }
+ }
  for(const item of writes){const current=await read(item.path);if(current!==null&&current!==item.text&&!previous.files.some(file=>file.path===item.path&&file.hash===hash(current)))throw new Error(`Existing file is not owned by MemOS: ${item.path}`);}
  for(const item of writes){await mkdir(dirname(item.path),{recursive:true});await writeFile(item.path,item.text);}
  const instructions=[...(profile.limitations??[]),'请重新启动 Agent，使 MemOS 接入和项目记忆 Skill 生效。'];
- if(profile.id==='prime-agent')instructions.push(`请通过专用入口启动：${JSON.stringify(process.execPath)} ${JSON.stringify(wrapper)}。每行输入一条 JSON 消息，例如 {"message":"你的问题","inputId":"每条消息的唯一标识"}。请等待当前回复完成后再发送下一条消息。`);
  const manifest:Manifest={installed:true,files:writes.map(item=>({path:item.path,hash:hash(item.text)}))};
  if(profile.id==='deepseek-harness'){
   manifest.dshConfig=await installDshConfig(dshHome,wrapper,previous.dshConfig);

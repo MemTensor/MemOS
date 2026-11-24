@@ -244,7 +244,7 @@ export function codexRecordRaw(raw: unknown, message: Message): Record<string, u
   };
   const source=object(raw),out=identity(source),payload=object(source.payload);
   const cleanMessage:Record<string,unknown>={role:message.role,content:message.content};
-  for(const key of ['tool_calls','tool_call_id','chat_time','role_id','role_name'])if(message[key]!==undefined)cleanMessage[key]=message[key];
+  for(const key of ['id','tool_calls','tool_call_id','chat_time','role_id','role_name'])if(message[key]!==undefined)cleanMessage[key]=message[key];
   if(source.payload){
     const clean=identity(payload),item=object(payload.item);
     if(payload.type==='function_call'){

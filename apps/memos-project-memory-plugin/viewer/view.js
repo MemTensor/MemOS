@@ -1,6 +1,9 @@
+import { t, setText, attr, joinText, dateText, errorText } from './i18n.js';
+export { t, setText, attr, joinText, dateText, errorText, initTranslations } from './i18n.js';
+
 export function el(tag, text = '', className = '') {
   const element = document.createElement(tag);
-  element.textContent = text;
+  setText(element, text);
   if (className) element.className = className;
   return element;
 }
@@ -10,7 +13,7 @@ export function details(title, value) {
   return node;
 }
 export function statusLabel(value) {
-  return ({ blocked: '上传待处理', accepted: '已接收', 'processing-failed': '云端处理失败', prepared: '已准备上下文', returned: '已返回检索结果', pending: '等待上传', waiting_space: '等待空间', creating: '创建空间中', uncertain: '创建结果待确认', uploading: '上传中', received: '已接收', uploaded: '已接收', running: '云端处理中', processing: '云端处理中', completed: '已完成', failed: '失败', stopped: '已停止重试', installed: '已安装', unavailable: '不可用', FOUND: '检索命中', EMPTY: '无匹配结果', UNAVAILABLE: '记忆暂不可用', injected: '已交付上下文', CONTEXT_MISSING: '当前轮标识无效' })[value] ?? value ?? '—';
+  return ({ skipped: t("已处理"), blocked: t("上传受阻"), accumulating: t("消息积累中"), unknown: t("整理状态待确认"), accepted: t("已接收"), 'processing-failed': t("云端处理失败"), prepared: t("已准备上下文"), returned: t("已返回检索结果"), pending: t("等待上传"), waiting_space: t("等待空间"), creating: t("创建空间中"), uncertain: t("创建结果待确认"), uploading: t("上传中"), received: t("已接收"), uploaded: t("已接收"), running: t("云端处理中"), processing: t("云端处理中"), completed: t("已完成"), failed: t("失败"), stopped: t("已停止重试"), installed: t("已安装"), unavailable: t("不可用"), FOUND: t("检索命中"), EMPTY: t("无匹配结果"), UNAVAILABLE: t("记忆暂不可用"), injected: t("已交付上下文"), CONTEXT_MISSING: t("当前轮标识无效") })[value] ?? value ?? '—';
 }
 export function filterSessions(sessions, filter, batches) {
   return sessions.filter((session) => {
@@ -26,6 +29,9 @@ export function filterSessions(sessions, filter, batches) {
 export function sessionStartedAt(session) {
   return Object.hasOwn(session, 'sourceStartedAt') ? session.sourceStartedAt : session.createdAt;
 }
+export function sessionUpdatedAt(session) {
+  return session.updatedAt ?? session.lastOccurredAt ?? sessionStartedAt(session);
+}
 export function traceOccurredAt(trace) {
   return Object.hasOwn(trace, 'occurredAt') ? trace.occurredAt : trace.createdAt;
 }
@@ -40,9 +46,10 @@ export function projectSessionGroups(state) {
   const byId = new Map(groups.map(group => [group.id, group]));
   const byDirectory = new Map();
   const tasks = new Map((state.tasks ?? []).map(task => [task.id, task]));
-  const unassigned = { id: null, name: '未归属项目', root: '', sessions: [] };
+  const unassigned = { id: null, name: t("未归属项目"), root: '', sessions: [] };
   for (const session of state.sessions ?? []) {
     if (['subagent', 'background', 'unknown'].includes(session.sourceKind)) continue;
+    if ((state.bindings ?? []).some(scope => scope.id === session.objectId && !scope.spaceIds?.length)) continue;
     const projectId = Object.hasOwn(session, 'projectId') ? session.projectId : tasks.get(session.taskId)?.projectId;
     let group = byId.get(projectId);
     const root = session.cwd;
@@ -69,58 +76,59 @@ export function projectSessionGroups(state) {
 }
 export function projectTraceCard(group, selected, onOpen) {
   const card = el('button', '', `session-select project-select${selected ? ' selected' : ''}`);
-  card.type = 'button'; card.setAttribute('aria-current', String(selected));
-  card.append(el('strong', group.name), el('small', group.root || '尚未关联到已登记项目'),
-    el('small', `${group.sessions.length} 个会话 · ${group.turnCount} 轮`, 'hint'));
+  card.type = 'button'; attr(card, 'aria-current', String(selected));
+  card.append(el('strong', group.name), el('small', group.root || t("尚未关联到已登记项目")),
+    el('small', t("{0} 个会话 · {1} 轮", group.sessions.length, group.turnCount), 'hint'));
   card.addEventListener('click', onOpen);
   return card;
 }
 export function sessionTitle(session) {
   if (typeof session.title === 'string' && session.title.trim()) return session.title;
   const id = String(session.nativeSessionId || session.id || '');
-  return `未命名会话 · ${(id.startsWith('session-') ? id.slice(8) : id).slice(0, 8)}`;
+  return t("未命名会话 · {0}", (id.startsWith('session-') ? id.slice(8) : id).slice(0, 8));
 }
 export function sessionTraceCard(session, selected, time, onOpen) {
   const card = el('button', '', `session-select${selected ? ' selected' : ''}`);
-  card.type = 'button'; card.setAttribute('aria-current', String(selected));
+  card.type = 'button'; attr(card, 'aria-current', String(selected));
   card.append(el('strong', sessionTitle(session)),
-    el('small', session.agentType), el('small', time), el('small', `${Number(session.turnCount) || 0} 轮`, 'hint'));
+    el('small', session.agentType), el('small', time), el('small', t("{0} 轮", Number(session.turnCount) || 0), 'hint'));
   card.addEventListener('click', onOpen);
   return card;
 }
 
 export function projectBindingTable(projects, agents, openSpaces, uploadHistory, scanHistory) {
   const table = el('table', '', 'binding-table'), head = el('thead'), heading = el('tr'), body = el('tbody');
-  for (const title of ['Agent', '项目名称', '已绑定 Space', '历史会话上传']) { const cell = el('th', title); cell.setAttribute('scope', 'col'); heading.append(cell); }
+  for (const title of ['Agent', t("项目名称"), t("已绑定 Space"), t("历史会话上传")]) { const cell = el('th', title); attr(cell, 'scope', 'col'); heading.append(cell); }
   head.append(heading);
   const names = new Map(agents.map(agent => [agent.agentId, agent.name]));
   for (const project of projects) {
     const row = el('tr'), agent = el('td'), name = el('td', project.name, 'binding-project-name'), spaces = el('td');
     if (project.root) name.append(el('small', project.root, 'mono binding-project-directory'));
-    agent.setAttribute('data-label', 'Agent'); name.setAttribute('data-label', '项目名称'); spaces.setAttribute('data-label', '已绑定 Space');
-    agent.append(el('span', names.get(project.agentType) ?? project.agentType ?? '待识别', 'binding-agent'));
+    attr(agent, 'data-label', 'Agent'); attr(name, 'data-label', t("项目名称")); attr(spaces, 'data-label', t("已绑定 Space"));
+    agent.append(el('span', names.get(project.agentType) ?? project.agentType ?? t("待识别"), 'binding-agent'));
     const count = project.spaceIds?.length ?? 0;
-    const open = el('button', count ? `${count} 个 Space` : '未绑定 Space', 'text-button space-list-open');
-    open.type = 'button'; open.setAttribute('data-scope-id', project.id); open.setAttribute('aria-label', `查看 ${project.name} 的 Space 列表`);
+    const open = el('button', count ? t("{0} 个 Space", count) : t("未绑定 Space"), 'text-button space-list-open');
+    open.type = 'button'; attr(open, 'title', t("查看名称与 ID；新绑定的 Space 从绑定时刻起接收新内容。")); attr(open, 'data-scope-id', project.id); attr(open, 'aria-label', t("查看 {0} 的 Space 列表", project.name));
     open.addEventListener('click', () => openSpaces(project, open)); spaces.append(open);
     const history = el('td'), progress = project.history;
-    history.setAttribute('data-label', '历史会话上传');
+    attr(history, 'data-label', t("历史会话上传"));
     if (!progress || (!progress.uploadError && ['pending', 'scanning'].includes(progress.status))) history.append(el('span', '--', 'hint'));
     else {
       const scanFailed = progress.status === 'failed', uploadError = !scanFailed && progress.uploadError;
+      const paused = typeof uploadError === 'string' && uploadError.startsWith('上传已暂停');
       const complete = progress.status === 'ready' && progress.pending === 0 && progress.recordCount !== 0;
-      const label = scanFailed ? '重试扫描' : uploadError ? '上传历史失败' : progress.uploading ? '上传中…' : complete ? '已上传历史' : '上传历史';
-      const upload = el('button', label, `secondary history-upload${uploadError ? ' history-upload-failed' : ''}`);
-      upload.type = 'button';
-      upload.disabled = !scanFailed && (!!uploadError || progress.uploading || !progress.pending || !count);
-      if (scanFailed && progress.error) upload.title = progress.error;
+      const label = scanFailed ? t("重试扫描") : progress.uploading ? t("上传中…") : paused ? t("上传暂停") : uploadError ? progress.canUpload ? t("重试上传") : t("上传历史失败") : complete ? t("已完成") : t("上传历史");
+      const upload = el('button', label, `secondary history-upload${uploadError && !paused ? ' history-upload-failed' : ''}`);
+      upload.type = 'button'; attr(upload, 'title', t("补传已有会话中尚未上传的内容。"));
+      upload.disabled = !scanFailed && (!progress.canUpload || progress.uploading || !count);
+      if (scanFailed && progress.error) attr(upload, 'title', errorText(progress.error));
       if (!upload.disabled) upload.addEventListener('click', () => (scanFailed ? scanHistory : uploadHistory)?.(project, upload));
       history.append(upload);
-      if (uploadError) history.append(el('p', uploadError, 'history-upload-error'));
+      if (uploadError && !paused) history.append(el('p', errorText(uploadError), 'history-upload-error'));
     }
-    if (progress?.warning) history.append(el('p', progress.warning, 'hint'));
+    if (progress?.warning) history.append(el('p', errorText(progress.warning), 'hint'));
     if (scanHistory && progress?.status === 'ready' && count && !progress.uploading) {
-      const scan = el('button', '扫描历史', 'text-button'); scan.type = 'button';
+      const scan = el('button', t("扫描历史"), 'text-button'); scan.type = 'button';
       scan.addEventListener('click', () => scanHistory(project, scan)); history.append(scan);
     }
     row.append(agent, name, spaces, history); body.append(row);
@@ -131,12 +139,12 @@ export function projectBindingTable(projects, agents, openSpaces, uploadHistory,
 
 function spaceAction(kind, label, callback) {
   const button = el('button', '', `space-icon-button${kind === 'unbind' ? ' danger' : ''}`);
-  button.type = 'button'; button.title = label; button.setAttribute('aria-label', label);
+  button.type = 'button'; attr(button, 'title', label); attr(button, 'aria-label', label);
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.7'); svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
+  attr(svg, 'viewBox', '0 0 24 24'); attr(svg, 'fill', 'none'); attr(svg, 'stroke', 'currentColor');
+  attr(svg, 'stroke-width', '1.7'); attr(svg, 'stroke-linecap', 'round'); attr(svg, 'stroke-linejoin', 'round'); attr(svg, 'aria-hidden', 'true');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', kind === 'copy' ? 'M9 9h11v11H9zM15 5V3H3v12h2' : 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7');
+  attr(path, 'd', kind === 'copy' ? 'M9 9h11v11H9zM15 5V3H3v12h2' : 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7');
   svg.append(path); button.append(svg);
   button.addEventListener('click', async () => { button.disabled = true; try { await callback(); } finally { button.disabled = false; } });
   return button;
@@ -145,9 +153,9 @@ function spaceAction(kind, label, callback) {
 export function spaceBindingItem(space, copy, unbind) {
   const item = el('li', '', 'space-binding-item'), code = el('div', '', 'space-binding-code');
   code.append(el('code', space.spaceId, 'mono'),
-    spaceAction('copy', `复制 Space ID ${space.spaceId}`, () => copy(space.spaceId)),
-    spaceAction('unbind', `解绑 Space ${space.name || space.spaceId}`, () => unbind(space.spaceId)));
-  item.append(el('strong', space.name || '未命名 Space', 'space-binding-name'), code);
+    spaceAction('copy', t("复制 Space ID {0}", space.spaceId), () => copy(space.spaceId)),
+    spaceAction('unbind', t("解绑 Space {0}", space.name || space.spaceId), () => unbind(space.spaceId)));
+  item.append(el('strong', space.name || t("未命名 Space"), 'space-binding-name'), code);
   return item;
 }
 
@@ -170,12 +178,12 @@ function traceText(value) {
   return JSON.stringify(value, (key, part) => imageReference(part) ?? (['image_url', 'imageUrl', 'b64_json', 'image_base64'].includes(key) ? '[image]' : part), 2);
 }
 function compactText(text, limit = 80) {
-  const compact = text.replace(/\s+/g, ' ').trim();
+  const compact = String(text).replace(/\s+/g, ' ').trim();
   return compact.length > limit ? `${compact.slice(0, limit)}…` : compact;
 }
 function traceCard(title, time, preview = '') {
   const card = el('details', '', 'task-trace'), heading = el('summary', '', 'trace-heading');
-  heading.append(el('strong', title), el('span', compactText(preview), 'trace-preview'), el('time', time, 'hint'));
+  heading.append(el('strong', title), el('span', preview && typeof preview.render === 'function' ? preview : compactText(preview), 'trace-preview'), el('time', time, 'hint'));
   card.append(heading);
   return card;
 }
@@ -184,17 +192,17 @@ function toolEntry(tool, time, result = false) {
   const call = tool.function ?? tool;
   const name = call.name ?? tool.tool_name ?? tool.toolName;
   const id = tool.tool_call_id ?? tool.tool_use_id ?? tool.toolCallId ?? tool.id;
-  const card = traceCard(result ? 'tool result' : 'tool use', time, `${result ? '工具结果' : '工具调用'}${name ? ` · ${name}` : ''}`);
+  const card = traceCard(result ? 'tool result' : 'tool use', time, joinText([result ? t('工具结果') : t('工具调用'), ...(name ? [name] : [])]));
   toolIdentity.set(card, { id, result, error: !!(tool.is_error || tool.isError) });
-  if (id) card.append(el('p', `调用标识：${id}`, 'hint'));
+  if (id) card.append(el('p', t("调用标识：{0}", id), 'hint'));
   const input = call.arguments ?? call.input ?? tool.tool_input;
-  if (input !== undefined) card.append(el('p', '参数', 'trace-label'), el('pre', traceText(input), 'trace-content'));
+  if (input !== undefined) card.append(el('p', t("参数"), 'trace-label'), el('pre', traceText(input), 'trace-content'));
   if (result) {
     let output = tool.content ?? tool.output ?? tool.result;
     if (typeof output === 'string') {
       try { output = JSON.parse(output); } catch { /* Plain tool output remains literal text. */ }
     }
-    card.append(el('p', (tool.is_error || tool.isError) ? '错误结果' : '结果', 'trace-label'), el('pre', traceText(output), 'trace-content'));
+    card.append(el('p', (tool.is_error || tool.isError) ? t("错误结果") : t("结果"), 'trace-label'), el('pre', traceText(output), 'trace-content'));
   }
   return card;
 }
@@ -203,9 +211,12 @@ const toolUseTypes = ['tool_use', 'tool-call', 'tool_call', 'toolCall'];
 const toolResultTypes = ['tool_result', 'tool-result'];
 function thinkingText(value) {
   if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(thinkingText).filter(Boolean).join('\n');
+  if (Array.isArray(value)) {
+    const parts = value.map(thinkingText).filter(Boolean);
+    return parts.some(part => part && typeof part.render === 'function') ? joinText(parts, '\n') : parts.join('\n');
+  }
   if (!value || typeof value !== 'object') return '';
-  if (value.type === 'redacted_thinking') return '宿主未提供可读的思考内容。';
+  if (value.type === 'redacted_thinking') return t("宿主未提供可读的思考内容。");
   return thinkingText(value.thinking ?? value.text ?? value.summary ?? value.content);
 }
 function taskTraceCards(trace, time) {
@@ -222,7 +233,7 @@ function taskTraceCards(trace, time) {
   let kind = message.role === 'user' ? 'user' : message.channel === 'analysis' ? 'thinking' : 'answer';
   const flushText = () => {
     if (!text.length) return;
-    const content = text.join('\n'); text.length = 0;
+    const content = text.some(value => value && typeof value.render === 'function') ? joinText([...text], '\n') : text.join('\n'); text.length = 0;
     if (!content) return;
     const card = traceCard(kind, time, content);
     card.append(el('pre', content, 'trace-content')); cards.push(card);
@@ -273,19 +284,19 @@ export function taskTraceEntries(trace, time) {
 export function taskTurnCard(group, number, time, onOpen) {
   const entries = group.traces.flatMap((trace) => taskTraceEntries(trace, ''));
   const task = entries.find(entry => entry.children[0].children[0].textContent === 'user');
-  const title = compactText(task?.children[1]?.textContent ?? '', 120) || '查看任务轨迹';
+  const title = compactText(task?.children[1]?.textContent ?? '', 120) || t("查看任务轨迹");
   const card = el('button', '', 'turn-card'); card.type = 'button';
   const heading = el('div', '', 'turn-heading');
-  heading.append(el('strong', `第 ${number} 轮`), el('time', time, 'hint'), el('span', '查看详情 →', 'turn-open'));
+  heading.append(el('strong', t("第 {0} 轮", number)), el('time', time, 'hint'), el('span', t("查看详情 →"), 'turn-open'));
   const counts = ['user', 'tool use', 'tool result', 'thinking', 'answer'].map((label) => {
     const count = entries.filter((entry) => entry.children[0].children[0].textContent === label).length;
     return count ? `${label} ${count}` : '';
   }).filter(Boolean);
-  card.append(heading, el('p', title, 'turn-title'), el('small', counts.join(' · '), 'hint'));
-  const execution = { running: '执行中', completed: '执行结束', failed: '执行失败', cancelled: '已取消', interrupted: '已中断' };
-  const capture = { catching_up: '历史回填中', collecting: '采集中', awaiting_children: '等待子任务', complete: '采集完整', incomplete: '采集有缺口' };
+  card.append(heading, el('p', title, 'turn-title'), el('small', joinText(counts), 'hint'));
+  const execution = { running: t("执行中"), completed: t("执行结束"), failed: t("执行失败"), cancelled: t("已取消"), interrupted: t("已中断") };
+  const capture = { catching_up: t("历史回填中"), collecting: t("采集中"), awaiting_children: t("等待子任务"), complete: t("采集完整"), incomplete: t("采集有缺口") };
   const states = [execution[group.executionStatus], capture[group.captureStatus]].filter(Boolean);
-  if (states.length) card.append(el('small', states.join(' · '), 'turn-status'));
+  if (states.length) card.append(el('small', joinText(states), 'turn-status'));
   card.addEventListener('click', onOpen);
   return card;
 }
@@ -304,7 +315,7 @@ export function traceScopeSessions(groups, { project = undefined, query = '', fr
   return filterSessions(sessions, { from, to }, []).filter(session => !needle ||
     [session.title, session.id, session.nativeSessionId].some(value => String(value ?? '').toLocaleLowerCase().includes(needle)))
     .sort((a, b) => {
-      const left = sessionStartedAt(a), right = sessionStartedAt(b);
+      const left = sessionUpdatedAt(a), right = sessionUpdatedAt(b);
       if (!left) return right ? 1 : String(a.id).localeCompare(String(b.id));
       if (!right) return -1;
       return compareTime(right, left) || String(a.id).localeCompare(String(b.id));
@@ -314,25 +325,25 @@ export function traceScopeSessions(groups, { project = undefined, query = '', fr
 /** Keep visible messages and contiguous execution runs in source order. */
 export function taskTurnInline(group, number, time) {
   const article = el('article', '', 'trace-turn'), heading = el('div', '', 'trace-turn-heading');
-  heading.append(el('strong', `第 ${number} 轮`), el('time', time, 'hint'));
-  const executionStates = { running: '执行中', completed: '执行结束', failed: '执行失败', cancelled: '已取消', interrupted: '已中断' };
-  const captureStates = { catching_up: '历史回填中', collecting: '采集中', awaiting_children: '等待子任务', complete: '采集完整', incomplete: '采集有缺口' };
+  heading.append(el('strong', t("第 {0} 轮", number)), el('time', time, 'hint'));
+  const executionStates = { running: t("执行中"), completed: t("执行结束"), failed: t("执行失败"), cancelled: t("已取消"), interrupted: t("已中断") };
+  const captureStates = { catching_up: t("历史回填中"), collecting: t("采集中"), awaiting_children: t("等待子任务"), complete: t("采集完整"), incomplete: t("采集有缺口") };
   const states = [executionStates[group.executionStatus], captureStates[group.captureStatus]].filter(Boolean);
-  if (states.length) heading.append(el('span', states.join(' · '), 'turn-status'));
+  if (states.length) heading.append(el('span', joinText(states), 'turn-status'));
   article.append(heading);
   let run, runSummary, previousTool;
   let thoughts = 0, calls = 0, results = 0;
   for (const trace of group.traces ?? []) {
     const occurredAt = traceOccurredAt(trace);
     const date = occurredAt ? new Date(occurredAt) : null;
-    const traceTime = date && Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', { hour12: false }) : '原始时间缺失';
+    const traceTime = date && Number.isFinite(date.getTime()) ? dateText(date) : t("原始时间缺失");
     for (const card of taskTraceEntries(trace, traceTime)) {
       const kind = card.children[0].children[0].textContent;
       if (kind === 'user' || kind === 'answer') {
         run = null; previousTool = null;
         const message = el('section', '', `trace-message ${kind}`);
         const label = el('div', '', 'trace-message-heading');
-        label.append(el('span', kind === 'user' ? '你' : '助手'), el('time', traceTime, 'hint'));
+        label.append(el('span', kind === 'user' ? t("你") : t("助手")), el('time', traceTime, 'hint'));
         const agent = trace.agentPath || trace.message?.agent_path;
         if (agent) label.append(el('span', agent, 'trace-agent'));
         message.append(label, ...Array.from(card.children).slice(1));
@@ -346,17 +357,17 @@ export function taskTurnInline(group, number, time) {
       if (kind === 'thinking') thoughts++;
       if (kind === 'tool use') calls++;
       if (kind === 'tool result') results++;
-      const counts = [thoughts ? `${thoughts} 段思考` : '', calls ? `${calls} 次工具调用` : '', results > calls ? `${results} 条工具结果` : ''].filter(Boolean);
-      runSummary.textContent = `执行过程 · ${counts.join(' · ')}`;
+      const counts = [thoughts ? t("{0} 段思考", thoughts) : '', calls ? t("{0} 次工具调用", calls) : '', results > calls ? t("{0} 条工具结果", results) : ''].filter(Boolean);
+      setText(runSummary, t("执行过程 · {0}", joinText(counts)));
       const tool = toolIdentity.get(card);
       const scope = JSON.stringify([trace.originSessionId ?? trace.sessionId ?? '', trace.agentPath ?? trace.message?.agent_path ?? '']);
       // Pair only adjacent entries: never move a result across another message or agent step.
       if (tool?.result && tool.id && previousTool?.id === tool.id && previousTool.scope === scope) {
         const paired = previousTool.card;
         paired.className = 'task-trace trace-tool-pair';
-        paired.children[0].children[0].textContent = '工具执行';
-        paired.children[0].append(el('span', tool.error ? '执行出错' : '已返回结果', tool.error ? 'trace-tool-error' : 'hint'));
-        paired.append(el('p', `结果时间：${traceTime}`, 'hint'), ...Array.from(card.children).slice(1));
+        setText(paired.children[0].children[0], t("工具执行"));
+        paired.children[0].append(el('span', tool.error ? t("执行出错") : t("已返回结果"), tool.error ? 'trace-tool-error' : 'hint'));
+        paired.append(el('p', t("结果时间：{0}", traceTime), 'hint'), ...Array.from(card.children).slice(1));
         previousTool = null;
       } else {
         run.append(card);
@@ -365,4 +376,37 @@ export function taskTurnInline(group, number, time) {
     }
   }
   return article;
+}
+
+export const cloudOperations = {
+  'create/space': t("新建 Space"), 'get/space': t("读取 Space"), 'list/domains': t("读取领域列表"), 'get/memory': t("读取记忆概览"),
+  'search/memory': t("记忆检索"), 'add/message': t("轨迹上传"), 'get/status': t("查询处理状态"),
+};
+export function cloudDiagnosticDetail(record) {
+  const root = el('div', '', 'cloud-error-detail'), context = record.context ?? {};
+  const summary = el('div', '', 'cloud-error-summary');
+  const kind = { http: t("HTTP 错误"), business: t("业务错误"), timeout: t("请求超时"), network: t("连接失败"), response: t("响应异常"), processing: t("云端处理失败") };
+  summary.append(el('span', record.httpStatus == null ? kind[record.kind] ?? t("调用失败") : 'HTTP ' + record.httpStatus, 'badge error'),
+    el('strong', errorText(record.message)), el('small', t("{0} · {1} 次", (cloudOperations[record.endpoint] ?? record.endpoint), (record.occurrences ?? 1))));
+  root.append(summary);
+  const section = title => { const node = el('section', '', 'cloud-error-section'); node.append(el('h3', title)); root.append(node); return node; };
+  const association = section(t("关联会话与轮次")), ids = el('dl', '', 'cloud-error-ids');
+  for (const [name, value] of [
+    ['Agent', context.agentType], [t("项目"), context.projectName ?? context.projectId],
+    [t("会话 ID"), context.sessionId ?? t("无关联会话")], [t("轮次 ID"), context.conversationId ?? t("无关联轮次")],
+    ...(context.batchId ? [[t("批次 ID"), context.batchId]] : []), ...(context.spaceId ? [['Space ID', context.spaceId]] : []),
+    ...(context.taskId ? [[t("云端任务 ID"), context.taskId]] : []),
+  ]) ids.append(el('dt', name), el('dd', value ?? '—', String(name).includes('ID') ? 'mono' : ''));
+  association.append(ids);
+  const request = section(t("云服务调用"));
+  request.append(el('div', (record.method ?? 'POST') + ' ' + (record.url ?? record.endpoint), 'cloud-error-endpoint mono'));
+  if (record.apiMode) request.append(el('p', record.apiMode === 'algorithm' ? t("算法接口") : t("工程接口"), 'hint'));
+  const dates = el('dl', '', 'cloud-error-ids');
+  for (const [name, value] of [[t("首次发生"), record.createdAt], [t("最近发生"), record.lastOccurredAt]])
+    dates.append(el('dt', name), el('dd', value ? dateText(value) : '—'));
+  request.append(dates);
+  const response = section(t("云服务错误返回"));
+  response.append(el('p', record.httpStatus == null ? t("未收到 HTTP 响应") : t("HTTP 状态：{0}{1}", record.httpStatus, (record.businessCode == null ? '' : t(" · 业务返回码：{0}", record.businessCode))), 'hint'));
+  response.append(el('pre', record.responseBody == null ? t("无响应体。{0}", record.message) : record.responseBody === '' ? t("响应体为空。") : record.responseBody, 'cloud-error-response'));
+  return root;
 }
