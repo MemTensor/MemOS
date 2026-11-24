@@ -175,6 +175,7 @@ def update_inputs(
             "name": d.name,
             "time": d.time,
             "content": d.content,
+            "quote": d.quote[:240],
             "final": d.final,
             "approved_by": d.approved_by,
             "listed": d.listed,
@@ -191,6 +192,7 @@ def update_inputs(
                     "members": [dec.user_labels.get(u, u) for u in it.user_ids],
                     "time": it.time,
                     "text": it.content,
+                    "quote": (it.source.quote or "")[:240],
                 }
             )
         olds.append({"id": dec.id, "topic": topic_name, "items": items})
