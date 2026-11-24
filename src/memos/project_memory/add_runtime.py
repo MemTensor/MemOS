@@ -234,6 +234,9 @@ class EpisodeAddRuntime:
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
+        if self._formation_thread:
+            self._formation_thread.join(timeout=5)
+            self._formation_thread = None
 
     def _run_timer(self) -> None:
         scan_key = f"project_episode_scan_lock:{self.store.project_id}"
@@ -280,7 +283,8 @@ class EpisodeAddRuntime:
             try:
                 result = self.form_space(space_id)
             except Exception as exc:
-                self._back_off(space_id)
+                # Store or Redis trouble is usually transient: retry after a few scans.
+                self._back_off(space_id, self.settings.scan_seconds * 5)
                 logger.warning(
                     "Project Add Formation for a quiet Space backs off (%s)", type(exc).__name__
                 )
@@ -292,10 +296,12 @@ class EpisodeAddRuntime:
     def _formation_key(self, kind: str, space_id: str) -> str:
         return f"project_formation_{kind}:{self.store.project_id}:{space_id}"
 
-    def _back_off(self, space_id: str) -> None:
+    def _back_off(self, space_id: str, seconds: int | None = None) -> None:
         # A Formation that cannot commit would fail the same way on the next scan.
         self.redis.set(
-            self._formation_key("backoff", space_id), "1", ex=self.settings.formation_interval
+            self._formation_key("backoff", space_id),
+            "1",
+            ex=int(seconds or self.settings.formation_interval),
         )
 
     def form_space(self, space_id: str, *, force: bool = False) -> dict[str, Any]:
@@ -363,12 +369,14 @@ class EpisodeAddRuntime:
         deadline = time.monotonic() + 30
         while not self.redis.set(key, token, nx=True, ex=30):
             if time.monotonic() >= deadline:
+                self._back_off(space_id, self.settings.scan_seconds * 5)
                 return {**outcome, "reason": "SPACE_LOCKED"}
             time.sleep(0.2)
         try:
             committed = commit_formation(self.store, changeset)
         except VersionConflictError:
             # An Episode ran Formation or changed a staged Episode first; plan again later.
+            self._back_off(space_id, self.settings.scan_seconds * 5)
             return {**outcome, "reason": "FORMATION_CONFLICT"}
         except (EpisodeFenceError, DraftWitnessError):
             self._back_off(space_id)
@@ -408,7 +416,7 @@ class EpisodeAddRuntime:
             "closed_episode_ids": closed,
             "pending_episode_ids": pending,
             "formation": formation,
-            "staged_remaining": len(self.store.read_staged(space_id)),
+            "staged_remaining": self.store.staged_count(space_id),
         }
 
     def handle(self, batch: list[ScheduleMessageItem]) -> None:

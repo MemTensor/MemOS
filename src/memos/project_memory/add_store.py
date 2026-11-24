@@ -224,6 +224,16 @@ class PostgresAddStore:
             )
             return [row["space_id"] for row in cursor.fetchall()]
 
+    def staged_count(self, space_id: str) -> int:
+        """Active staged Episodes of a Space, without the read_staged page limit."""
+        with self.transaction(readonly=True) as cursor:
+            cursor.execute(
+                """SELECT COUNT(*) AS n FROM episodes
+                   WHERE project_id = %s AND space_id = %s AND staged_status = 'active'""",
+                (self.project_id, space_id),
+            )
+            return int(cursor.fetchone()["n"])
+
     def unfinished_episode_ids(self, space_id: str) -> list[str]:
         """Closed Episodes of a Space that are still moving through the Add stages."""
         with self.transaction(readonly=True) as cursor:
