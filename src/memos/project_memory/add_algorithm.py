@@ -416,7 +416,15 @@ def _has_evidence(episodes: list[dict]) -> bool:
         any(d["kind"] in ("decision", "experience") for d in drafts)
         or sum(d["kind"] == "timeline" for d in drafts) >= 2
     )
-    return useful and (decision or max(turn_count, len(turn_ids)) >= 2)
+    # A delegated one-Turn task whose verified results span several Agent replies is real,
+    # multi-step work even without a member decision; one reply with one result is not.
+    results = {
+        (d.get("episode_id"), message)
+        for d in drafts
+        if d["kind"] in ("timeline", "experience")
+        for message in (d.get("source") or {}).get("message_ids", [])
+    }
+    return useful and (decision or max(turn_count, len(turn_ids)) >= 2 or len(results) >= 2)
 
 
 def _formation_candidates(scoped: dict[str, list[dict]]) -> list[dict]:

@@ -654,3 +654,24 @@ def test_organize_staged_keeps_the_plan_when_formation_is_unavailable():
     assert plan["formation"] is None
     assert plan["staged_updates"] == []
     assert plan["warnings"] == ["FORMATION_MODEL_UNAVAILABLE"]
+
+
+def _delegated(*messages):
+    return [
+        {
+            "kind": "timeline",
+            "origin": "delegated",
+            "episode_id": "one",
+            "source": {"turn_ids": ["turn-one"], "message_ids": [message]},
+        }
+        for message in messages
+    ]
+
+
+def test_one_turn_with_results_in_several_agent_replies_is_enough_evidence():
+    from memos.project_memory.add_algorithm import _has_evidence
+
+    assert _has_evidence([episode("one", turn_count=1, drafts=_delegated("m019", "m036"))])
+    # One reply with two results, or a single result, still waits for more evidence.
+    assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m007", "m007"))])
+    assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m036"))])
