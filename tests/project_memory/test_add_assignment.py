@@ -611,3 +611,46 @@ def test_formation_prompt_separates_deliverables_in_one_module():
     from memos.project_memory.add_algorithm import _FORMATION
 
     assert "交付对象和验收条件不同" in _FORMATION
+
+
+def test_formation_due_covers_a_quiet_space_after_the_interval():
+    from memos.project_memory.add_algorithm import formation_due
+
+    staged = [episode("old", staged_at=NOW - timedelta(hours=1))]
+    quiet = {"staged_since_last_formation": 1, "last_formation_at": NOW - timedelta(hours=3)}
+    recent = {"staged_since_last_formation": 1, "last_formation_at": NOW - timedelta(minutes=5)}
+    full = {"staged_since_last_formation": 10, "last_formation_at": NOW}
+    due = {"formation_count": 10, "formation_interval": 7200}
+    assert formation_due(quiet, staged, NOW, **due)
+    assert not formation_due(recent, staged, NOW, **due)
+    assert formation_due(full, staged, NOW, **due)
+    assert not formation_due(quiet, [], NOW, **due)
+
+
+def test_organize_staged_forms_topics_without_a_carrier_episode():
+    from memos.project_memory.add_algorithm import organize_staged
+
+    first = episode("first", staged_at=NOW - timedelta(hours=3), staged_attempts=1)
+    second = episode("second", staged_at=NOW - timedelta(hours=2))
+    lone = episode("lone", episode_summary="fuel card payment", staged_at=NOW)
+    foreign = episode("foreign", space_id="other-space")
+    writer = Writer([formation_reply(["first", "second"])])
+    space = {"id": "space", "formation_version": 3, "staged_since_last_formation": 3}
+    plan = organize_staged(writer, [first, second, lone, foreign], space, [], now=NOW)
+    assert [scope for scope, _ in writer.calls] == ["episode.formation"]
+    assert plan["episode_id"] is None and plan["staging"] is None
+    (assignment,) = plan["assignments"]
+    assert {row["id"] for row in assignment["episodes"]} == {"first", "second"}
+    updates = {u["episode_id"]: (u["status"], u["attempts"]) for u in plan["staged_updates"]}
+    assert updates == {"first": ("moved", 2), "second": ("moved", 1), "lone": ("active", 1)}
+    assert plan["formation"] == {"version": 3, "consumed": 3}
+
+
+def test_organize_staged_keeps_the_plan_when_formation_is_unavailable():
+    from memos.project_memory.add_algorithm import organize_staged
+
+    writer = Writer([ModelError("down")])
+    plan = organize_staged(writer, [episode("a", staged_at=NOW)], {"id": "space"}, [], now=NOW)
+    assert plan["formation"] is None
+    assert plan["staged_updates"] == []
+    assert plan["warnings"] == ["FORMATION_MODEL_UNAVAILABLE"]

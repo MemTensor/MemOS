@@ -618,15 +618,80 @@ def organize_episode(
     if count + 1 < formation_count and now.timestamp() - time_key(last) < formation_interval:
         return jsonable(plan)
 
-    batch = [episode, *staged]
-    pending = [episode]
-    pending_candidates = {episode["id"]: candidates}
+    topics = candidates if all_topics is None else all_topics
+    missing_domains = {domain for ep in staged for domain in ep["domains"]} - set(domains)
+    if missing_domains and load_formation_topics is not None:
+        try:
+            topics = [*topics, *load_formation_topics(sorted(missing_domains))]
+        except ModelError:
+            plan["warnings"].append("FORMATION_MODEL_UNAVAILABLE")
+            return jsonable(plan)
+    _form(
+        hub,
+        plan,
+        staged,
+        topics,
+        space,
+        now=now,
+        count=count,
+        carrier=episode,
+        candidates=candidates,
+    )
+    return jsonable(plan)
+
+
+def formation_due(
+    space: dict, staged: list[dict], now: datetime, *, formation_count: int, formation_interval: int
+) -> bool:
+    """Whether a quiet Space's staged Episodes have waited long enough for Formation."""
+    if not staged:
+        return False
+    if int(space.get("staged_since_last_formation") or 0) >= formation_count:
+        return True
+    oldest = space.get("first_staged_at") or min(
+        (ep["staged_at"] for ep in staged if ep.get("staged_at")), key=time_key, default=now
+    )
+    last = space.get("last_formation_at") or oldest
+    return now.timestamp() - time_key(last) >= formation_interval
+
+
+def organize_staged(
+    hub: ModelHub, staged: list[dict], space: dict, topics: list[dict], *, now: datetime
+) -> dict:
+    """Run Formation over a Space's staged Episodes without a new Episode to carry it."""
+    staged = [ep for ep in staged if ep["space_id"] == space["id"]][:50]
+    plan = {
+        "episode_id": None,
+        "space_id": space["id"],
+        "assignments": [],
+        "staging": None,
+        "staged_updates": [],
+        "formation": None,
+        "warnings": [],
+    }
+    if staged:
+        count = int(space.get("staged_since_last_formation") or 0)
+        _form(hub, plan, staged, topics, space, now=now, count=count)
+    return jsonable(plan)
+
+
+def _form(
+    hub: ModelHub,
+    plan: dict,
+    staged: list[dict],
+    topics: list[dict],
+    space: dict,
+    *,
+    now: datetime,
+    count: int,
+    carrier: dict | None = None,
+    candidates: list[dict] | None = None,
+) -> None:
+    """Reassign staged Episodes, cluster the rest and record each Episode's staged update."""
+    pending = [carrier] if carrier else []
+    pending_candidates = {carrier["id"]: candidates or []} if carrier else {}
     selected = []
     try:
-        topics = candidates if all_topics is None else all_topics
-        missing_domains = {domain for ep in staged for domain in ep["domains"]} - set(domains)
-        if missing_domains and load_formation_topics is not None:
-            topics = [*topics, *load_formation_topics(sorted(missing_domains))]
         reassigned, staged_candidates = _reassign_staged(hub, staged, topics)
         for ep in staged:
             if target := reassigned.get(ep["id"]):
@@ -638,7 +703,7 @@ def organize_episode(
         selected.extend(_formation_topics(hub, pending, pending_candidates, space, rejected))
     except ModelError:
         plan["warnings"].append("FORMATION_MODEL_UNAVAILABLE")
-        return jsonable(plan)
+        return
 
     plan["formation"] = {"version": int(space.get("formation_version") or 0), "consumed": count}
     if rejected:
@@ -647,9 +712,9 @@ def organize_episode(
     for topic, grouped in selected:
         _assign(plan, topic, [_episode_input(ep) for ep in grouped])
         destinations.update({ep["id"]: topic["id"] for ep in grouped})
-    for ep in batch:
+    for ep in [*([carrier] if carrier else []), *staged]:
         target = destinations.get(ep["id"])
-        if ep["id"] == episode["id"] and not target:
+        if carrier is not None and ep["id"] == carrier["id"] and not target:
             continue
         attempts = int(ep.get("staged_attempts") or 0) + 1
         aged = ep.get("staged_at") and now.timestamp() - time_key(ep["staged_at"]) >= 7 * 86400
@@ -668,4 +733,3 @@ def organize_episode(
                 "attempts": attempts,
             }
         )
-    return jsonable(plan)
