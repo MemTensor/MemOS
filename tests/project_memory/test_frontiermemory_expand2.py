@@ -105,3 +105,24 @@ def test_grown_manifest_keeps_base_turns_and_trajectory_order():
     tampered["turns"][1]["messages"][0]["content"] = "edited"
     with pytest.raises(ValueError, match="content hash"):
         validate(base, tampered, same_user=True)
+
+
+def test_one_turn_per_wave_keeps_each_conversation_in_order():
+    from evaluation.frontiermemory_topic.expand2 import one_turn_per_wave
+
+    turns = [
+        {"turn_id": "a1", "conversation_id": "a", "wave": 1},
+        {"turn_id": "a2", "conversation_id": "a", "wave": 1},
+        {"turn_id": "b1", "conversation_id": "b", "wave": 1},
+        {"turn_id": "a3", "conversation_id": "a", "wave": 2},
+        {"turn_id": "b2", "conversation_id": "b", "wave": 3},
+    ]
+    respaced = one_turn_per_wave({"turns": turns, "conflicts": []})["turns"]
+    assert [(t["turn_id"], t["wave"]) for t in respaced] == [
+        ("a1", 1),
+        ("b1", 1),
+        ("a2", 2),
+        ("b2", 2),
+        ("a3", 3),
+    ]
+    assert turns[1]["wave"] == 1  # The input manifest is left untouched.

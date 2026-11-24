@@ -266,7 +266,32 @@ def same_user_variant(manifest: dict[str, Any]) -> dict[str, Any]:
     return variant
 
 
-def validate(base: dict[str, Any], manifest: dict[str, Any], *, same_user: bool = False) -> None:
+def one_turn_per_wave(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Respace waves so each conversation sends one Turn per wave, in its own order.
+
+    The replay closes every open Episode after a wave, so two Turns of one conversation in a
+    wave would share an Episode. One Turn per wave keeps one Turn per Episode, as in the
+    original samples, while conversations still interleave wave by wave.
+    """
+    rank: dict[str, int] = {}
+    respaced = []
+    for index, turn in enumerate(manifest["turns"]):
+        rank[turn["conversation_id"]] = rank.get(turn["conversation_id"], 0) + 1
+        respaced.append((rank[turn["conversation_id"]], index, {**turn}))
+    turns = []
+    for wave, _, turn in sorted(respaced, key=lambda row: row[:2]):
+        turn["wave"] = wave
+        turns.append(turn)
+    return {**manifest, "turns": turns}
+
+
+def validate(
+    base: dict[str, Any],
+    manifest: dict[str, Any],
+    *,
+    same_user: bool = False,
+    respaced: bool = False,
+) -> None:
     """Check replay and scoring contracts plus the integrity of every base Turn."""
     turns = manifest["turns"]
     if len(turns) > MAX_TURNS:
@@ -278,6 +303,9 @@ def validate(base: dict[str, Any], manifest: dict[str, Any], *, same_user: bool 
     waves = [turn["wave"] for turn in turns]
     if waves != sorted(waves):
         raise ValueError("Waves must not decrease in manifest order")
+    slots = [(turn["wave"], turn["conversation_id"]) for turn in turns]
+    if respaced and len(set(slots)) != len(slots):
+        raise ValueError("A conversation sends two Turns in one wave")
     last: dict[str, int] = {}
     for turn in turns:
         if turn["source_ordinal"] <= last.get(turn["trace_url"], 0):
@@ -299,6 +327,8 @@ def validate(base: dict[str, Any], manifest: dict[str, Any], *, same_user: bool 
         kept = {key: value for key, value in new.items() if key not in ADDED_FIELDS}
         if same_user:
             kept["user_id"] = old["user_id"]
+        if respaced:
+            kept["wave"] = old["wave"]
         if json.dumps(kept, ensure_ascii=False) != json.dumps(old, ensure_ascii=False):
             raise ValueError(f"Base Turn {old['turn_id']} changed")
 
@@ -338,6 +368,11 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--same-user-out", type=Path, required=True)
     parser.add_argument("--fetch", action="store_true", help="Download missing pages")
+    parser.add_argument(
+        "--one-turn-per-wave",
+        action="store_true",
+        help="Respace waves so no conversation sends two Turns in one wave",
+    )
     args = parser.parse_args()
     if args.out.exists() or args.same_user_out.exists():
         parser.error("Output manifest already exists")
@@ -349,9 +384,11 @@ def main() -> None:
         parser.error("Labels were reviewed against a different base manifest")
     urls = sorted({row["trace_url"] for row in labels["turns"]})
     manifest = build_manifest(base, labels, load_pages(args.pages, urls, fetch=args.fetch))
+    if args.one_turn_per_wave:
+        manifest = one_turn_per_wave(manifest)
     variant = same_user_variant(manifest)
-    validate(base, manifest)
-    validate(base, variant, same_user=True)
+    validate(base, manifest, respaced=args.one_turn_per_wave)
+    validate(base, variant, same_user=True, respaced=args.one_turn_per_wave)
     for path, data in ((args.out, manifest), (args.same_user_out, variant)):
         with path.open("x", encoding="utf-8") as stream:
             json.dump(data, stream, ensure_ascii=False, indent=2)
