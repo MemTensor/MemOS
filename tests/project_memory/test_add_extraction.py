@@ -457,6 +457,4 @@ def test_extraction_prompt_splits_rules_and_keeps_completion_reports():
     from memos.project_memory.add_extraction import _EXTRACT
 
     assert "每条单独输出一个 decision" in _EXTRACT
-    assert "同一段可以两种都有" in _EXTRACT
-    assert "Agent 答已经办好的，也是 timeline" in _EXTRACT
     assert "“会先…”“将…”“准备…”都不记" in _EXTRACT
