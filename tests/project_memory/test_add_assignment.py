@@ -528,3 +528,43 @@ def test_formation_accepts_a_specific_name_longer_than_twenty_characters():
     (assignment,) = plan["assignments"]
     assert assignment["topic"]["topic_name"] == name
     assert "rejected" not in plan["formation"]
+
+
+def test_formation_attaches_a_cluster_to_an_existing_topic_every_member_recalled():
+    existing = topic("combine", "project", name="Cache rollout")
+    new = episode("new")
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    reply = {"clusters": [{"episode_ids": ["new", "old"], "topic_id": "combine"}]}
+    writer = Writer(
+        [{"action": "stage"}, {"assignments": [{"episode_id": "old", "action": "stage"}]}, reply]
+    )
+    candidates = recall_candidates(new, [existing])
+    plan = _formation_plan(writer, new, [old], candidates, all_topics=[existing])
+    (assignment,) = plan["assignments"]
+    assert assignment["topic"]["id"] == "combine"
+    assert assignment["topic"]["version"] == 1
+    assert {row["id"] for row in assignment["episodes"]} == {"new", "old"}
+    assert {u["episode_id"]: u["status"] for u in plan["staged_updates"]}["old"] == "moved"
+
+
+def test_formation_rejects_an_existing_topic_not_recalled_by_every_member():
+    existing = topic("combine", "project", name="Cache rollout")
+    new = episode("new")
+    old = episode(
+        "old", domains=["other"], episode_summary="unrelated", staged_at=NOW - timedelta(hours=3)
+    )
+    reply = {"clusters": [{"episode_ids": ["new", "old"], "topic_id": "combine"}]}
+    writer = Writer([{"action": "stage"}, reply])
+    candidates = recall_candidates(new, [existing])
+    plan = _formation_plan(writer, new, [old], candidates, all_topics=[existing])
+    assert plan["assignments"] == []
+    assert plan["formation"]["rejected"] == [
+        {"episode_ids": ["new", "old"], "reason": "topic_not_recalled"}
+    ]
+
+
+def test_formation_prompt_offers_attaching_to_existing_topics():
+    from memos.project_memory.add_algorithm import _FORMATION
+
+    assert "topic_id" in _FORMATION
+    assert "无法独立交付的组保留在默认主题" not in _FORMATION
