@@ -538,7 +538,11 @@ def test_formation_attaches_a_cluster_to_an_existing_topic_every_member_recalled
     existing = topic("combine", "project", name="Cache rollout")
     new = episode("new")
     old = episode("old", staged_at=NOW - timedelta(hours=3))
-    reply = {"clusters": [{"episode_ids": ["new", "old"], "topic_id": "combine"}]}
+    reply = {
+        "clusters": [
+            {"episode_ids": ["new", "old"], "topic_id": "combine", "same_deliverable": True}
+        ]
+    }
     writer = Writer(
         [{"action": "stage"}, {"assignments": [{"episode_id": "old", "action": "stage"}]}, reply]
     )
@@ -557,7 +561,11 @@ def test_formation_rejects_an_existing_topic_not_recalled_by_every_member():
     old = episode(
         "old", domains=["other"], episode_summary="unrelated", staged_at=NOW - timedelta(hours=3)
     )
-    reply = {"clusters": [{"episode_ids": ["new", "old"], "topic_id": "combine"}]}
+    reply = {
+        "clusters": [
+            {"episode_ids": ["new", "old"], "topic_id": "combine", "same_deliverable": True}
+        ]
+    }
     writer = Writer([{"action": "stage"}, reply])
     candidates = recall_candidates(new, [existing])
     plan = _formation_plan(writer, new, [old], candidates, all_topics=[existing])
@@ -742,3 +750,20 @@ def test_formation_links_need_an_operated_resource_not_a_shared_mention():
     assert "shared_anchor" not in pairs[("a", "b")]
     assert "shared_mention" in pairs[("a", "b")]
     assert "shared_anchor" in pairs[("c", "d")]
+
+
+def test_formation_attach_needs_the_same_deliverable_judgment():
+    existing = topic("combine", "project", name="Cache rollout")
+    new = episode("new")
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    reply = {"clusters": [{"episode_ids": ["new", "old"], "topic_id": "combine"}]}
+    writer = Writer(
+        [{"action": "stage"}, {"assignments": [{"episode_id": "old", "action": "stage"}]}, reply]
+    )
+    plan = _formation_plan(
+        writer, new, [old], recall_candidates(new, [existing]), all_topics=[existing]
+    )
+    assert plan["assignments"] == []
+    assert plan["formation"]["rejected"] == [
+        {"episode_ids": ["new", "old"], "reason": "not_same_deliverable"}
+    ]
