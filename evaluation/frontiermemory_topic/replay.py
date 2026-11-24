@@ -94,6 +94,21 @@ def witness_index(
     return dict(index)
 
 
+def decision_positions(decision: dict[str, Any]) -> dict[str, Any]:
+    """Name the source message behind each position of a Decision: current, open, superseded."""
+
+    def message(item: dict[str, Any]) -> str | None:
+        return (item.get("source") or {}).get("message_id")
+
+    return {
+        "decision_id": decision.get("id"),
+        "current": message(decision),
+        "current_user_ids": sorted(decision.get("user_ids") or []),
+        "conflicts": [m for item in decision.get("conflicts") or [] if (m := message(item))],
+        "history": [m for item in decision.get("history") or [] if (m := message(item))],
+    }
+
+
 def observe_turn(
     row: dict[str, Any], live_topic_ids: set[str], witnesses: dict[str, set[str]]
 ) -> dict[str, Any]:
@@ -228,6 +243,7 @@ def export_state(store: PostgresAddStore, turns: list[dict[str, Any]]) -> dict[s
                     for field in ("decisions", "experiences", "timeline")
                 },
                 "embedded": bool(topic.get("embedding_model_id")),
+                "decisions": [decision_positions(row) for row in topic.get("decisions") or []],
             }
             for topic in topics
         ],

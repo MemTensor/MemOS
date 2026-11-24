@@ -95,3 +95,22 @@ def test_flush_space_retries_until_nothing_is_in_flight(monkeypatch):
     assert [r["formation"].get("ran") for r in results] == [False, True]
     assert len(drained) == 2
     runtime.flush.assert_called_with(module.SPACE)
+
+
+def test_decision_positions_name_current_conflicting_and_superseded_sources():
+    from evaluation.frontiermemory_topic.replay import decision_positions
+
+    decision = {
+        "id": "d1",
+        "user_ids": ["bob"],
+        "source": {"message_id": "m3"},
+        "conflicts": [{"source": {"message_id": "m2"}}, {"source": {}}],
+        "history": [{"source": {"message_id": "m1"}}],
+    }
+    assert decision_positions(decision) == {
+        "decision_id": "d1",
+        "current": "m3",
+        "current_user_ids": ["bob"],
+        "conflicts": ["m2"],
+        "history": ["m1"],
+    }
