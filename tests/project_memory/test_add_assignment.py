@@ -675,6 +675,9 @@ def test_one_turn_with_results_in_several_agent_replies_is_enough_evidence():
     # One reply with two results, or a single result, still waits for more evidence.
     assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m007", "m007"))])
     assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m036"))])
+    # The member's own message is not an Agent reply.
+    member = {**_delegated("one")[0], "origin": "member"}
+    assert not _has_evidence([episode("one", turn_count=1, drafts=[member, *_delegated("m2")])])
 
 
 def test_assignment_and_formation_read_verified_source_quotes():

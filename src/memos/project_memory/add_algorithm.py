@@ -471,7 +471,7 @@ def _has_evidence(episodes: list[dict]) -> bool:
     results = {
         (d.get("episode_id"), message)
         for d in drafts
-        if d["kind"] in ("timeline", "experience")
+        if d["kind"] in ("timeline", "experience") and d.get("origin") == "delegated"
         for message in (d.get("source") or {}).get("message_ids", [])
     }
     return useful and (decision or max(turn_count, len(turn_ids)) >= 2 or len(results) >= 2)
