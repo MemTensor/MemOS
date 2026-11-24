@@ -9,9 +9,9 @@ from evaluation.frontiermemory_topic.replay import (
 
 
 def test_work_limit_counts_distinct_gold_groups_before_replay():
-    turns = [{"gold_work": f"work-{i}"} for i in range(50)]
-    assert validate_work_limit([*turns, *turns]) == 50
-    with pytest.raises(ValueError, match="50"):
+    turns = [{"gold_work": f"work-{i}"} for i in range(100)]
+    assert validate_work_limit([*turns, *turns]) == 100
+    with pytest.raises(ValueError, match="100"):
         validate_work_limit([*turns, {"gold_work": "one-too-many"}])
 
 

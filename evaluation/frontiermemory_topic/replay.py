@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 SPACE = "frontier-pilot"
 DOMAIN = "engineering"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-MAX_WORK_GROUPS = 50
+MAX_WORK_GROUPS = 100
 
 
 def validate_work_limit(turns: list[dict[str, Any]]) -> int:
