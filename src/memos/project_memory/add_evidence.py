@@ -28,6 +28,21 @@ def key_tokens(text: str) -> set[str]:
     return set(_KEY_TOKEN.findall(text))
 
 
+def unwitnessed_tokens(text: str, witness: str) -> set[str]:
+    """Return key tokens of ``text`` that the witness does not support.
+
+    Path-like tokens absorb sentence punctuation (``truthy/falsy.``) and the source may glue a
+    prefix onto them (``non-skipped/non-todo``), so they only need to occur in the witness text.
+    Numbers and codes keep exact token matching, so ``1`` is never witnessed by ``10``.
+    """
+    supported = {token.rstrip(".-") for token in key_tokens(witness)}
+    return {
+        token
+        for token in (raw.rstrip(".-") for raw in key_tokens(text))
+        if token not in supported and not ("/" in token and token in witness)
+    }
+
+
 def _tool_action(name: str) -> str:
     name = name.lower()
     if any(word in name for word in ("write", "patch", "edit", "replace")):

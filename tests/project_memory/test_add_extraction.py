@@ -307,3 +307,68 @@ def test_agent_decision_without_the_member_instruction_is_still_dropped():
     result = extract_episode(writer, {"id": "episode"}, [member, reply])
     assert result["drafts"] == []
     assert result["dropped_drafts"] == 1
+
+
+@pytest.mark.parametrize(
+    ("content", "quote"),
+    [
+        # A path-like token at the end of a sentence carries the period in the source.
+        ("首行首列作 truthy/falsy 判断", "use the first column as truthy/falsy."),
+        (
+            "不变量错误需提及 validation/invariants。",
+            "errors need to mention validation/invariants.",
+        ),
+        # The model drops a prefix that the source glues onto the same token.
+        ("第 N 个非 skipped/non-todo 失败", "bail on the Nth non-skipped/non-todo failure"),
+    ],
+)
+def test_draft_accepts_path_tokens_across_source_punctuation(content, quote):
+    writer = Writer(
+        {
+            "episode_summary": content,
+            "drafts": [
+                {"kind": "decision", "content": content, "message_id": "one", "quote": quote}
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
+    assert [draft["content"] for draft in result["drafts"]] == [content]
+    assert result["episode_summary"] == content
+
+
+def test_draft_still_rejects_a_path_token_absent_from_the_witness():
+    writer = Writer(
+        {
+            "episode_summary": "改用 src/cache.py",
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "content": "改用 src/cache.py",
+                    "message_id": "one",
+                    "quote": "改用 src/store.py",
+                }
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", "改用 src/store.py")])
+    assert result["drafts"] == []
+
+
+def test_unverifiable_summary_token_is_removed_without_discarding_the_summary():
+    quote = "Add `safe_bulk_insert` and `safe_bulk_upsert` on `Database`."
+    summary = "成员要求在 Database 上新增 safe_bulk_insert/upsert 两个安全批量接口"
+    writer = Writer(
+        {
+            "episode_summary": summary,
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "content": "新增安全批量接口",
+                    "message_id": "one",
+                    "quote": quote,
+                }
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
+    assert result["episode_summary"] == "成员要求在 Database 上新增  两个安全批量接口"

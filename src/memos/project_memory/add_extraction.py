@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from memos.log import get_logger
 
-from .add_evidence import anchor_keys, collect_anchors, key_tokens, quote_ref, text_at
+from .add_evidence import anchor_keys, collect_anchors, quote_ref, text_at, unwitnessed_tokens
 from .judge import ModelError
 from .types import stable_uuid, time_key
 
@@ -195,7 +195,7 @@ def _draft(
     if origin == "adopted" and not (member_statement and proposals):
         return None
     witness = [raw["quote"], *contextual_text, raw.get("_support_quote") or ""]
-    if not key_tokens(content).issubset(key_tokens("\n".join(witness))):
+    if unwitnessed_tokens(content, "\n".join(witness)):
         return None
     origin = "adopted" if origin == "adopted" else "member" if member_statement else "delegated"
     author = member.get("role_id") or member.get("origin_user_id") or member.get("user_id")
@@ -378,7 +378,10 @@ def extract_episode(
     if valid and not summary.strip():
         raise ModelError("An Episode with accepted drafts requires a summary")
     corpus = "\n".join(row.get("content") or "" for row in messages + previous_messages)
-    if not key_tokens(summary).issubset(key_tokens(corpus)):
+    # Drop only the unsupported values: the rest of the summary still names the work.
+    for token in sorted(unwitnessed_tokens(summary, corpus), key=len, reverse=True):
+        summary = summary.replace(token, "")
+    if valid and not summary.strip():
         summary = "。".join(draft["content"] for draft in valid.values())
     result.update(episode_summary=summary.strip()[:200], drafts=list(valid.values()))
     if valid:
