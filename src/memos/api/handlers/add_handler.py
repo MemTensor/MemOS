@@ -19,6 +19,15 @@ from memos.plugins.hooks import hookable
 from memos.types import MessageList
 
 
+# Module-level on purpose: ``@validate_call`` builds the pydantic schema for
+# the OpenAI message union at decoration time. Keeping this definition at
+# module scope means the schema is built once at import instead of once per
+# add request.
+@validate_call
+def _check_messages(messages: MessageList) -> None:
+    pass
+
+
 class AddHandler(BaseHandler):
     """
     Handler for memory addition operations.
@@ -64,10 +73,6 @@ class AddHandler(BaseHandler):
                 self.logger.warning(f"[AddHandler] info fields can not contain {exclude_fields}.")
 
         cube_view = self._build_cube_view(add_req)
-
-        @validate_call
-        def _check_messages(messages: MessageList) -> None:
-            pass
 
         if add_req.is_feedback:
             try:
