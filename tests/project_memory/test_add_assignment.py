@@ -675,3 +675,43 @@ def test_one_turn_with_results_in_several_agent_replies_is_enough_evidence():
     # One reply with two results, or a single result, still waits for more evidence.
     assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m007", "m007"))])
     assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m036"))])
+
+
+def test_assignment_and_formation_read_verified_source_quotes():
+    from memos.project_memory.add_algorithm import _FORMATION, _assignment_input
+
+    quoted = {
+        "kind": "decision",
+        "quote": "Use `--safe-mode`, not `--safe`." + "x" * 400,
+        "origin": "member",
+        "source": {"turn_ids": ["turn-new"]},
+    }
+    current = episode("new", drafts=[quoted])
+    decided = {
+        "time": "2026-11-19T00:00:00+00:00",
+        "source": {"quote": "Expose `--safe`."},
+        "conflicts": [{"source": {"quote": "Call it `--safe-mode`."}}],
+    }
+    topics = [topic(f"t{i}", "project", decisions=[{**decided, "id": f"d{i}"}]) for i in range(7)]
+    inputs = _assignment_input(current, recall_candidates(current, topics))
+    (evidence,) = inputs["evidence"]
+    assert evidence["kind"] == "decision" and len(evidence["quote"]) == 200
+    quoted_views = [c for c in inputs["candidates"] if "decision_quotes" in c]
+    assert len(quoted_views) == 5
+    assert [q["quote"] for q in quoted_views[0]["decision_quotes"]] == [
+        "Expose `--safe`.",
+        "Call it `--safe-mode`.",
+    ]
+    for prompt in (_ASSIGN, _ASSIGN_BATCH, _FORMATION):
+        assert "先读这些原文再判断交付对象" in prompt
+
+
+def test_formation_input_carries_episode_evidence():
+    new = episode("new", drafts=[{**episode("x")["drafts"][0], "quote": "Keep the pool at 8."}])
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    writer = Writer([formation_reply(["new", "old"])])
+    _formation_plan(writer, new, [old])
+    (call,) = [inputs for scope, inputs in writer.calls if scope == "episode.formation"]
+    by_id = {row["id"]: row for row in call["episodes"]}
+    assert by_id["new"]["evidence"] == [{"kind": "decision", "quote": "Keep the pool at 8."}]
+    assert by_id["old"]["evidence"] == []

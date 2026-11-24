@@ -26,6 +26,12 @@ _DELIVERABLE_RULE = """同一模块、同一数据格式族、同一配置前缀
 例如同一导出模块里的“失败重试”和“结果落盘”，同一解析器里“格式 A 的容错”和“格式 B 的容错”。
 """
 
+# Summaries flatten revisions and multi-part requests; the verified quotes keep the source text.
+_SOURCE_RULE = """evidence 是本段经校验的原文引用，decision_quotes 是候选现有决策的原文。遇到结论冲突、修订或否定，
+一段含多项要求，或摘要含糊时，先读这些原文再判断交付对象：对同一事项给出不同结论仍是同一工作，
+冲突交给后续的决策合并处理，不要因结论不同另开工作，也不要因措辞相近归入。
+"""
+
 _ASSIGN = (
     """[系统]
 判断 Episode 是否推进候选 Topic 的同一项工作。只依据轨迹摘要、资源锚点和上下文，不能因名字相似归入。
@@ -34,6 +40,7 @@ _ASSIGN = (
 再分别写出本段和候选的交付对象，具体到功能、接口、配置项、规则或产出物，保留原文标识符。两者相同才算 same_deliverable。
 """
     + _DELIVERABLE_RULE
+    + _SOURCE_RULE
     + """上段承接和同一会话只说明发生顺序，连续的请求常常已转到下一项工作，不能单独作为归入依据。
 正面依据为实际操作共同资源、上段承接、明确指代或摘要和描述所指的具体目标吻合，且交付对象相同。
 输出 JSON：{\"action\":\"attach\"/\"stage\",\"topic_id\":候选ID,
@@ -55,6 +62,7 @@ _ASSIGN_BATCH = (
 再分别写出本段和候选的交付对象，具体到功能、接口、配置项、规则或产出物，保留原文标识符。两者相同才算 same_deliverable。
 """
     + _DELIVERABLE_RULE
+    + _SOURCE_RULE
     + """上段承接和同一会话只说明发生顺序，连续的请求常常已转到下一项工作，不能单独作为归入依据。
 为每个 episode_id 原样返回一行，不得重复、遗漏或从其他行借用 Topic ID。
 输出 JSON {"assignments":[{"episode_id":输入ID,"action":"stage"},
@@ -86,6 +94,7 @@ _FORMATION = (
 4. 拿不准时拆开：单个 Episode 可以独立成为一个 cluster，不要为了减少主题数量合并。
 """
     + _DELIVERABLE_RULE
+    + _SOURCE_RULE
     + """links 的 signals：same_conversation 只说明发生在同一会话，不是同一工作的证据；
 shared_anchor（共同操作的资源）和 similar_summary（摘要共有的具体词）才是正面线索。
 以轨迹摘要、资源证据和连边为主。一致领域必须来自各 Episode 候选领域的交集。
@@ -246,8 +255,36 @@ def recall_candidates(
     ]
 
 
-def _candidate_view(candidate: dict) -> dict:
-    return {
+_QUOTE_LIMIT = 200
+_EVIDENCE_LIMIT = 4
+_QUOTED_CANDIDATES = 5
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= _QUOTE_LIMIT else text[: _QUOTE_LIMIT - 1] + "…"
+
+
+def _decision_quotes(topic: dict) -> list[dict]:
+    """Source quotes of a Topic's latest decisions, with each open conflicting position."""
+    rows = sorted(topic.get("decisions") or [], key=lambda row: time_key(row.get("time")))[-3:]
+    quotes = []
+    for row in rows:
+        for item in [row, *(row.get("conflicts") or [])]:
+            if quote := ((item.get("source") or {}).get("quote") or "").strip():
+                quotes.append({"decision_id": row.get("id"), "quote": _clip(quote)})
+    return quotes[:6]
+
+
+def _evidence(episode: dict) -> list[dict]:
+    return [
+        {"kind": draft["kind"], "quote": _clip(draft["quote"])}
+        for draft in (episode.get("drafts") or [])[:_EVIDENCE_LIMIT]
+        if isinstance(draft.get("quote"), str) and draft["quote"].strip()
+    ]
+
+
+def _candidate_view(candidate: dict, *, quotes: bool = False) -> dict:
+    view = {
         "id": candidate["id"],
         "domain": candidate.get("domain"),
         "title": candidate.get("topic_name"),
@@ -256,6 +293,9 @@ def _candidate_view(candidate: dict) -> dict:
         "progress": _progress(candidate),
         "recall": candidate.get("recall") or {},
     }
+    if quotes and (decision_quotes := _decision_quotes(candidate)):
+        view["decision_quotes"] = decision_quotes
+    return view
 
 
 def _assignment_input(episode: dict, candidates: list[dict]) -> dict:
@@ -269,7 +309,11 @@ def _assignment_input(episode: dict, candidates: list[dict]) -> dict:
             }
             for anchor in (episode.get("anchors") or [])[:80]
         ],
-        "candidates": [_candidate_view(candidate) for candidate in candidates],
+        "evidence": _evidence(episode),
+        "candidates": [
+            _candidate_view(candidate, quotes=rank < _QUOTED_CANDIDATES)
+            for rank, candidate in enumerate(candidates)
+        ],
     }
 
 
@@ -473,6 +517,7 @@ def _formation_topics(
                 {
                     "id": ep["id"],
                     "summary": ep.get("episode_summary"),
+                    "evidence": _evidence(ep),
                     "domains": ep["domains"],
                     "work_evidence_sufficient": _has_evidence([ep]),
                 }
