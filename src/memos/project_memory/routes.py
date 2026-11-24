@@ -179,7 +179,8 @@ def create_router(plugin, *, legacy_flush: bool = False) -> APIRouter:
                 }
             )
 
-    else:
+    elif os.getenv("PROJECT_MEMORY_ENABLE_FLUSH", "false").lower() == "true":
+        # Development and evaluation only: closes every open Episode and forces LLM Formation.
 
         @router.post(
             "/flush_project_memory",
