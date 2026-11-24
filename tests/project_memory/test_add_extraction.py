@@ -380,3 +380,31 @@ def test_extraction_summary_leads_with_every_requested_deliverable():
     assert "开头先写成员本段要交付的具体对象" in _EXTRACT
     assert "逐项点名" in _EXTRACT
     assert "保留原文标识符" in _EXTRACT
+
+
+@pytest.mark.parametrize(
+    ("claimed", "source"),
+    [
+        ("接口 api/v1", "接口 api/v10"),
+        ("配置 conf/retry/3", "配置 conf/retry/30"),
+        ("存到 ta/bucket", "存到 data/bucket"),
+    ],
+)
+def test_path_tokens_still_need_their_own_boundaries(claimed, source):
+    from memos.project_memory.add_evidence import unwitnessed_tokens
+
+    assert unwitnessed_tokens(claimed, source)
+
+
+def test_summary_stripping_removes_whole_tokens_only():
+    quote = "重试次数改为 10，接口 api/v10，另记 3 次"
+    writer = Writer(
+        {
+            "episode_summary": "重试次数从 10 改为 1 次，接口 api/v1",
+            "drafts": [
+                {"kind": "decision", "content": "重试 10 次", "message_id": "one", "quote": quote}
+            ],
+        }
+    )
+    result = extract_episode(writer, {"id": "episode"}, [row("one", "user", quote)])
+    assert result["episode_summary"] == "重试次数从 10 改为  次，接口"

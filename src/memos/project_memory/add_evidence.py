@@ -39,8 +39,24 @@ def unwitnessed_tokens(text: str, witness: str) -> set[str]:
     return {
         token
         for token in (raw.rstrip(".-") for raw in key_tokens(text))
-        if token not in supported and not ("/" in token and token in witness)
+        if token not in supported and not ("/" in token and _occurs_whole(token, witness))
     }
+
+
+def _occurs_whole(token: str, witness: str) -> bool:
+    # A glued prefix may only end in punctuation (``non-skipped/...``), and nothing may follow
+    # that would extend the token (``api/v1`` is not witnessed by ``api/v10``).
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![\w/])", witness) is not None
+
+
+def strip_tokens(text: str, tokens: set[str]) -> str:
+    """Remove whole key tokens from text, leaving values that merely contain them intact."""
+    spans = [
+        match.span() for match in _KEY_TOKEN.finditer(text) if match.group().rstrip(".-") in tokens
+    ]
+    for start, end in reversed(spans):
+        text = text[:start] + text[end:]
+    return text
 
 
 def _tool_action(name: str) -> str:

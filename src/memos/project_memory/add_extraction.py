@@ -10,7 +10,14 @@ from typing import TYPE_CHECKING, Any
 
 from memos.log import get_logger
 
-from .add_evidence import anchor_keys, collect_anchors, quote_ref, text_at, unwitnessed_tokens
+from .add_evidence import (
+    anchor_keys,
+    collect_anchors,
+    quote_ref,
+    strip_tokens,
+    text_at,
+    unwitnessed_tokens,
+)
 from .judge import ModelError
 from .types import stable_uuid, time_key
 
@@ -380,8 +387,7 @@ def extract_episode(
         raise ModelError("An Episode with accepted drafts requires a summary")
     corpus = "\n".join(row.get("content") or "" for row in messages + previous_messages)
     # Drop only the unsupported values: the rest of the summary still names the work.
-    for token in sorted(unwitnessed_tokens(summary, corpus), key=len, reverse=True):
-        summary = summary.replace(token, "")
+    summary = strip_tokens(summary, unwitnessed_tokens(summary, corpus))
     if valid and not summary.strip():
         summary = "。".join(draft["content"] for draft in valid.values())
     result.update(episode_summary=summary.strip()[:200], drafts=list(valid.values()))
