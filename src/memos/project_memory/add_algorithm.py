@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 # Sibling work in one module shares vocabulary, so recall alone cannot separate it.
 _DELIVERABLE_RULE = """同一模块、同一数据格式族、同一配置前缀或同一流程的不同阶段，只要交付对象和验收条件不同，就是不同工作。
 例如同一导出模块里的“失败重试”和“结果落盘”，同一解析器里“格式 A 的容错”和“格式 B 的容错”。
+按候选已有的规则或决定去落实的回报（按规则建好、放好、已完成）推进的就是那项工作，交付对象相同。
 """
 
 # Summaries flatten revisions and multi-part requests; the verified quotes keep the source text.

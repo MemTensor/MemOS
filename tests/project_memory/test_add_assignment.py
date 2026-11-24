@@ -767,3 +767,10 @@ def test_formation_attach_needs_the_same_deliverable_judgment():
     assert plan["formation"]["rejected"] == [
         {"episode_ids": ["new", "old"], "reason": "not_same_deliverable"}
     ]
+
+
+def test_assignment_prompts_treat_carrying_out_a_rule_as_the_same_work():
+    from memos.project_memory.add_algorithm import _FORMATION
+
+    for prompt in (_ASSIGN, _ASSIGN_BATCH, _FORMATION):
+        assert "按候选已有的规则或决定去落实的回报" in prompt
