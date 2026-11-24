@@ -526,6 +526,19 @@ class AddAcceptance:
                     closed.append(self._close(cursor, episode["id"], reason, now))
             return closed
 
+    def close_open(self, space_id: str, conversation_id: str | None = None) -> list[str]:
+        """Close a Space's open Episodes now, as if they had gone idle (flush)."""
+        with self.store.transaction() as cursor:
+            now = self._now(cursor)
+            cursor.execute(
+                """SELECT id FROM episodes
+                   WHERE project_id = %s AND space_id = %s AND state = 'open'
+                     AND (%s::text IS NULL OR conversation_id = %s)
+                   ORDER BY opened_at, id FOR UPDATE SKIP LOCKED""",
+                (self.store.project_id, space_id, conversation_id, conversation_id),
+            )
+            return [self._close(cursor, row["id"], "idle", now) for row in cursor.fetchall()]
+
     def status(self, task_id: str, user_id: str) -> dict[str, Any] | None:
         with self.store.transaction(readonly=True) as cursor:
             cursor.execute(

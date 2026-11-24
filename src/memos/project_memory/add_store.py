@@ -214,6 +214,27 @@ class PostgresAddStore:
                 ),
             )
 
+    def staged_space_ids(self) -> list[str]:
+        """Spaces that still hold active staged Episodes awaiting Formation."""
+        with self.transaction(readonly=True) as cursor:
+            cursor.execute(
+                """SELECT DISTINCT space_id FROM episodes
+                   WHERE project_id = %s AND staged_status = 'active' ORDER BY space_id""",
+                (self.project_id,),
+            )
+            return [row["space_id"] for row in cursor.fetchall()]
+
+    def unfinished_episode_ids(self, space_id: str) -> list[str]:
+        """Closed Episodes of a Space that are still moving through the Add stages."""
+        with self.transaction(readonly=True) as cursor:
+            cursor.execute(
+                """SELECT id FROM episodes
+                   WHERE project_id = %s AND space_id = %s AND outcome = 'pending'
+                     AND state <> 'open' ORDER BY id""",
+                (self.project_id, space_id),
+            )
+            return [row["id"] for row in cursor.fetchall()]
+
     def read_staged(self, space_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self.transaction(readonly=True) as cursor:
             cursor.execute(
