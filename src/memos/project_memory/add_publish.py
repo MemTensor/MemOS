@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .add_entry_fields import experience_retired, experience_status
 from .add_layout import load_topics
 from .index import Topic, Vector, replace_snapshot, set_embedding
 
@@ -107,7 +108,7 @@ def topic_snapshot(row: dict) -> Topic:
     ]
     experiences = []
     for item in row["experiences"] or []:
-        if item.get("archived"):
+        if experience_retired(item):
             continue
         card = item.get("card") or {}
         experiences.append(
@@ -117,7 +118,7 @@ def topic_snapshot(row: dict) -> Topic:
                 "time": _iso(item.get("time")),
                 "user_ids": list(item.get("user_ids") or []),
                 "task_intent": card.get("task_intent"),
-                "exp_status": item.get("status"),
+                "exp_status": experience_status(item),
                 "confidence": item.get("confidence"),
                 "card": card,
                 "version": item.get("version"),

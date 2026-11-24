@@ -14,6 +14,7 @@ from typing import Any
 
 from .add_acceptance import AcceptanceSettings
 from .add_commit import refresh_topic_items
+from .add_entry_fields import experience_version
 from .add_legacy import LegacyArchive, read_legacy_postgres, read_legacy_sqlite
 from .add_legacy_episodes import rebuild_legacy_trajectories, recorded_time
 from .add_publish import publish_topics, sync_space
@@ -103,20 +104,18 @@ def _migrate_experience(
         entry = dict(old)
         if old_node and old_node["metadata"].get("user_name") == card.space_id:
             entry["card"] = ExperienceCard.from_node(archive_id, old_node["metadata"]).card()
-        history.append(entry)
+        history.append(experience_version(entry))
     target = topics[matched_topics[-1]]
     target["experiences"].append(
         {
             "id": identifier,
             "version": card.version,
-            "status": card.exp_status,
+            "exp_status": card.exp_status,
             "confidence": card.confidence,
             "quality_score": card.quality_score,
             "signal": card.signal,
             "time": card.time,
             "last_supported_at": card.last_supported_at,
-            "session_id": card.session_id,
-            "user_id": card.user_id,
             "user_ids": card.author_ids,
             "use_count": card.use_count,
             "card": card.card(),

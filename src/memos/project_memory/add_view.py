@@ -8,6 +8,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from .add_entry_fields import (
+    experience_conversation_id,
+    experience_retired,
+    experience_status,
+    experience_user_id,
+)
 from .add_layout import load_topics
 from .add_publish import publish_topics, retract_topics, sync_space
 from .add_store import json_value, record_event
@@ -62,15 +68,15 @@ def _experience(row: dict[str, Any], item: dict[str, Any]) -> ExperienceCard:
         item["id"],
         {
             "user_name": row["space_id"],
-            "user_id": item.get("user_id") or "",
-            "session_id": item.get("session_id") or "",
+            "user_id": experience_user_id(item),
+            "session_id": experience_conversation_id(item),
             "confidence": item.get("confidence", 0.5),
             "version": item.get("version", 1),
             "topic_ids": list(dict.fromkeys([*item.get("legacy_topic_ids", []), row["id"]])),
             "anchors": card.get("anchors", []),
             "info": {
                 **card,
-                "exp_status": item.get("status", "candidate"),
+                "exp_status": experience_status(item),
                 "quality_score": item.get("quality_score"),
                 "signal": item.get("signal"),
                 "author_ids": item.get("user_ids") or [],
@@ -78,7 +84,7 @@ def _experience(row: dict[str, Any], item: dict[str, Any]) -> ExperienceCard:
                 "last_supported_at": item.get("last_supported_at") or "",
                 "use_count": item.get("use_count", 0),
             },
-            "status": "archived" if item.get("archived") else "activated",
+            "status": "archived" if experience_retired(item) else "activated",
             "sources": item.get("sources") or [],
             "history": item.get("history") or [],
         },
@@ -461,7 +467,7 @@ class RelationalProjectView:
             _experience(row, item)
             for row in rows
             for item in row["experiences"]
-            if include_archived or not item.get("archived")
+            if include_archived or not experience_retired(item)
         ]
 
     def get_experience(self, experience_id: str, space_id: str) -> ExperienceCard | None:

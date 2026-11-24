@@ -150,6 +150,10 @@ def test_m05_adds_experience_from_draft_with_evidence():
     assert experience["user_ids"] == ["user"]
     assert change["kind"] == "append"
     assert not writer.calls
+    # The Add write-table document's experiences[] item; nothing derivable is stored.
+    assert experience["exp_status"] == "candidate"
+    assert not {"status", "archived", "user_id", "session_id"} & set(experience)
+    assert experience["sources"][0]["conversation_id"] == "session"
 
 
 def test_same_conversation_provenance_merges_members_additively():
@@ -580,3 +584,60 @@ def test_changing_ones_own_conflicting_position_is_recorded(author, recorded):
         assert changes == [f"{author} 将结论从「池大小设为 12」改为「池大小设为 16」"]
     else:
         assert changes == []
+
+
+def test_experience_rows_in_the_previous_shape_are_still_read():
+    from memos.project_memory.add_merge import _card_from
+
+    episode = {"space_id": "space"}
+    legacy = {
+        "id": "old",
+        "card": {"principle": "p"},
+        "status": "verified",
+        "archived": True,
+        "user_id": "alice",
+        "session_id": "conv-1",
+        "confidence": 0.6,
+    }
+    card = _card_from(legacy, episode, "topic")
+    assert (card.exp_status, card.node_status, card.user_id, card.session_id) == (
+        "verified",
+        "archived",
+        "alice",
+        "conv-1",
+    )
+    current = {
+        "id": "new",
+        "card": {"principle": "p"},
+        "exp_status": "verified",
+        "confidence": 0.05,
+        "user_ids": ["bob", "carol"],
+        "sources": [{"conversation_id": "conv-2", "message_id": "m"}],
+    }
+    card = _card_from(current, episode, "topic")
+    # Below the confidence floor an experience is retired without a stored flag.
+    assert (card.exp_status, card.node_status, card.user_id, card.session_id) == (
+        "verified",
+        "archived",
+        "bob",
+        "conv-2",
+    )
+
+
+def test_experience_history_keeps_the_documented_version_fields():
+    from memos.project_memory.add_entry_fields import experience_version
+
+    stored = {
+        "version": 1,
+        "memory": "legacy text",
+        "update_type": "duplicate",
+        "archived_memory_id": "snap",
+        "created_at": "2026-11-19T00:00:00Z",
+        "replaced_by": "x",
+        "card": {"principle": "old"},
+    }
+    assert experience_version(stored) == {
+        "version": 1,
+        "card": {"principle": "old"},
+        "time": "2026-11-19T00:00:00Z",
+    }

@@ -11,6 +11,13 @@ from typing import TYPE_CHECKING, Any
 from memos.exceptions import MemOSError
 
 from . import decision, experience
+from .add_entry_fields import (
+    experience_conversation_id,
+    experience_retired,
+    experience_status,
+    experience_user_id,
+    experience_version,
+)
 from .add_evidence import anchor_keys
 from .judge import ModelError
 from .types import (
@@ -209,8 +216,8 @@ def _card_from(item: dict, episode: dict, topic_id: str) -> ExperienceCard:
         space_id=episode["space_id"],
         topic_ids=[topic_id],
         **{key: deepcopy(card[key]) for key in CARD_FIELDS if key in card},
-        exp_status=item.get("status") or EXP_CANDIDATE,
-        node_status="archived" if item.get("archived") else "activated",
+        exp_status=experience_status(item),
+        node_status="archived" if experience_retired(item) else "activated",
         signal=item.get("signal") or "none",
         confidence=float(item.get("confidence") if item.get("confidence") is not None else 0.5),
         quality_score=item.get("quality_score"),
@@ -218,8 +225,8 @@ def _card_from(item: dict, episode: dict, topic_id: str) -> ExperienceCard:
         time=item.get("time") or "",
         last_supported_at=item.get("last_supported_at") or "",
         author_ids=list(item.get("user_ids") or []),
-        user_id=item.get("user_id") or "",
-        session_id=item.get("session_id") or "",
+        user_id=experience_user_id(item),
+        session_id=experience_conversation_id(item),
         use_count=int(item.get("use_count") or 0),
         sources=deepcopy(item.get("sources") or []),
         history=deepcopy(item.get("history") or []),
@@ -246,28 +253,24 @@ class _ExperienceSnapshot:
             card.sources[-1].update({key: value for key, value in self.evidence.items() if value})
 
     def export(self, card: ExperienceCard) -> dict:
-        history = deepcopy(card.history)
-        for version in history:
+        history = []
+        for version in card.history:
             if archived := self.archived.get(version.get("archived_memory_id") or ""):
-                version["archived_memory_id"] = stable_uuid(
-                    f"experience-version:{card.id}:{archived.version}"
-                )
-                version["card"] = archived.card()
-                version["time"] = archived.time
-                version["user_ids"] = archived.author_ids
+                # The superseded card version is folded in; no separate archived node is kept.
+                version = {**version, "card": archived.card(), "time": archived.time}
+            history.append(experience_version(version))
+        # The Add write-table document's experiences[] item: retirement, author and
+        # conversation are derived from confidence, user_ids and sources on read.
         return {
             "id": card.id,
             "card": card.card(),
             "version": card.version,
-            "status": card.exp_status,
-            "archived": card.node_status == "archived",
+            "exp_status": card.exp_status,
             "signal": card.signal,
             "quality_score": card.quality_score,
             "confidence": card.confidence,
             "time": card.time,
             "user_ids": card.author_ids,
-            "user_id": card.user_id,
-            "session_id": card.session_id,
             "last_supported_at": card.last_supported_at,
             "use_count": card.use_count,
             "sources": deepcopy(card.sources),
@@ -519,7 +522,7 @@ def _metadata_text(topic: dict) -> list[str]:
     experiences = [
         str((item.get("card") or {}).get("principle") or "")
         for item in topic["experiences"]
-        if not item.get("archived")
+        if not experience_retired(item)
     ]
     updates = sorted(topic["timeline"], key=lambda row: time_key(row.get("time")))
     return [

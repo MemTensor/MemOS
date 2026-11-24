@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 from memos.log import get_logger
 
+from .add_entry_fields import experience_retired
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -124,7 +126,10 @@ def index_changeset(
         ):
             for item in topic.get(field) or []:
                 text = topic_item_content(kind, item)
-                if text and not item.get("archived"):
+                retired = item.get("archived") or (
+                    kind == "experience" and experience_retired(item)
+                )
+                if text and not retired:
                     texts.append(text)
                     destinations.append((edit["item_embeddings"], item["id"]))
     try:
