@@ -7,16 +7,28 @@ from pydantic import ValidationError
 from memos.configs.project_db import PostgresProjectDBConfig, ProjectDBConfigFactory
 from memos.project_dbs.base import BaseProjectDB
 from memos.project_dbs.item import (
+    ConflictCard,
     Decision,
-    HistoryItem,
+    DecisionCard,
+    DecisionExtra,
+    EntrySource,
+    EntryStatus,
+    Experience,
+    ExperienceCard,
+    ExperienceExtra,
+    JsonPart,
+    Source,
+    Space,
     Topic,
     TopicChangeSet,
+    TopicCreate,
     TopicFilter,
     TopicUpdate,
 )
 
 
 NOW = datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc)
+CARD = {"task_intent": "压测", "problem": "慢", "principle": "先压测"}
 
 
 def test_config_factory_builds_postgres_config():
@@ -45,11 +57,14 @@ def test_build_project_db_config_requires_host(monkeypatch):
 
 
 def test_decision_defaults_and_embedding_excluded():
-    d = Decision(content="采用方案B", time=NOW, user_ids=["user_a"], embedding=[0.1, 0.2])
+    d = Decision(content="采用方案B", chat_time=NOW, user_ids=["user_a"], embedding=[0.1, 0.2])
     dumped = d.model_dump()
-    assert dumped["entry_type"] == "decision"
+    assert dumped["entry_type"] == "decision" and dumped["status"] == EntryStatus.ACTIVE == 0
     assert dumped["history"] == [] and dumped["conflicts"] == []
+    assert dumped["extra"] == {"sources": [], "user_labels": {}}
     assert "embedding" not in dumped
+    card = DecisionCard(content="A", chat_time=NOW, user_ids=[], embedding=[0.1])
+    assert "embedding" not in card.model_dump()
 
 
 def test_topic_assembles_entries():
@@ -64,9 +79,9 @@ def test_topic_assembles_entries():
             Decision(
                 id="decision_1",
                 content="采用方案B",
-                time=NOW,
+                chat_time=NOW,
                 user_ids=["user_b"],
-                history=[HistoryItem(content="采用方案A", time=NOW, user_ids=["user_a"])],
+                history=[DecisionCard(content="采用方案A", chat_time=NOW, user_ids=["user_a"])],
             )
         ],
         create_time=NOW,
@@ -79,25 +94,28 @@ def test_change_set_parses_creates_updates_and_entry_union():
     change_set = TopicChangeSet.model_validate(
         {
             "space_id": "s",
-            "accepted_at": NOW,
+            "accept_time": NOW,
             "creates": [
                 {
                     "domain": "开发",
                     "topic_name": "n",
                     "topic_summary": "s",
                     "topic_description": "d",
+                    "create_time": NOW,
+                    "update_time": NOW,
                     "entries": [
                         {
                             "entry_type": "timeline",
                             "content": "完成评审",
-                            "time": NOW,
+                            "chat_time": NOW,
                             "user_ids": [],
                         },
                         {
                             "entry_type": "experience",
                             "content": "先压测",
-                            "time": NOW,
+                            "chat_time": NOW,
                             "user_ids": [],
+                            "extra": {"card": CARD},
                         },
                     ],
                 }
@@ -142,7 +160,7 @@ def test_entry_without_type_is_rejected():
             {
                 "topic_id": "t",
                 "expected_version": 1,
-                "upsert_entries": [{"content": "x", "time": NOW, "user_ids": []}],
+                "upsert_entries": [{"content": "x", "chat_time": NOW, "user_ids": []}],
             }
         )
 
@@ -178,3 +196,46 @@ def test_build_project_db_config_normalizes_parser(monkeypatch):
     assert build_project_db_config().config.text_search_parser == "simple"
     monkeypatch.setenv("PROJECT_DB_TEXT_SEARCH_PARSER", "")
     assert build_project_db_config().config.text_search_parser == "zhparser"
+
+
+def test_json_parts_keep_unknown_keys_and_strict_models_reject_them():
+    extra = DecisionExtra.model_validate({"sources": [{"quote": "q", "pos": 3}], "x": 1})
+    assert extra.model_dump()["x"] == 1 and extra.sources[0].model_dump()["pos"] == 3
+    assert JsonPart.model_validate({"a": [1]}).model_dump() == {"a": [1]}
+    with pytest.raises(ValidationError):
+        TopicUpdate.model_validate({"topic_id": "t", "expected_version": 1, "typo": 1})
+    with pytest.raises(ValidationError):
+        TopicChangeSet.model_validate({"space_id": "s", "accepted_at": NOW})  # old name
+
+
+def test_topic_create_requires_chat_times():
+    with pytest.raises(ValidationError):
+        TopicCreate(domain="d", topic_name="n", topic_summary="s", topic_description="d")
+
+
+def test_experience_requires_a_card_and_bounds_confidence():
+    with pytest.raises(ValidationError):
+        Experience(content="x", chat_time=NOW, user_ids=[])
+    exp = Experience(content="x", chat_time=NOW, user_ids=[], extra={"card": CARD})
+    assert (exp.extra.exp_status, exp.extra.confidence) == ("candidate", 0.5)
+    assert isinstance(exp.extra.card, ExperienceCard)
+    for bad in (0.05, 0.99):
+        with pytest.raises(ValidationError):
+            ExperienceExtra(card=CARD, confidence=bad)
+    with pytest.raises(ValidationError):
+        ExperienceExtra(card=CARD, exp_status="retired")
+
+
+def test_source_and_space_shapes():
+    assert Source().model_dump() == {"conversation_id": None, "user_id": [], "agent_id": None}
+    with pytest.raises(ValidationError):
+        Source(user_id="u1")
+    space = Space(id="s", project_id="p", space_name="n", create_time=NOW, update_time=NOW)
+    assert space.clear_time is None
+
+
+def test_conflict_card_carries_id_and_source():
+    card = ConflictCard(
+        id="c1", content="C", chat_time=NOW, user_ids=["b"], source=EntrySource(message_id="m")
+    )
+    assert card.model_dump()["source"]["message_id"] == "m"
