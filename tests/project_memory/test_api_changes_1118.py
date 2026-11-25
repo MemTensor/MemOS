@@ -101,6 +101,8 @@ def test_every_service_message_has_a_reason():
         "未配置领域：Space x 至少登记一个领域后才能写入项目记忆",
         "领域未登记：['a']",
         "同一批里领域重名：['a']",
+        "同一批里 domain_id 重复：['d1']",
+        "domain_id 不能为空",
         "每个 Space 最多 20 个领域",
         "领域改名冲突：a → b",
         "领域仍被主题引用，不能删除：['a']",

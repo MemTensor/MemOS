@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class _StoredSpace(Space):
-    domain_ids: dict[int, str] = field(default_factory=dict, repr=False)
+    """A Space read from the database; writing it back checks it has not changed since."""
 
 
 def _topic(row: dict[str, Any]) -> Topic:
@@ -116,7 +116,8 @@ class RelationalProjectView:
         if row is None:
             return None
         domains = [
-            Domain(domain["name"], domain["description"]) for domain in row["configured_domains"]
+            Domain(domain["name"], domain["description"], domain["id"])
+            for domain in row["configured_domains"]
         ]
         return _StoredSpace(
             space_id=row["id"],
@@ -126,10 +127,6 @@ class RelationalProjectView:
             domains=domains,
             create_time=row["create_time"].isoformat(),
             update_time=row["update_time"].isoformat(),
-            domain_ids={
-                id(domain): raw["id"]
-                for domain, raw in zip(domains, row["configured_domains"], strict=True)
-            },
         )
 
     def put_space(self, space: Space) -> None:
@@ -190,18 +187,23 @@ class RelationalProjectView:
         cursor.execute("SELECT id, domain FROM domains WHERE space_id = %s", (space.space_id,))
         existing = {row["id"]: row["domain"] for row in cursor.fetchall()}
         names = {name: domain_id for domain_id, name in existing.items()}
-        tracked = space.domain_ids if isinstance(space, _StoredSpace) else {}
         seen = set()
         renamed = []
         for domain in space.domains:
-            domain_id = tracked.get(id(domain)) or names.get(domain.name) or str(uuid4())
+            # A domain keeps its ID across renames; one without an ID is matched by name or is new.
+            domain_id = domain.domain_id or names.get(domain.name) or str(uuid4())
+            domain.domain_id = domain_id
             seen.add(domain_id)
             cursor.execute(
                 """INSERT INTO domains (id, space_id, domain, description) VALUES (%s, %s, %s, %s)
                    ON CONFLICT (id) DO UPDATE SET domain = EXCLUDED.domain,
-                       description = EXCLUDED.description, update_time = clock_timestamp()""",
+                       description = EXCLUDED.description, update_time = clock_timestamp()
+                   WHERE domains.space_id = EXCLUDED.space_id""",
                 (domain_id, space.space_id, domain.name, domain.description),
             )
+            if cursor.rowcount == 0:
+                # The ID belongs to a domain of another Space; never overwrite it.
+                raise ValueError(f"领域未登记：{domain_id}")
             if domain_id in existing and existing[domain_id] != domain.name:
                 renamed.append(domain_id)
                 # Unfinished and staged Episodes keep their candidate domains by name.

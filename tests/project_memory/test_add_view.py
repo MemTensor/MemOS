@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from memos.project_memory.add_acceptance import AddAcceptance
 from memos.project_memory.add_view import RelationalProjectView
 from memos.project_memory.types import Domain, Space
@@ -146,7 +148,15 @@ def test_spaces_keep_the_project_they_were_created_in(add_store):
         rows = [(r["id"], r["project_id"], r["space_name"]) for r in cursor.fetchall()]
     assert rows == [(a.space_id, "project-a", "A2"), (b.space_id, "project-b", "B")]
     assert service.get_space(b.space_id).project_id == "project-b"
-    assert service.list_domains(a.space_id) == [{"name": "development", "description": ""}]
+    (domain,) = service.list_domains(a.space_id)
+    assert domain == {
+        "domain_id": a.domains[0].domain_id,
+        "name": "development",
+        "description": "",
+    }
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT id FROM domains WHERE space_id = %s", (a.space_id,))
+        assert [r["id"] for r in cursor.fetchall()] == [domain["domain_id"]]
 
 
 def test_get_memory_lists_important_topics_before_newer_quiet_ones(add_store):
@@ -183,3 +193,69 @@ def test_get_memory_lists_important_topics_before_newer_quiet_ones(add_store):
     out = service.list_topics(SimpleNamespace(space_id="space", filter=None, size=None, page=1))
     assert [t["id"] for t in out["topic_detail_list"]] == ["busy", "quiet"]
     assert [d["id"] for d in out["topic_detail_list"][0]["decisions"]] == ["wide", "new", "old"]
+
+
+
+def test_domains_are_addressed_by_id(add_store):
+    """Updates and deletes locate a domain by its ID; a rename keeps the ID and the Topic link."""
+    from memos.project_memory.judge import ModelHub
+    from memos.project_memory.service import ProjectMemoryService
+
+    service = ProjectMemoryService(RelationalProjectView(add_store), ModelHub(llm=None))
+    a = service.create_space("project-a", "A", "", [{"name": "development"}, {"name": "design"}])
+    b = service.create_space("project-a", "B", "", [{"name": "development"}])
+    ids = {d["name"]: d["domain_id"] for d in service.list_domains(a.space_id)}
+    created = service.create_domains(a.space_id, [{"name": "testing"}, {"name": "design"}])
+    # The whole list comes back: the new domain with a fresh ID, the skipped one with its own.
+    by_name = {d["name"]: d["domain_id"] for d in created}
+    assert set(by_name) == {"development", "design", "testing"}
+    assert by_name["design"] == ids["design"] and by_name["development"] == ids["development"]
+    testing_id = by_name["testing"]
+    assert testing_id and testing_id not in ids.values()
+    assert {d["domain_id"] for d in service.list_domains(a.space_id)} == {*ids.values(), testing_id}
+
+    with add_store.transaction() as cursor:
+        cursor.execute(
+            """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary, topic_description,
+                                   create_time, update_time)
+               VALUES ('topic', %s, %s, 'Release', '', '', now(), now())""",
+            (a.space_id, ids["development"]),
+        )
+    assert (
+        service.update_domains(
+            a.space_id, [{"domain_id": ids["development"], "new_name": "engineering"}]
+        )
+        is None
+    )
+    after = {d["domain_id"]: d["name"] for d in service.list_domains(a.space_id)}
+    assert after[ids["development"]] == "engineering"
+    assert service.store.get_topic("topic").domain == "engineering"
+
+    # A domain of another Space cannot be changed or removed through this one.
+    other_id = service.list_domains(b.space_id)[0]["domain_id"]
+    with pytest.raises(ValueError, match="领域未登记"):
+        service.update_domains(a.space_id, [{"domain_id": other_id, "new_name": "x"}])
+    with pytest.raises(ValueError, match="领域仍被主题引用"):
+        service.delete_domains(a.space_id, [ids["development"], testing_id])
+    assert len(service.list_domains(a.space_id)) == 3
+    assert service.delete_domains(a.space_id, [testing_id, other_id, "missing"]) is None
+    assert {d["domain_id"]: d["name"] for d in service.list_domains(a.space_id)} == {
+        ids["development"]: "engineering",
+        ids["design"]: "design",
+    }
+    assert [d["name"] for d in service.list_domains(b.space_id)] == ["development"]
+
+
+def test_put_space_never_takes_over_a_domain_of_another_space(add_store):
+    view = RelationalProjectView(add_store)
+    view.put_space(
+        Space(space_id="s1", project_id="p", space_name="1", domains=[Domain("a", "", "shared")])
+    )
+    with pytest.raises(ValueError, match="领域未登记"):
+        view.put_space(
+            Space(
+                space_id="s2", project_id="p", space_name="2", domains=[Domain("b", "", "shared")]
+            )
+        )
+    assert view.get_space("s1").domains[0].name == "a"
+    assert view.get_space("s2") is None

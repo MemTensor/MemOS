@@ -12,6 +12,9 @@
 `flush_project_memory` 不在 PRD 里：段由模型逐轮判关，会话最后一段没有「下一轮」来触发，
 接入方在会话结束时调它；不调的话要等同 Space 下一次写入时按空闲超时关。是否进 PRD 待产品定。
 
+领域用 `domain_id` 标识：create_domains、list_domains（以及 Space 对象）返回每个领域的 `domain_id`，
+update_domains、delete_domains 按它定位，改名不改变它；这两个接口成功时 data 为空。
+
 错误：Space 不存在 → 404；参数 / 配置错误（领域未登记、未配置领域、改名冲突、仍被引用）→ 400。
 """
 
@@ -33,7 +36,7 @@ class DomainItem(BaseModel):
 
 
 class DomainUpdateItem(BaseModel):
-    name: str = Field(..., description="现有名称")
+    domain_id: str = Field(..., description="领域 ID（create_domains / list_domains 返回）")
     new_name: str | None = Field(None, description="改成的名称；不改名不传")
     description: str | None = None
 
@@ -67,7 +70,7 @@ class UpdateDomainsRequest(BaseModel):
 
 class DeleteDomainsRequest(BaseModel):
     space_id: str
-    domains: list[str]
+    domain_ids: list[str] = Field(..., description="待删除的领域 ID；已不存在的忽略")
 
 
 class FlushRequest(BaseModel):
@@ -143,17 +146,13 @@ def create_router(plugin, *, legacy_flush: bool = False) -> APIRouter:
 
     @router.post("/update_domains", summary="Rename / re-describe domains; renames sync to topics")
     def update_domains(req: UpdateDomainsRequest):
-        return _ok(
-            {
-                "domains": guarded(
-                    svc().update_domains, req.space_id, [d.model_dump() for d in req.domains]
-                )
-            }
-        )
+        guarded(svc().update_domains, req.space_id, [d.model_dump() for d in req.domains])
+        return _ok(None)
 
     @router.post("/delete_domains", summary="Delete domains not referenced by any topic")
     def delete_domains(req: DeleteDomainsRequest):
-        return _ok({"domains": guarded(svc().delete_domains, req.space_id, req.domains)})
+        guarded(svc().delete_domains, req.space_id, req.domain_ids)
+        return _ok(None)
 
     @router.post("/list_domains", summary="Full domain list of a space")
     def list_domains(req: SpaceIdRequest):

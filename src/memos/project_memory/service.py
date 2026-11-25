@@ -192,6 +192,7 @@ class ProjectMemoryService:
                 Domain(
                     name=name,
                     description=(d.get("description") or "") if isinstance(d, dict) else "",
+                    domain_id=new_uuid(),
                 )
             )
         if len(space.domains) + len(out) > MAX_DOMAINS:
@@ -199,60 +200,66 @@ class ProjectMemoryService:
         return out
 
     def create_domains(self, space_id: str, domains: list[dict]) -> list[dict]:
+        """登记领域，返回登记后的完整清单（含已登记而被跳过的同名领域）。"""
         space = self.get_space(space_id)
         # 整批校验，失败不落任何一个；同名的跳过（PRD）
         space.domains += self._validate_new_domains(space, domains)
         self.store.put_space(space)
-        return [d.__dict__ for d in space.domains]
+        return [d.to_api() for d in space.domains]
 
-    def update_domains(self, space_id: str, domains: list[dict]) -> list[dict]:
-        """每项 {name, new_name?, description?}。改名同步到已有主题。"""
+    def update_domains(self, space_id: str, domains: list[dict]) -> None:
+        """每项 {domain_id, new_name?, description?}。改名同步到已有主题。"""
         space = self.get_space(space_id)
-        _reject_batch_duplicates([d.get("name") for d in domains])
-        by_name = {d.name: d for d in space.domains}
-        final = set(by_name)
-        renames: dict[str, str] = {}
-        for d in domains:
-            name = d.get("name")
-            if name not in by_name:
-                raise ValueError(f"领域未登记：{name}")
+        ids = [str(d.get("domain_id") or "").strip() for d in domains]
+        if not all(ids):
+            raise ValueError("domain_id 不能为空")
+        _reject_batch_duplicates(ids, " domain_id 重复")
+        by_id = {d.domain_id: d for d in space.domains}
+        renames: dict[str, str] = {}  # 原名称 → 新名称
+        taken: set[str] = set()  # 同批已用掉的新名称
+        for d, domain_id in zip(domains, ids, strict=True):
+            if domain_id not in by_id:
+                raise ValueError(f"领域未登记：{domain_id}")
+            name = by_id[domain_id].name
             new = d.get("new_name")
             if new:
                 new = new.strip()
-                if not new or (new in final and new != name):
+                # 新名称不能是其他领域现在的名称（即使它在同一批里也要改名），也不能和同批别的新名称相同：
+                # 结果不随批内顺序变，存储逐行写入时也不会撞「同空间名称唯一」
+                others = {x.name for x in space.domains if x.domain_id != domain_id}
+                if not new or new in others or new in taken:
                     raise ValueError(f"领域改名冲突：{name} → {new}")
-                final.discard(name)
-                final.add(new)
+                taken.add(new)
                 renames[name] = new
-        for d in domains:
-            dom = by_name[d["name"]]
+        for d, domain_id in zip(domains, ids, strict=True):
+            dom = by_id[domain_id]
             if d.get("description") is not None:
                 dom.description = d["description"]
-            if d["name"] in renames:
-                dom.name = renames[d["name"]]
+            if dom.name in renames:
+                dom.name = renames[dom.name]
         self.store.put_space(space)
         if renames:
             for t in self.store.list_topics(space_id):
                 if t.domain in renames:
                     t.domain = renames[t.domain]
                     self.store.put_topic(t, touch=False)  # 改名不算主题更新，不打乱按时间的排序
-        return [d.__dict__ for d in space.domains]
 
-    def delete_domains(self, space_id: str, names: list[str]) -> list[dict]:
+    def delete_domains(self, space_id: str, domain_ids: list[str]) -> None:
         space = self.get_space(space_id)
-        _reject_batch_duplicates(names)
-        registered = set(space.domain_names())
-        names = [n for n in names if n in registered]  # 已不存在的名称忽略（PRD）
+        # 与 update_domains 一样先去掉首尾空白；空的和已不存在的领域忽略（PRD）
+        ids = [i for i in (str(x or "").strip() for x in domain_ids) if i]
+        _reject_batch_duplicates(ids, " domain_id 重复")
+        wanted = set(ids)
+        targets = {d.domain_id: d.name for d in space.domains if d.domain_id in wanted}
         used = {t.domain for t in self.store.list_topics(space_id)}
-        busy = [n for n in names if n in used]
+        busy = [name for name in targets.values() if name in used]
         if busy:
             raise ValueError(f"领域仍被主题引用，不能删除：{busy}")
-        space.domains = [d for d in space.domains if d.name not in names]
+        space.domains = [d for d in space.domains if d.domain_id not in targets]
         self.store.put_space(space)
-        return [d.__dict__ for d in space.domains]
 
     def list_domains(self, space_id: str) -> list[dict]:
-        return [d.__dict__ for d in self.get_space(space_id).domains]
+        return [d.to_api() for d in self.get_space(space_id).domains]
 
     # ═════════════════════════════════ 写入 ══════════════════════════════════
 
@@ -1223,8 +1230,8 @@ class ProjectMemoryService:
 # ═════════════════════════════════ 消息解析 ══════════════════════════════════
 
 
-def _reject_batch_duplicates(names: list[Any]) -> None:
-    """领域批量操作：同一批里出现两次的名称整批失败（PRD 领域管理共同规则）。"""
+def _reject_batch_duplicates(names: list[Any], what: str = "领域重名") -> None:
+    """领域批量操作：同一批里出现两次的名称或 domain_id 整批失败（PRD 领域管理共同规则）。"""
     seen: set[str] = set()
     dup: list[str] = []
     for n in names:
@@ -1233,7 +1240,7 @@ def _reject_batch_duplicates(names: list[Any]) -> None:
             dup.append(key)
         seen.add(key)
     if dup:
-        raise ValueError(f"同一批里领域重名：{dup}")
+        raise ValueError(f"同一批里{what}：{dup}")
 
 
 def _text(content: Any) -> str:
