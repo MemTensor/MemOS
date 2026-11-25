@@ -515,7 +515,9 @@ def test_formation_records_why_each_cluster_was_rejected():
     old = episode("old", episode_summary="fuel card payment", staged_at=NOW - timedelta(hours=3))
     lone = episode("lone", staged_at=NOW - timedelta(hours=3))
     reply = formation_reply(["new", "old"])
-    reply["clusters"].append({**reply["clusters"][0], "episode_ids": ["lone"], "name": "x" * 40})
+    reply["clusters"].append(
+        {**reply["clusters"][0], "episode_ids": ["lone"], "name": " ".join(["export"] * 21)}
+    )
     plan = _formation_plan(Writer([reply]), new, [old, lone])
     assert plan["assignments"] == []
     assert plan["formation"]["rejected"] == [

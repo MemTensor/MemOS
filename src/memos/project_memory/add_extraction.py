@@ -18,7 +18,8 @@ from .add_evidence import (
     text_at,
     unwitnessed_tokens,
 )
-from .judge import ModelError
+from .add_limits import LIMITS, cut_at_sentence
+from .judge import ModelError, fill
 from .types import stable_uuid, time_key
 
 
@@ -33,6 +34,8 @@ episode_summary 开头先写成员本段要交付的具体对象（功能、接�
 不要补“仅为规则说明”“未见后续进展”这类对状态的套话，摘要只陈述这一段实际出现的内容。
 闲聊或没可保留的事实输出空数组。prior 只帮助理解，不能为新结论授权。
 drafts 每项给出 kind、content、message_id、quote、origin，可附 source_path（默认 /content）。
+content 字数上限：decision 与 timeline {decision_limit} 字，experience {experience_limit} 字（一个汉字或一个英文单词计一字），
+超出时自行精简，保留对象、取值与原因。
 kind 是 decision（成员确定的团队做法）、experience（有场景与证据的经验）、timeline（可验证的进展）。
 decision 只记范围内的规则、对外约定和共同约定。对 Agent 回复格式或表达方式的要求、一次性的局部实现、
 执行步骤、未采纳的方案和未决事项都不是 decision，不要输出。成员对某个具体对象（配置、数值、时点、阈值）
@@ -236,7 +239,7 @@ def _draft(
     clues = [
         x for x in raw.get("current_state_clues") or [] if isinstance(x, str) and x and x in text
     ]
-    content = content.strip()[: 200 if kind == "experience" else 100]
+    content = cut_at_sentence(content, LIMITS.entry(kind))[0]
     # A reference may match normalized whitespace, but commit checks the original slice.
     source_quote = text[ref["start"] : ref["end"]]
     evidence = [{"ref": ref, "quote": source_quote}]
@@ -353,7 +356,11 @@ def extract_episode(
         "episode": current,
         "previous_summary": str((episode.get("previous") or {}).get("episode_summary") or "")[:200],
     }
-    output = hub.write("episode.extract", _EXTRACT, model_inputs)
+    prompt = fill(
+        _EXTRACT,
+        {"{decision_limit}": str(LIMITS.decision), "{experience_limit}": str(LIMITS.experience)},
+    )
+    output = hub.write("episode.extract", prompt, model_inputs)
     summary = output.get("episode_summary")
     raw_drafts = output.get("drafts")
     if not isinstance(summary, str) or not isinstance(raw_drafts, list):

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from .add_evidence import strong_anchor_keys
 from .add_extraction import jsonable
+from .add_limits import LIMITS, count_units
 from .judge import ModelError
 from .types import stable_uuid, time_key
 
@@ -500,9 +501,6 @@ def _formation_candidates(scoped: dict[str, list[dict]]) -> list[dict]:
     return list(selected.values())
 
 
-_FORMATION_NAME_LIMIT = 32  # The prompt asks for 20; identifiers make longer names specific.
-
-
 def _formation_topics(
     hub: ModelHub,
     episodes: list[dict],
@@ -628,7 +626,8 @@ def _formation_rejection(
         return "domain_mismatch"
     if (
         not isinstance(name, str)
-        or not (0 < len(name.strip()) <= _FORMATION_NAME_LIMIT)
+        or not (0 < count_units(name.strip()) <= LIMITS.topic_name)
+        or len(name.strip()) > 4 * LIMITS.topic_name  # one 字 is at most a long identifier
         or _DATE_IN_NAME.search(name)
     ):
         return "invalid_name"
