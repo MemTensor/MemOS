@@ -113,8 +113,7 @@ def now_iso() -> str:
 class Domain:
     name: str
     description: str = ""
-    # 领域的稳定标识：改名不变，修改、删除按它定位。服务层新建领域时生成；
-    # 没带 ID 的由存储在读写时补上（旧数据按空间和名称取固定值，PG 按名称匹配已有行或新建）
+    # 领域的稳定标识：改名不变，修改、删除按它定位
     domain_id: str = ""
 
     def to_api(self) -> dict[str, Any]:
