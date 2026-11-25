@@ -1,5 +1,7 @@
 # pnpm 11.7.0; npm's independent policy is package.json#allowScripts.
 strictDepBuilds: true
+overrides:
+  tsx@4.21.0>esbuild: 0.27.7
 allowBuilds:
   better-sqlite3: false
   esbuild@0.27.7: true

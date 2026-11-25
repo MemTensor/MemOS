@@ -1393,7 +1393,9 @@ CFGEOF
 # ─── DeepSeek Harness install ─────────────────────────────────────────────
 # DSH owns its profile dependency graph and bundle reconciliation. We never
 # unpack into the profile or edit package.json/cordis.patch.yml ourselves.
-# Preseed the reviewed pnpm 11 build policy before the first add. Unknown
+# Pin tsx's esbuild resolution and preseed the reviewed pnpm build policy
+# in the installing profile before the first add. Published dependency locks
+# and package-level overrides do not constrain DSH's consumer graph. Unknown
 # scripts and conflicting explicit denials stop installation for review;
 # no pending package is approved automatically after a failed install.
 read_pending_dsh_builds() {
@@ -1463,6 +1465,30 @@ const file = process.argv[1];
 let raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
 const eol = raw.includes("\r\n") ? "\r\n" : "\n";
 const lines = raw.split(/\r?\n/);
+const overrideKey = "tsx@4.21.0>esbuild";
+const overrideVersion = "0.27.7";
+let overrideBlock = -1, overrideEnd = -1, hasOverride = false;
+for (let i = 0; i < lines.length; i++) {
+  if (!/^overrides:/.test(lines[i])) continue;
+  if (overrideBlock >= 0 || !/^overrides:\s*(#.*)?$/.test(lines[i])) throw new Error("Unsupported overrides YAML; review before installing");
+  overrideBlock = i; overrideEnd = i + 1;
+  while (overrideEnd < lines.length && (!/^[^\s#]/.test(lines[overrideEnd]) || !lines[overrideEnd].trim())) overrideEnd++;
+  const seenOverrides = new Set();
+  for (let j = i + 1; j < overrideEnd; j++) {
+    if (!lines[j].trim() || /^\s*#/.test(lines[j])) continue;
+    const match = lines[j].match(/^  (["\x27]?)(.+?)\1:\s*(.+?)\s*(?:#.*)?$/);
+    if (!match || seenOverrides.has(match[2])) throw new Error("Unsupported/duplicate overrides entry; review before installing");
+    const key = match[2]; seenOverrides.add(key);
+    const value = match[3].replace(/^(["\x27])(.*)\1$/, "$2");
+    if (key === overrideKey && value === overrideVersion) { hasOverride = true; continue; }
+    if (key.includes("*") || /(^|>)(tsx|esbuild)(@|$)/.test(key)) throw new Error("Existing tsx/esbuild override for " + key + "; explicit review required");
+  }
+}
+if (!hasOverride) {
+  const entry = "  " + JSON.stringify(overrideKey) + ": " + JSON.stringify(overrideVersion);
+  if (overrideBlock < 0) lines.push("overrides:", entry);
+  else lines.splice(overrideEnd, 0, entry);
+}
 const policy = {"better-sqlite3": false, "esbuild@0.27.7": true, "esbuild@0.21.5": true, "sharp@0.34.5": true, "onnxruntime-node": false, "protobufjs": false, "@memtensor/memos-local-plugin": false};
 let block = -1, end = -1;
 const seen = new Set();

@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  tsx@4.21.0>esbuild: 0.27.7
+
 importers:
 
   .:
@@ -24,7 +27,7 @@ importers:
         specifier: ^10.29.1
         version: 10.29.1
       tsx:
-        specifier: ^4.21.0
+        specifier: 4.21.0
         version: 4.21.0
       uuid:
         specifier: ^10.0.0

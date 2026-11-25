@@ -213,6 +213,8 @@ reviewed profile policy is:
 ```yaml
 # $DSH_HOME/profiles/<actual-profile>/pnpm-workspace.yaml
 strictDepBuilds: true
+overrides:
+  'tsx@4.21.0>esbuild': '0.27.7'
 allowBuilds:
   '@memtensor/memos-local-plugin': false
   better-sqlite3: false
@@ -229,7 +231,17 @@ profile must still pass the CPU runtime smoke check. Preserve unrelated policy
 entries and stop for review when an existing denial conflicts with a required
 script or a new version requires approval. Do not approve all scripts.
 
-The one-command installer merges this reviewed policy before calling DSH.
+The package pins `tsx` to `4.21.0`. Its upstream esbuild dependency still
+allows patch updates, so the profile override above pins that dependency to
+the reviewed `0.27.7` build. Source lockfiles and overrides inside a dependency
+do not constrain a fresh DSH tarball installation. Direct `dsh plugin add`
+users on Windows, macOS, and Linux must merge both `overrides` and `allowBuilds`
+into the selected profile before the first add, without replacing unrelated
+settings. Do not widen the script allowlist to every esbuild version.
+
+The one-command installer merges this override and reviewed policy before
+calling DSH. A conflicting existing tsx/esbuild override stops installation
+without rewriting the profile; review that conflict rather than replacing it.
 Unknown pending scripts stop installation. A SQLite smoke failure is reported
 without attempting source compilation. Profile package-manager policy is
 separate from npm's source-checkout `allowScripts`; see the package README for

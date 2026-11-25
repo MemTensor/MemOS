@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -215,6 +215,20 @@ async function settlesBeforeRealDeadline(
 }
 
 describe("DeepSeek Harness Viewer lifecycle", () => {
+  it("passes the installed package version to the Viewer memory core", async () => {
+    const runtime = await loadAdapter();
+    const host = makeContext();
+    const pkg = JSON.parse(readFileSync(resolve(pluginRoot, "package.json"), "utf8"));
+    const dispose = await runtime.apply(host.context as never, adapterConfig());
+    try {
+      expect(runtime.bootstrapMemoryCore).toHaveBeenCalledWith(
+        expect.objectContaining({ pkgVersion: pkg.version }),
+      );
+    } finally {
+      await dispose();
+    }
+  });
+
   it("publishes safe Cordis defaults for the DSH Viewer", async () => {
     const runtime = await loadAdapter();
 

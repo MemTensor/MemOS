@@ -38,6 +38,11 @@ query and close under the actual Node/Electron runtime. Repeat lock generation
 and normalization to check that it leaves the committed locks unchanged.
 Runtime tarballs installed by DSH use the profile owner's dependency graph;
 the source checkout locks alone do not establish the packed-install result.
+`tsx` is pinned to `4.21.0`; source npm/pnpm overrides also pin its esbuild
+dependency to the reviewed `0.27.7`. The DSH installer writes the equivalent
+scoped override into the consuming profile. For direct `dsh plugin add`
+installs, merge the [profile override and build policy](./adapters/deepseek-harness/README.md#review-dependency-build-scripts)
+before installing the tarball, including on Windows.
 
 ### Dependency install-script policy
 

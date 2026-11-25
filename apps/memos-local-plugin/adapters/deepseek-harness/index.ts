@@ -20,6 +20,7 @@ import {
 } from "../../core/config/index.js";
 import { bootstrapMemoryCore } from "../../core/index.js";
 import { memoryBuffer } from "../../core/logger/index.js";
+import { readPluginPackageVersion } from "../../core/util/package-version.js";
 import { startHttpServer } from "../../server/http.js";
 import type { ServerHandle } from "../../server/types.js";
 
@@ -283,6 +284,7 @@ export async function apply(
       },
       home,
       config: memoryConfig,
+      pkgVersion: readPluginPackageVersion(),
       hostLlmBridge,
       autoRecovery: autoRecoveryEnabled,
       initLogging: false,
