@@ -42,6 +42,7 @@ from memos.project_dbs.item import (
     TopicChangeSet,
     TopicFilter,
 )
+from memos.project_dbs.postgres_migration import is_legacy_layout, migrate_legacy_layout
 from memos.project_dbs.postgres_rows import (
     _ENTRY_COLS,
     _TOPIC_COLS,
@@ -57,7 +58,7 @@ from memos.project_dbs.postgres_rows import (
     load_entries_by_id,
     topic_from_row,
 )
-from memos.project_dbs.postgres_writer import refresh_topic_ranks, write_change_set
+from memos.project_dbs.postgres_writer import refresh_topic_ranks, tuple_cursor, write_change_set
 
 
 __all__ = [
@@ -68,6 +69,8 @@ __all__ = [
     "_TOPIC_COLS",
     "PostgresProjectDB",
     "install_schema",
+    "is_legacy_layout",
+    "migrate_legacy_layout",
     "refresh_topic_ranks",
     "render_ddl",
     "required_extensions",
@@ -125,14 +128,18 @@ def render_ddl(
 
 
 def install_schema(cursor: Any, ddl: str, schema: str = SCHEMA) -> str:
-    """Create the schema when project_entries is missing; existing installs are left
-    untouched so a restart needs no DDL privileges. Run under _INIT_LOCK_KEY.
-    Returns "created" or "current"."""
-    cursor.execute("SELECT to_regclass(%s)", (f"{schema}.project_entries",))
-    row = cursor.fetchone()
-    if (row[0] if isinstance(row, tuple) else next(iter(row.values()))) is None:
-        cursor.execute(ddl)
-        return "created"
+    """Create the schema when project_entries is missing and migrate a legacy layout in
+    place (see postgres_migration); a current install is left untouched so a restart needs
+    no DDL privileges. Run in one transaction under _INIT_LOCK_KEY.
+    Returns "created", "migrated" or "current"."""
+    with tuple_cursor(cursor) as cur:
+        cur.execute("SELECT to_regclass(%s)", (f"{schema}.project_entries",))
+        if cur.fetchone()[0] is None:
+            cur.execute(ddl)
+            return "created"
+        if is_legacy_layout(cur, schema):
+            migrate_legacy_layout(cur, ddl, schema)
+            return "migrated"
     return "current"
 
 
