@@ -1,6 +1,10 @@
-"""PostgreSQL + pgvector implementation of project memory storage."""
+"""PostgreSQL + pgvector implementation of project memory storage.
 
-import json
+Module-level API shared with the Add plugin, which installs and writes the same schema:
+SCHEMA, INIT_SQL, _INIT_LOCK_KEY, render_ddl, required_extensions, install_schema,
+write_change_set (runs in the caller's transaction) and refresh_topic_ranks.
+"""
+
 import re
 import uuid
 
@@ -19,52 +23,64 @@ from memos.project_dbs.exceptions import (
     DomainInUseError,
     DomainLimitExceededError,
     DomainNotFoundError,
-    EntryNotFoundError,
     ProjectDBError,
-    SpaceClearedError,
     SpaceNotFoundError,
-    TopicNotFoundError,
     UpdateConflictError,
-    VersionConflictError,
 )
 from memos.project_dbs.item import (
     AnyEntry,
     Decision,
     Domain,
     DomainUpdate,
-    Experience,
+    EntryHit,
+    EntryStatus,
     Page,
     SearchHit,
-    Source,
     Space,
-    Timeline,
     Topic,
     TopicChangeResult,
     TopicChangeSet,
-    TopicCreate,
     TopicFilter,
-    TopicUpdate,
 )
+from memos.project_dbs.postgres_rows import (
+    _ENTRY_COLS,
+    _TOPIC_COLS,
+    DISPLAY_ORDER,
+    ENTRY_TIME_COLUMNS,
+    PREVIEW_ORDER,
+    SCHEMA,
+    TOPIC_ORDER,
+    TOPIC_TIME_COLUMNS,
+    attach_entries,
+    entries_from_rows,
+    filters_sql,
+    load_entries_by_id,
+    topic_from_row,
+)
+from memos.project_dbs.postgres_writer import refresh_topic_ranks, write_change_set
 
+
+__all__ = [
+    "INIT_SQL",
+    "SCHEMA",
+    "_ENTRY_COLS",
+    "_INIT_LOCK_KEY",
+    "_TOPIC_COLS",
+    "PostgresProjectDB",
+    "install_schema",
+    "refresh_topic_ranks",
+    "render_ddl",
+    "required_extensions",
+    "write_change_set",
+]
 
 logger = get_logger(__name__)
 
-SCHEMA = "project_memory"
 INIT_SQL = Path(__file__).with_name("sql") / "postgres_init.sql"
 # pg_advisory_lock key: only one instance runs the DDL when several start together.
 _INIT_LOCK_KEY = 0x50524F4A  # "PROJ"
-
-_TOPIC_COLS = (
-    "t.id, t.space_id, d.domain, t.topic_name, t.topic_summary, t.topic_description, "
-    "t.sources, t.create_time, t.update_time, t.version, t.anchors, t.anchor_keys"
-)
-_ENTRY_COLS = (
-    "e.id, e.topic_id, e.entry_type, e.content, e.time, e.user_ids, "
-    "e.history, e.conflicts, e.extra, e.version, e.create_time, e.update_time"
-)
-_ENTRY_TYPES = {"decision": Decision, "experience": Experience, "timeline": Timeline}
-_TOPIC_FIELDS = {"decision": "decisions", "experience": "experiences", "timeline": "timeline"}
-_RANGE_OPS = (("gt", ">"), ("gte", ">="), ("lt", "<"), ("lte", "<="))
+# Candidate rows fetched per search_entries call before folding into topics.
+_ENTRY_CANDIDATES_MIN = 200
 
 
 def required_extensions(text_search_parser: str) -> list[str]:
@@ -106,6 +122,18 @@ def render_ddl(
     return template.replace("{embedding_dimension}", str(int(embedding_dimension))).replace(
         "{text_search_config}", text_search
     )
+
+
+def install_schema(cursor: Any, ddl: str, schema: str = SCHEMA) -> str:
+    """Create the schema when project_entries is missing; existing installs are left
+    untouched so a restart needs no DDL privileges. Run under _INIT_LOCK_KEY.
+    Returns "created" or "current"."""
+    cursor.execute("SELECT to_regclass(%s)", (f"{schema}.project_entries",))
+    row = cursor.fetchone()
+    if (row[0] if isinstance(row, tuple) else next(iter(row.values()))) is None:
+        cursor.execute(ddl)
+        return "created"
+    return "current"
 
 
 class PostgresProjectDB(BaseProjectDB):
@@ -171,35 +199,25 @@ class PostgresProjectDB(BaseProjectDB):
         return render_ddl(self.config.embedding_dimension, self.config.text_search_parser)
 
     def _init_schema(self) -> None:
-        """Create the schema once. Existing installs are left untouched, so a restart
-        neither needs DDL privileges nor takes locks on live tables."""
         ddl = self._render_ddl()
         with self._tx() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(%s)", (_INIT_LOCK_KEY,))
-            cur.execute("SELECT to_regclass(%s)", (f"{SCHEMA}.project_entries",))
-            if cur.fetchone()[0] is not None:
-                return
-            cur.execute(ddl)
-        logger.info("Project memory schema initialized")
+            outcome = install_schema(cur, ddl)
+        if outcome != "current":
+            logger.info(f"Project memory schema {outcome}")
 
     def close(self) -> None:
         self.pool.closeall()
 
     # ---------- spaces ----------
-    _SPACE_COLS = "id, project_id, space_name, instructions, create_time, update_time, cleared_at"
+    _SPACE_COLS = "id, project_id, space_name, instructions, create_time, update_time, clear_time"
     _DOMAIN_COLS = "id, space_id, domain, description"
 
     @staticmethod
     def _space(row: tuple) -> Space:
-        return Space(
-            id=row[0],
-            project_id=row[1],
-            space_name=row[2],
-            instructions=row[3],
-            create_time=row[4],
-            update_time=row[5],
-            cleared_at=row[6],
-        )
+        names = ("id", "project_id", "space_name", "instructions", "create_time", "update_time",
+                 "clear_time")  # fmt: skip
+        return Space.model_validate(dict(zip(names, row, strict=True)))
 
     @staticmethod
     def _domain(row: tuple) -> Domain:
@@ -320,7 +338,7 @@ class PostgresProjectDB(BaseProjectDB):
         return self._space(row)
 
     def delete_space(self, space_id: str) -> None:
-        # Domains, topics and entries go with it through ON DELETE CASCADE.
+        # Domains, topics, entries and Episodes go with it through ON DELETE CASCADE.
         with self._tx() as cur:
             cur.execute(f"DELETE FROM {SCHEMA}.spaces WHERE id = %s", (space_id,))
 
@@ -383,62 +401,6 @@ class PostgresProjectDB(BaseProjectDB):
             return [self._domain(row) for row in cur.fetchall()]
 
     # ---------- topic and entry reads ----------
-    @staticmethod
-    def _filters_sql(filters: list[TopicFilter] | None, params: list[Any]) -> str:
-        """OR of AND groups over topic create_time / update_time; '' when unfiltered."""
-        groups = []
-        for group in filters or []:
-            conditions = []
-            for column in ("create_time", "update_time"):
-                time_range = getattr(group, column)
-                if time_range is None:
-                    continue
-                for op, sql_op in _RANGE_OPS:
-                    value = getattr(time_range, op)
-                    if value is not None:
-                        conditions.append(f"t.{column} {sql_op} %s")
-                        params.append(value)
-            groups.append("(" + " AND ".join(conditions) + ")" if conditions else "TRUE")
-        return " AND (" + " OR ".join(groups) + ")" if groups else ""
-
-    @staticmethod
-    def _entry(row: tuple, full: bool = True) -> AnyEntry:
-        names = ("id", "topic_id", "entry_type", "content", "time", "user_ids", "history",
-                 "conflicts", "extra", "version", "create_time", "update_time")  # fmt: skip
-        data = dict(zip(names, row, strict=True))
-        entry_type = data.pop("entry_type")
-        data.pop("topic_id")
-        data["user_ids"] = list(data["user_ids"])
-        if entry_type != "decision" or not full:  # previews and non-decisions carry neither
-            data.pop("history")
-            data.pop("conflicts")
-        return _ENTRY_TYPES[entry_type].model_validate(data)
-
-    @staticmethod
-    def _topic(row: tuple) -> Topic:
-        cols = (
-            "id",
-            "space_id",
-            "domain",
-            "topic_name",
-            "topic_summary",
-            "topic_description",
-            "sources",
-            "create_time",
-            "update_time",
-            "version",
-            "anchors",
-            "anchor_keys",
-        )
-        data = dict(zip(cols, row, strict=True))
-        data["anchor_keys"] = list(data["anchor_keys"])
-        return Topic.model_validate(data)
-
-    def _attach_entries(self, topics: dict[str, Topic], rows: list[tuple], full: bool) -> None:
-        for row in rows:
-            entry = self._entry(row, full)
-            getattr(topics[row[1]], _TOPIC_FIELDS[row[2]]).append(entry)
-
     def list_topics(
         self,
         space_id: str,
@@ -448,237 +410,94 @@ class PostgresProjectDB(BaseProjectDB):
         preview_size: int = 5,
     ) -> Page[Topic]:
         params: list[Any] = [space_id]
-        where = "t.space_id = %s" + self._filters_sql(filters, params)
+        where = "t.space_id = %s" + filters_sql(filters, params, TOPIC_TIME_COLUMNS)
         with self._tx() as cur:
             cur.execute(f"SELECT count(*) FROM {SCHEMA}.topics t WHERE {where}", params)
             total = cur.fetchone()[0]
             cur.execute(
                 f"""SELECT {_TOPIC_COLS} FROM {SCHEMA}.topics t
                     JOIN {SCHEMA}.domains d ON d.id = t.domain_id
-                    WHERE {where} ORDER BY t.update_time DESC, t.id COLLATE "C" LIMIT %s OFFSET %s""",
+                    WHERE {where} ORDER BY {TOPIC_ORDER} LIMIT %s OFFSET %s""",
                 [*params, size, (page - 1) * size],
             )
-            topics = {row[0]: self._topic(row) for row in cur.fetchall()}
+            topics = {row[0]: topic_from_row(row) for row in cur.fetchall()}
             if topics and preview_size > 0:
                 cur.execute(
                     f"""SELECT {_ENTRY_COLS} FROM (
-                            SELECT *, row_number() OVER (
-                                PARTITION BY topic_id, entry_type ORDER BY time DESC, id COLLATE "C") AS rn
-                            FROM {SCHEMA}.project_entries WHERE topic_id = ANY(%s)) e
-                        WHERE e.rn <= %s ORDER BY e.time DESC, e.id COLLATE "C" """,
-                    (list(topics), preview_size),
+                            SELECT e.*, row_number() OVER (
+                                PARTITION BY e.topic_id, e.entry_type ORDER BY {PREVIEW_ORDER}
+                            ) AS rn
+                            FROM {SCHEMA}.project_entries e
+                            WHERE e.topic_id = ANY(%s) AND e.status = %s) e
+                        WHERE e.rn <= %s
+                        ORDER BY e.topic_id, e.entry_type,
+                            CASE WHEN e.entry_type = 'timeline' THEN e.chat_time END, e.rn""",
+                    (list(topics), int(EntryStatus.ACTIVE), preview_size),
                 )
-                self._attach_entries(topics, cur.fetchall(), full=False)
+                attach_entries(topics, entries_from_rows(cur, cur.fetchall(), False))
         return Page[Topic](items=list(topics.values()), total=total, page=page, size=size)
 
     def list_entries(
         self,
         topic_id: str,
         entry_type: Literal["decision", "experience", "timeline"],
+        filters: list[TopicFilter] | None = None,
         page: int = 1,
         size: int = 10,
     ) -> Page[AnyEntry]:
+        params: list[Any] = [topic_id, entry_type, int(EntryStatus.ACTIVE)]
+        where = "e.topic_id = %s AND e.entry_type = %s AND e.status = %s"
+        where += filters_sql(filters, params, ENTRY_TIME_COLUMNS)
         with self._tx() as cur:
-            cur.execute(
-                f"""SELECT count(*) FROM {SCHEMA}.project_entries
-                    WHERE topic_id = %s AND entry_type = %s""",
-                (topic_id, entry_type),
-            )
+            cur.execute(f"SELECT count(*) FROM {SCHEMA}.project_entries e WHERE {where}", params)
             total = cur.fetchone()[0]
             cur.execute(
-                f"""SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e
-                    WHERE e.topic_id = %s AND e.entry_type = %s
-                    ORDER BY e.time DESC, e.id COLLATE "C" LIMIT %s OFFSET %s""",
-                (topic_id, entry_type, size, (page - 1) * size),
+                f"""SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e WHERE {where}
+                    ORDER BY {DISPLAY_ORDER} LIMIT %s OFFSET %s""",
+                [*params, size, (page - 1) * size],
             )
-            items = [self._entry(row) for row in cur.fetchall()]
+            items = entries_from_rows(cur, cur.fetchall(), with_children=True)
         return Page[AnyEntry](items=items, total=total, page=page, size=size)
 
-    def get_topics_detail(self, topic_ids: list[str]) -> list[Topic]:
+    def _topics_by_id(self, cur: Any, topic_ids: list[str], with_entries: bool) -> dict:
+        cur.execute(
+            f"""SELECT {_TOPIC_COLS} FROM {SCHEMA}.topics t
+                JOIN {SCHEMA}.domains d ON d.id = t.domain_id WHERE t.id = ANY(%s)""",
+            (list(topic_ids),),
+        )
+        topics = {row[0]: topic_from_row(row) for row in cur.fetchall()}
+        if topics and with_entries:
+            cur.execute(
+                f"""SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e
+                    WHERE e.topic_id = ANY(%s) AND e.status = %s ORDER BY {DISPLAY_ORDER}""",
+                (list(topics), int(EntryStatus.ACTIVE)),
+            )
+            attach_entries(topics, entries_from_rows(cur, cur.fetchall(), with_children=True))
+        return topics
+
+    def get_topics_detail(self, topic_ids: list[str], with_entries: bool = True) -> list[Topic]:
         if not topic_ids:
             return []
         with self._tx() as cur:
-            cur.execute(
-                f"""SELECT {_TOPIC_COLS} FROM {SCHEMA}.topics t
-                    JOIN {SCHEMA}.domains d ON d.id = t.domain_id WHERE t.id = ANY(%s)""",
-                (list(topic_ids),),
-            )
-            topics = {row[0]: self._topic(row) for row in cur.fetchall()}
-            if topics:
-                cur.execute(
-                    f"""SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e
-                        WHERE e.topic_id = ANY(%s) ORDER BY e.time DESC, e.id COLLATE "C" """,
-                    (list(topics),),
-                )
-                self._attach_entries(topics, cur.fetchall(), full=True)
+            topics = self._topics_by_id(cur, topic_ids, with_entries)
         return [topics[i] for i in dict.fromkeys(topic_ids) if i in topics]
 
-    # ---------- topic writes ----------
-    @staticmethod
-    def _dedupe_sources(sources: list[Source]) -> list[dict]:
-        """Drop identical sources, keeping first-seen order."""
-        seen, result = set(), []
-        for source in sources:
-            item = source.model_dump(mode="json")
-            key = json.dumps(item, sort_keys=True)
-            if key not in seen:
-                seen.add(key)
-                result.append(item)
-        return result
-
-    @staticmethod
-    def _entry_row(entry: AnyEntry) -> tuple:
-        is_decision = entry.entry_type == "decision"
-        return (
-            entry.entry_type,
-            entry.content,
-            entry.time,
-            list(entry.user_ids),
-            json.dumps([h.model_dump(mode="json") for h in entry.history] if is_decision else []),
-            json.dumps([c.model_dump(mode="json") for c in entry.conflicts] if is_decision else []),
-            json.dumps(entry.extra.model_dump(mode="json")),
-            entry.embedding,
-        )
-
-    def _insert_entries(self, cur: Any, space_id: str, topic_id: str, entries: list) -> None:
-        if not entries:
-            return
-        from psycopg2.extras import execute_values
-
-        execute_values(
-            cur,
-            f"""INSERT INTO {SCHEMA}.project_entries (id, topic_id, space_id, entry_type, content,
-                    time, user_ids, history, conflicts, extra, embedding) VALUES %s""",
-            [(str(uuid.uuid4()), topic_id, space_id, *self._entry_row(e)) for e in entries],
-            template="(%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::vector)",
-        )
-
-    def _create_topic(self, cur: Any, space_id: str, domain_id: str, item: TopicCreate) -> str:
-        topic_id = f"topic_{uuid.uuid4().hex}"
-        cur.execute(
-            f"""INSERT INTO {SCHEMA}.topics (id, space_id, domain_id, topic_name, topic_summary,
-                    topic_description, sources, embedding, anchors)
-                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::vector, %s::jsonb)""",
-            (
-                topic_id,
-                space_id,
-                domain_id,
-                item.topic_name,
-                item.topic_summary,
-                item.topic_description,
-                json.dumps(self._dedupe_sources(item.sources)),
-                item.embedding,
-                json.dumps(item.anchors),
-            ),
-        )
-        self._insert_entries(cur, space_id, topic_id, item.entries)
-        return topic_id
-
-    def _update_topic(
-        self, cur: Any, space_id: str, domain_id: str | None, item: TopicUpdate
-    ) -> None:
-        sources = json.dumps(self._dedupe_sources(item.add_sources))
-        cur.execute(
-            f"""UPDATE {SCHEMA}.topics SET
-                    domain_id = COALESCE(%s, domain_id),
-                    topic_summary = COALESCE(%s, topic_summary),
-                    topic_description = COALESCE(%s, topic_description),
-                    embedding = CASE WHEN %s THEN %s::vector ELSE embedding END,
-                    anchors = COALESCE(%s::jsonb, anchors),
-                    sources = COALESCE((
-                        SELECT jsonb_agg(s.e ORDER BY s.o) FROM (
-                            SELECT x.e, min(x.o) AS o
-                            FROM jsonb_array_elements(sources || %s::jsonb) WITH ORDINALITY x(e, o)
-                            GROUP BY x.e) s), '[]'::jsonb),
-                    version = version + 1,
-                    update_time = now()
-                WHERE id = %s AND space_id = %s AND version = %s""",
-            (
-                domain_id,
-                item.topic_summary,
-                item.topic_description,
-                item.embedding is not None,
-                item.embedding,
-                None if item.anchors is None else json.dumps(item.anchors),
-                sources,
-                item.topic_id,
-                space_id,
-                item.expected_version,
-            ),
-        )
-        if cur.rowcount == 0:  # failure path only: tell a missing topic from a stale version
-            cur.execute(
-                f"SELECT 1 FROM {SCHEMA}.topics WHERE id = %s AND space_id = %s",
-                (item.topic_id, space_id),
-            )
-            if cur.fetchone() is None:
-                raise TopicNotFoundError(f"Topic not found in space {space_id}: {item.topic_id}")
-            raise VersionConflictError(
-                f"Topic {item.topic_id} changed since version {item.expected_version}"
-            )
-        if item.delete_entry_ids:
-            cur.execute(
-                f"DELETE FROM {SCHEMA}.project_entries WHERE topic_id = %s AND id = ANY(%s)",
-                (item.topic_id, list(item.delete_entry_ids)),
-            )
-        new_entries = []
-        for entry in item.upsert_entries:
-            if entry.id is None:
-                new_entries.append(entry)
-                continue
-            # TODO: Check the entry version read by the organizer before replacing it.
-            # Manual edits bump only the entry version, so a stale organizer can overwrite them.
-            cur.execute(
-                f"""UPDATE {SCHEMA}.project_entries SET entry_type = %s, content = %s, time = %s,
-                        user_ids = %s, history = %s::jsonb, conflicts = %s::jsonb,
-                        extra = %s::jsonb, embedding = %s::vector,
-                        version = version + 1, update_time = now()
-                    WHERE id = %s AND topic_id = %s""",
-                (*self._entry_row(entry), entry.id, item.topic_id),
-            )
-            if cur.rowcount == 0:
-                raise EntryNotFoundError(f"Entry not found in topic {item.topic_id}: {entry.id}")
-        self._insert_entries(cur, space_id, item.topic_id, new_entries)
-
-    def apply_changes(self, change_set: TopicChangeSet) -> list[TopicChangeResult]:
-        space_id = change_set.space_id
+    def get_entry(self, entry_id: str) -> AnyEntry | None:
         with self._tx() as cur:
-            # FOR KEY SHARE conflicts with clear_space's FOR UPDATE (so a clear and a
-            # write-back never interleave) but not with create_domains' FOR NO KEY UPDATE.
             cur.execute(
-                f"SELECT cleared_at FROM {SCHEMA}.spaces WHERE id = %s FOR KEY SHARE", (space_id,)
+                f"""SELECT COALESCE(parent_decision_id, id) FROM {SCHEMA}.project_entries
+                    WHERE id = %s""",
+                (entry_id,),
             )
             row = cur.fetchone()
             if row is None:
-                raise SpaceNotFoundError(f"Space not found: {space_id}")
-            if row[0] is not None and change_set.accepted_at <= row[0]:
-                raise SpaceClearedError(
-                    f"Space {space_id} was cleared at {row[0]}, after the task was accepted"
-                )
-            cur.execute(f"SELECT domain, id FROM {SCHEMA}.domains WHERE space_id = %s", (space_id,))
-            domain_ids = dict(cur.fetchall())
-            if change_set.updates:
-                # Lock in id order so concurrent change sets cannot deadlock on each other.
-                cur.execute(
-                    f"""SELECT id FROM {SCHEMA}.topics WHERE id = ANY(%s) AND space_id = %s
-                        ORDER BY id FOR NO KEY UPDATE""",
-                    (sorted({u.topic_id for u in change_set.updates}), space_id),
-                )
+                return None
+            return load_entries_by_id(cur, [row[0]]).get(row[0])
 
-            def resolve(name: str) -> str:
-                if name not in domain_ids:
-                    raise DomainNotFoundError(f"Domain not registered in space {space_id}: {name}")
-                return domain_ids[name]
-
-            results = []
-            for item in change_set.creates:
-                topic_id = self._create_topic(cur, space_id, resolve(item.domain), item)
-                results.append(TopicChangeResult(topic_id=topic_id, operation="ADD"))
-            for item in change_set.updates:
-                domain_id = None if item.domain is None else resolve(item.domain)
-                self._update_topic(cur, space_id, domain_id, item)
-                results.append(TopicChangeResult(topic_id=item.topic_id, operation="UPDATE"))
-        return results
+    # ---------- topic writes ----------
+    def apply_changes(self, change_set: TopicChangeSet) -> list[TopicChangeResult]:
+        with self._tx() as cur:
+            return write_change_set(cur, change_set)
 
     def update_decision(
         self,
@@ -691,55 +510,64 @@ class PostgresProjectDB(BaseProjectDB):
             raise ValueError("expected_update_time must be timezone-aware")
         with self._tx() as cur:
             cur.execute(
-                f"""UPDATE {SCHEMA}.project_entries e SET content = %s, embedding = %s::vector,
-                        conflicts = '[]'::jsonb, version = version + 1, update_time = now()
-                    WHERE e.id = %s AND e.entry_type = 'decision' AND e.update_time = %s
-                    RETURNING {_ENTRY_COLS}""",
-                (content, embedding, decision_id, expected_update_time),
+                f"""UPDATE {SCHEMA}.project_entries SET content = %s, embedding = %s::vector,
+                        version = version + 1, update_time = clock_timestamp()
+                    WHERE id = %s AND entry_type = 'decision' AND status = %s
+                      AND update_time = %s
+                    RETURNING topic_id""",
+                (content, embedding, decision_id, int(EntryStatus.ACTIVE), expected_update_time),
             )
             row = cur.fetchone()
-        if row is None:
-            raise UpdateConflictError(
-                f"Decision {decision_id} changed since {expected_update_time.isoformat()}"
+            if row is None:
+                raise UpdateConflictError(
+                    f"Decision {decision_id} changed since {expected_update_time.isoformat()}"
+                )
+            cur.execute(
+                f"DELETE FROM {SCHEMA}.project_entries WHERE parent_decision_id = %s "
+                "AND status = %s",
+                (decision_id, int(EntryStatus.CONFLICT)),
             )
-        return self._entry(row)
+            refresh_topic_ranks(cur, [row[0]])
+            return load_entries_by_id(cur, [decision_id])[decision_id]
 
     def delete_topics(self, topic_ids: list[str]) -> int:
         if not topic_ids:
             return 0
         with self._tx() as cur:
+            # Entries cascade; episodes.topic_id is set NULL by its foreign key.
             cur.execute(f"DELETE FROM {SCHEMA}.topics WHERE id = ANY(%s)", (list(topic_ids),))
             return cur.rowcount
 
     def clear_space(self, space_id: str) -> int:
         with self._tx() as cur:
-            # FOR UPDATE waits for in-flight apply_changes (FOR KEY SHARE) on this space.
+            # FOR UPDATE waits for in-flight write_change_set (FOR KEY SHARE) on this space.
             cur.execute(f"SELECT 1 FROM {SCHEMA}.spaces WHERE id = %s FOR UPDATE", (space_id,))
             if cur.fetchone() is None:
                 raise SpaceNotFoundError(f"Space not found: {space_id}")
             # clock_timestamp(), not now(): stamp the moment the clear takes effect, after
             # waiting for in-flight write-backs, so tasks accepted meanwhile are rejected.
             cur.execute(
-                f"UPDATE {SCHEMA}.spaces SET cleared_at = clock_timestamp() WHERE id = %s",
+                f"UPDATE {SCHEMA}.spaces SET clear_time = clock_timestamp() WHERE id = %s",
                 (space_id,),
             )
             cur.execute(f"DELETE FROM {SCHEMA}.topics WHERE space_id = %s", (space_id,))
             return cur.rowcount
 
     # ---------- search ----------
-    def _topic_recall_filter(
-        self,
-        space_ids: list[str],
-        domains: list[str] | None,
-        filters: list[TopicFilter] | None,
+    @staticmethod
+    def _recall_filter(
+        space_ids: list[str], domains: list[str] | None, filters: list[TopicFilter] | None
     ) -> tuple[str, list[Any]]:
-        params: list[Any] = [space_ids]
+        params: list[Any] = [list(space_ids)]
         where = "t.space_id = ANY(%s)"
         if domains:
             where += " AND d.domain = ANY(%s)"
-            params.append(domains)
-        where += self._filters_sql(filters, params)
+            params.append(list(domains))
+        where += filters_sql(filters, params, TOPIC_TIME_COLUMNS)
         return where, params
+
+    # Any query term matches: plainto_tsquery ANDs the terms, so turn & into |.
+    _ANY_TERM_QUERY = f"replace(plainto_tsquery('{SCHEMA}.zh', %s)::text, ' & ', ' | ')::tsquery"
 
     def search_topics_by_embedding(
         self,
@@ -751,18 +579,17 @@ class PostgresProjectDB(BaseProjectDB):
     ) -> list[SearchHit]:
         if not space_ids or top_k <= 0:
             return []
-
-        where, params = self._topic_recall_filter(space_ids, domains, filters)
+        where, params = self._recall_filter(space_ids, domains, filters)
         with self._tx() as cur:
             cur.execute(
                 f"""SELECT {_TOPIC_COLS}, t.embedding <=> %s::vector AS distance
                     FROM {SCHEMA}.topics t JOIN {SCHEMA}.domains d ON d.id = t.domain_id
                     WHERE {where} AND t.embedding IS NOT NULL
-                    ORDER BY distance LIMIT %s""",
+                    ORDER BY distance, t.id COLLATE "C" LIMIT %s""",
                 [query_vec, *params, top_k],
             )
             return [
-                SearchHit(topic=self._topic(row[:-1]), score=1.0 - row[-1])
+                SearchHit(topic=topic_from_row(row[:-1]), score=1.0 - row[-1])
                 for row in cur.fetchall()
             ]
 
@@ -777,15 +604,107 @@ class PostgresProjectDB(BaseProjectDB):
         text = query_text.strip()
         if not space_ids or not text or top_k <= 0:
             return []
-
-        where, params = self._topic_recall_filter(space_ids, domains, filters)
+        where, params = self._recall_filter(space_ids, domains, filters)
         with self._tx() as cur:
             cur.execute(
                 f"""SELECT {_TOPIC_COLS}, ts_rank(t.search_tsv, q.value) AS rank
                     FROM {SCHEMA}.topics t JOIN {SCHEMA}.domains d ON d.id = t.domain_id
-                    CROSS JOIN plainto_tsquery('{SCHEMA}.zh', %s) AS q(value)
+                    CROSS JOIN (SELECT {self._ANY_TERM_QUERY}) AS q(value)
                     WHERE {where} AND t.search_tsv @@ q.value
                     ORDER BY rank DESC, t.id COLLATE "C" LIMIT %s""",
                 [text, *params, top_k],
             )
-            return [SearchHit(topic=self._topic(row[:-1]), score=row[-1]) for row in cur.fetchall()]
+            return [
+                SearchHit(topic=topic_from_row(row[:-1]), score=row[-1]) for row in cur.fetchall()
+            ]
+
+    def _search_entries(
+        self,
+        score_sql: str,
+        score_params: list[Any],
+        match_sql: str,
+        match_params: list[Any],
+        space_ids: list[str],
+        domains: list[str] | None,
+        filters: list[TopicFilter] | None,
+        top_k: int,
+        per_topic: int,
+    ) -> list[EntryHit]:
+        """Fold candidate rows into their decisions (best score), keep the top_k topics by
+        their best entry and at most per_topic entries each."""
+        where, params = self._recall_filter(space_ids, domains, filters)
+        limit = max(_ENTRY_CANDIDATES_MIN, top_k * per_topic * 4)
+        with self._tx() as cur:
+            cur.execute(
+                f"""SELECT COALESCE(e.parent_decision_id, e.id), e.topic_id, {score_sql} AS score
+                    FROM {SCHEMA}.project_entries e
+                    JOIN {SCHEMA}.topics t ON t.id = e.topic_id
+                    JOIN {SCHEMA}.domains d ON d.id = t.domain_id
+                    WHERE {where} AND {match_sql}
+                      AND (e.entry_type = 'decision' OR e.status = %s)
+                    ORDER BY score DESC, e.id COLLATE "C" LIMIT %s""",
+                [*score_params, *params, *match_params, int(EntryStatus.ACTIVE), limit],
+            )
+            best: dict[str, tuple[str, float]] = {}
+            for entry_id, topic_id, score in cur.fetchall():
+                if entry_id not in best or score > best[entry_id][1]:
+                    best[entry_id] = (topic_id, float(score))
+            per: dict[str, list[tuple[str, float]]] = {}
+            for entry_id, (topic_id, score) in best.items():
+                per.setdefault(topic_id, []).append((entry_id, score))
+            ranked = sorted(per.items(), key=lambda kv: (-max(s for _, s in kv[1]), kv[0]))
+            chosen = [
+                (entry_id, score)
+                for _, items in ranked[:top_k]
+                for entry_id, score in sorted(items, key=lambda x: (-x[1], x[0]))[:per_topic]
+            ]
+            entries = load_entries_by_id(cur, [entry_id for entry_id, _ in chosen])
+        return [EntryHit(entry=entries[i], score=s) for i, s in chosen if i in entries]
+
+    def search_entries_by_embedding(
+        self,
+        space_ids: list[str],
+        query_vec: list[float],
+        domains: list[str] | None = None,
+        filters: list[TopicFilter] | None = None,
+        top_k: int = 20,
+        per_topic: int = 6,
+    ) -> list[EntryHit]:
+        if not space_ids or top_k <= 0 or per_topic <= 0:
+            return []
+        return self._search_entries(
+            "1 - (e.embedding <=> %s::vector)",
+            [query_vec],
+            "e.embedding IS NOT NULL",
+            [],
+            space_ids,
+            domains,
+            filters,
+            top_k,
+            per_topic,
+        )
+
+    def search_entries_by_fulltext(
+        self,
+        space_ids: list[str],
+        query_text: str,
+        domains: list[str] | None = None,
+        filters: list[TopicFilter] | None = None,
+        top_k: int = 20,
+        per_topic: int = 6,
+    ) -> list[EntryHit]:
+        text = query_text.strip()
+        if not space_ids or not text or top_k <= 0 or per_topic <= 0:
+            return []
+        query = self._ANY_TERM_QUERY
+        return self._search_entries(
+            f"ts_rank(e.search_tsv, {query})",
+            [text],
+            f"e.search_tsv @@ {query}",
+            [text],
+            space_ids,
+            domains,
+            filters,
+            top_k,
+            per_topic,
+        )
