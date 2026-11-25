@@ -458,3 +458,30 @@ def test_extraction_prompt_splits_rules_and_keeps_completion_reports():
 
     assert "每条单独输出一个 decision" in _EXTRACT
     assert "“会先…”“将…”“准备…”都不记" in _EXTRACT
+
+
+@pytest.mark.parametrize(
+    ("validation", "witnessed"),
+    [("12 passed in 0.8s", True), ("all 40 tests passed", False)],
+    ids=["in-tool-output", "invented"],
+)
+def test_experience_validation_is_witnessed_by_the_whole_episode(validation, witnessed):
+    ask = row("ask", "user", "导出偶尔超时，先查连接池再改", role_id="alice")
+    reply = row("fix", "assistant", "连接池上限调到 16 后不再超时")
+    tool = row("run", "tool", "pytest tests/export ... 12 passed in 0.8s")
+    output = {
+        "episode_summary": "导出超时排查",
+        "drafts": [
+            {
+                "kind": "experience",
+                "content": "导出超时先查连接池上限",
+                "message_id": "fix",
+                "quote": "连接池上限调到 16 后不再超时",
+                "origin": "delegated",
+                "card": {"principle": "先查连接池上限", "validation": validation, "signal": "test"},
+            }
+        ],
+    }
+    result = extract_episode(Writer(output), {"id": "episode"}, [ask, reply, tool])
+    (draft,) = result["drafts"]
+    assert draft["card"]["validation_witnessed"] is witnessed

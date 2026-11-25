@@ -291,6 +291,24 @@ def _draft(
     }
 
 
+def _witness_validations(drafts: Any, messages: list[dict]) -> None:
+    """Mark each experience whose stated validation occurs anywhere in this Episode.
+
+    Test, build and review results usually arrive in tool output or a later Agent reply,
+    not in the one message an experience quotes, so the whole Episode is the witness.
+    """
+    raw = "\n".join(
+        f"{message.get('content') or ''}\n{json.dumps(message.get('tool_calls') or '')}"
+        for message in messages
+    )
+    episode_text = " ".join(raw.split())
+    for draft in drafts:
+        card = draft.get("card") or {}
+        validation = card.get("validation")
+        if draft["kind"] == "experience" and isinstance(validation, str) and validation.strip():
+            card["validation_witnessed"] = " ".join(validation.split()) in episode_text
+
+
 def _member_anchored(item: dict, row: dict, member: dict) -> tuple[dict, dict]:
     """Attribute a decision restated by the Agent to the member instruction it cites.
 
@@ -403,6 +421,7 @@ def extract_episode(
         )
         if draft:
             valid[draft["draft_id"]] = draft
+    _witness_validations(valid.values(), messages)
     dropped = len(raw_drafts) - len(valid)
     if dropped:
         # Drafts whose evidence does not hold are dropped, never the whole Episode: retrying

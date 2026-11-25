@@ -648,3 +648,20 @@ def test_experience_history_keeps_the_documented_version_fields():
         "card": {"principle": "old"},
         "time": "2026-11-19T00:00:00Z",
     }
+
+
+@pytest.mark.parametrize(("witnessed", "status"), [(True, "verified"), (False, "candidate")])
+def test_witnessed_validation_lets_an_experience_be_verified(witnessed, status):
+    card = {
+        "task_intent": "调整池",
+        "principle": "池大小设为 16",
+        "validation": "12 passed",
+        "signal": "test",
+        "status": "verified",
+        "validation_witnessed": witnessed,
+    }
+    draft = {"kind": "experience", "content": "池大小设为 16", "card": card}
+    change = prepare_merge(Writer(), plan_for(draft))
+    (experience,) = change["topics"][0]["topic"]["experiences"]
+    assert experience["exp_status"] == status
+    assert "validation_witnessed" not in experience["card"]

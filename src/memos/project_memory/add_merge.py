@@ -305,7 +305,12 @@ def _prepare_experience(hub: ModelHub, snapshot: dict, episode: dict, draft: dic
     if signal not in ("test", "build", "review", "user") or not payload.get("validation"):
         signal = "none"
     validation = payload.get("validation")
-    if not isinstance(validation, str) or validation not in draft.get("quote", ""):
+    # Extraction checks the validation against the whole Episode, tool output included;
+    # drafts stored before that check fall back to their own quote.
+    witnessed = payload.get("validation_witnessed")
+    if witnessed is None:
+        witnessed = isinstance(validation, str) and validation in draft.get("quote", "")
+    if not isinstance(validation, str) or not witnessed:
         raw.pop("validation", None)
         signal = "none"
     status = payload.get("status")
