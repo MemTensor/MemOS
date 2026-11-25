@@ -23,7 +23,6 @@ x-memos: &memos
     NEO4J_URI: bolt://neo4j:7687
     PROJECT_DB_HOST: pm-postgres
     PROJECT_DB_PORT: "5432"
-    PROJECT_MEMORY_PROJECT_ID: ${PROJECT_MEMORY_PROJECT_ID:-local-project}
     MEMSCHEDULER_USE_REDIS_QUEUE: "true"
     REDIS_HOST: redis
     REDIS_PORT: "6379"

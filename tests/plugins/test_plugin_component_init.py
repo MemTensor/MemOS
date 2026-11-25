@@ -234,3 +234,24 @@ class TestPluginComponentInit:
         from memos.dream import CommunityDreamPlugin
 
         assert CommunityDreamPlugin.enabled_by_default is False
+
+
+def test_source_image_discovers_configured_project_writer(monkeypatch):
+    import importlib.metadata
+
+    from memos.plugins.manager import PluginManager
+    from memos.project_memory.plugin import CommunityProjectMemoryPlugin
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", dict)
+    monkeypatch.setenv("PROJECT_DB_BACKEND", "postgres")
+    monkeypatch.setenv("PROJECT_DB_HOST", "deployment-db")
+    monkeypatch.delenv("MEMOS_ENABLED_PLUGINS", raising=False)
+    monkeypatch.setattr(CommunityProjectMemoryPlugin, "on_load", lambda self: None)
+    manager = PluginManager()
+    manager.discover()
+    assert isinstance(manager.plugins["project_memory"], CommunityProjectMemoryPlugin)
+
+    monkeypatch.setenv("MEMOS_DISABLED_PLUGINS", "project_memory")
+    disabled = PluginManager()
+    disabled.discover()
+    assert "project_memory" not in disabled.plugins

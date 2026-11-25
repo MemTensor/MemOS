@@ -252,7 +252,8 @@ class EpisodeAddRuntime:
             self._formation_thread = None
 
     def _run_timer(self) -> None:
-        scan_key = f"project_episode_scan_lock:{self.store.project_id}"
+        # One scanner per schema: the due scan covers every project stored in it.
+        scan_key = f"project_episode_scan_lock:{self.store.schema_name}"
         next_close = 0.0
         while not self._stopped.is_set():
             try:
@@ -307,7 +308,7 @@ class EpisodeAddRuntime:
         return results
 
     def _formation_key(self, kind: str, space_id: str) -> str:
-        return f"project_formation_{kind}:{self.store.project_id}:{space_id}"
+        return f"project_formation_{kind}:{self.store.schema_name}:{space_id}"
 
     def _back_off(self, space_id: str, seconds: int | None = None) -> None:
         # A Formation that cannot commit would fail the same way on the next scan.
@@ -769,7 +770,8 @@ class EpisodeAddRuntime:
         }
 
     def _space_key(self, episode: dict) -> str:
-        return f"project_space_lock:{self.store.project_id}:{episode['space_id']}"
+        # Space IDs are unique across projects; Space-level Formation has no Episode row to read.
+        return f"project_space_lock:{self.store.schema_name}:{episode['space_id']}"
 
     @staticmethod
     def _new_lock_token(lease: StageLease) -> str:

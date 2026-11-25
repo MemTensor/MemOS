@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from memos.project_memory.locks import InProcessLocks
-from memos.project_memory.testing import (
+from tests.project_memory.helpers import (
     DECISION_ROUNDS,
     FakeGraphDB,
     RuleLLM,
@@ -49,7 +49,7 @@ def _db(kind: str, tmp_path, name: str):
 def _space(client) -> str:
     r = client.post(
         "/product/create_space",
-        json={"space_name": "并发", "domains": [{"name": "代码开发"}]},
+        json={"project_id": "project", "space_name": "并发", "domains": [{"name": "代码开发"}]},
     )
     return r.json()["data"]["space_id"]
 
@@ -224,7 +224,7 @@ def test_two_replicas_share_storage_and_lock(kind, tmp_path):
     from memos.project_memory.graph_store import ProjectStore
     from memos.project_memory.judge import ModelHub
     from memos.project_memory.service import ProjectMemoryService
-    from memos.project_memory.testing import FakeEmbedder
+    from tests.project_memory.helpers import FakeEmbedder
 
     db1 = make_test_db(kind, tmp_path / "rep")
     db2 = _second_handle(kind, db1, tmp_path)
@@ -234,7 +234,7 @@ def test_two_replicas_share_storage_and_lock(kind, tmp_path):
         ProjectMemoryService(ProjectStore(db, emb), ModelHub(SlowLLM(0.05)), lock=shared_lock)
         for db in (db1, db2)
     ]
-    sid = replicas[0].create_space("并发", "", [{"name": "代码开发"}]).space_id
+    sid = replicas[0].create_space("project", "并发", "", [{"name": "代码开发"}]).space_id
 
     def write(svc, rnd):
         svc.accept(

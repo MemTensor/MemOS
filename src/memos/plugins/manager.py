@@ -105,13 +105,22 @@ class PluginManager:
         try:
             eps = importlib.metadata.entry_points()
             if hasattr(eps, "select"):
-                plugin_eps = eps.select(group=ENTRY_POINT_GROUP)
+                plugin_eps = list(eps.select(group=ENTRY_POINT_GROUP))
             else:
-                plugin_eps = eps.get(ENTRY_POINT_GROUP, [])
+                plugin_eps = list(eps.get(ENTRY_POINT_GROUP, []))
         except Exception:
             logger.exception("Failed to query entry_points")
             return
 
+        # Source-only API images use PYTHONPATH and have no distribution entry points.
+        if not any(ep.name == "project_memory" for ep in plugin_eps):
+            plugin_eps.append(
+                importlib.metadata.EntryPoint(
+                    name="project_memory",
+                    value="memos.project_memory:CommunityProjectMemoryPlugin",
+                    group=ENTRY_POINT_GROUP,
+                )
+            )
         candidates: list[tuple[str, MemOSPlugin]] = []
         for ep in plugin_eps:
             try:

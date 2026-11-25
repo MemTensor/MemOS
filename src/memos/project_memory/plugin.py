@@ -49,7 +49,13 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     description = (
         "Project memory view: spaces, topics, decisions and experiences over MemOS Memory nodes"
     )
-    enabled_by_default = False
+
+    @property
+    def enabled_by_default(self) -> bool:
+        return (
+            bool(os.getenv("PROJECT_DB_HOST"))
+            and os.getenv("PROJECT_DB_BACKEND", "postgres").lower() == "postgres"
+        )
 
     def on_load(self) -> None:
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}
@@ -96,6 +102,10 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def init_components(self, context: dict) -> None:
         # 保留同一个 dict 引用：调度器的 submit 句柄在核心启动后期才写进来（Dream 同样做法）
         self.context = context
+        shared = context["shared"]
+        shared["project_embedder"] = (
+            shared.get("project_embedder") or pm_config.build_embedder() or shared.get("embedder")
+        )
         self._service = None
         # The retrieval service's /get_message reads the messages this plugin stored.
         context.setdefault("project_message_store", _PluginMessages(self))
@@ -124,7 +134,10 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         shared = self.context.get("shared") or {}
         return bool(shared.get("project_add_store")) or (
             not shared.get("project_graph_db")
-            and os.getenv("PROJECT_MEMORY_GRAPH_DB", "postgres") == "postgres"
+            and (
+                shared.get("project_db") is not None
+                or os.getenv("PROJECT_MEMORY_GRAPH_DB", "postgres") == "postgres"
+            )
         )
 
     @property
@@ -138,9 +151,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             return self._service
 
     def _build_service(self, shared: dict[str, Any]) -> ProjectMemoryService:
-        embedder = (
-            shared.get("project_embedder") or pm_config.build_embedder() or shared.get("embedder")
-        )
+        embedder = shared.get("project_embedder")
         project_embed = embedder.embed if embedder is not None else None
         llm = shared.get("project_llm") or pm_config.build_llm() or shared.get("llm")
         judge_llm = shared.get("project_judge_llm") or pm_config.build_llm(
@@ -166,15 +177,17 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             raise RuntimeError("Project memory Add requires all four configured scheduler stages")
         postgres = shared.get("project_add_store")
         if postgres is None:
-            project_id = os.getenv("PROJECT_MEMORY_PROJECT_ID", "")
             config = pm_config.postgres_config()
-            postgres = PostgresAddStore(config, project_id=project_id)
+            project_db = shared.get("project_db")
+            postgres = PostgresAddStore(
+                config, pool=project_db.pool if project_db is not None else None
+            )
         try:
             archive = None
             if archive_path := os.getenv("PROJECT_MEMORY_LEGACY_ARCHIVE"):
                 from .add_legacy import LegacyArchive
 
-                archive = LegacyArchive.read(Path(archive_path), postgres.project_id)
+                archive = LegacyArchive.read(Path(archive_path))
             view = RelationalProjectView(postgres, embedder=project_embed, legacy=archive)
             hub = ModelHub(llm=llm, judge_llm=judge_llm, graph_db=None)
             self._runtime = EpisodeAddRuntime(
@@ -183,7 +196,10 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
                 self._submit,
                 redis,
                 embedder=project_embed,
-                embedding_model_id=os.getenv("PROJECT_MEMORY_EMBEDDER_MODEL")
+                embedding_model_id=getattr(
+                    getattr(embedder, "config", None), "model_name_or_path", None
+                )
+                or os.getenv("PROJECT_MEMORY_EMBEDDER_MODEL")
                 or os.getenv("MOS_EMBEDDER_MODEL"),
                 legacy_status=view.legacy_task_status if archive else None,
             )

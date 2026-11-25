@@ -97,7 +97,6 @@ def store():
         pytest.skip("PG_TEST_DSN is required")
     db = PostgresAddStore(
         {"dsn": dsn, "schema_name": f"add_metrics_{uuid4().hex}", "embedding_dimension": 3},
-        project_id="project",
     )
     with db.transaction() as cur:
         cur.execute("INSERT INTO spaces (id, space_name, project_id) VALUES ('test','T','project')")
@@ -320,7 +319,6 @@ def test_upgrade_installs_the_event_table_on_an_existing_schema(store):
             "schema_name": store.schema_name,
             "embedding_dimension": 3,
         },
-        project_id="project",
     )
     try:
         with upgraded.transaction(readonly=True) as cur:

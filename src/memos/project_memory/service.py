@@ -122,12 +122,22 @@ class ProjectMemoryService:
     # ═════════════════════════════════ Space ═════════════════════════════════
 
     def create_space(
-        self, space_name: str, instructions: str = "", domains: list[dict] | None = None
+        self,
+        project_id: str,
+        space_name: str,
+        instructions: str = "",
+        domains: list[dict] | None = None,
     ) -> Space:
+        """建空间，记在请求给的项目下；项目由网关鉴权后传入，建好之后不变。"""
+        if not project_id or not project_id.strip():
+            raise ValueError("project_id 不能为空")
         if not space_name or not space_name.strip():
             raise ValueError("space_name 不能为空")
         space = Space(
-            space_id=new_uuid(), space_name=space_name.strip(), instructions=instructions or ""
+            space_id=new_uuid(),
+            project_id=project_id.strip(),
+            space_name=space_name.strip(),
+            instructions=instructions or "",
         )
         if domains:
             space.domains = self._validate_new_domains(space, domains)

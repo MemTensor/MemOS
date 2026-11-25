@@ -72,12 +72,12 @@ class EpisodeDispatch:
         with self.store.transaction(readonly=True) as cursor:
             cursor.execute(
                 """SELECT * FROM episodes
-                   WHERE project_id = %s AND outcome = 'pending' AND state <> 'open'
+                   WHERE outcome = 'pending' AND state <> 'open'
                      AND COALESCE(next_retry_at, '-infinity') <= %s
                      AND COALESCE((organize_result->'work'->>'until')::timestamptz, '-infinity') <= %s
                      AND COALESCE(dispatched_at, '-infinity') <= %s
                    ORDER BY COALESCE(next_retry_at, updated_at), id LIMIT %s""",
-                (self.store.project_id, now, now, now - timedelta(seconds=stale_seconds), limit),
+                (now, now, now - timedelta(seconds=stale_seconds), limit),
             )
             return cursor.fetchall()
 
@@ -96,9 +96,9 @@ class EpisodeDispatch:
         with self.store.transaction() as cursor:
             cursor.execute(
                 """SELECT * FROM episodes
-                   WHERE project_id = %s AND id = %s AND space_id = %s
+                   WHERE id = %s AND space_id = %s
                      AND user_id = %s AND attempt = %s FOR UPDATE""",
-                (self.store.project_id, episode_id, message.mem_cube_id, message.user_id, attempt),
+                (episode_id, message.mem_cube_id, message.user_id, attempt),
             )
             episode = cursor.fetchone()
             if episode is None or label_for(episode) != message.label:
@@ -130,12 +130,12 @@ class EpisodeDispatch:
                 """UPDATE episodes
                    SET stage = %s, state = %s, attempt = %s, organize_result = %s,
                        next_retry_at = NULL, updated_at = %s
-                   WHERE project_id = %s AND id = %s""",
-                (stage, state, attempt, json_value(data), now, self.store.project_id, episode_id),
+                   WHERE id = %s""",
+                (stage, state, attempt, json_value(data), now, episode_id),
             )
             record_event(
                 cursor,
-                self.store.project_id,
+                None,
                 episode_id,
                 "claimed",
                 now,
@@ -161,13 +161,12 @@ class EpisodeDispatch:
         with self.store.transaction() as cursor:
             cursor.execute(
                 sql.SQL(
-                    """UPDATE episodes SET {} WHERE project_id = %s AND id = %s
+                    """UPDATE episodes SET {} WHERE id = %s
                        AND stage = %s AND attempt = %s AND outcome = 'pending'
                        AND organize_result->'work'->>'token' = %s"""
                 ).format(assignments),
                 (
                     *values,
-                    self.store.project_id,
                     lease.episode_id,
                     lease.stage,
                     lease.attempt,
@@ -185,7 +184,7 @@ class EpisodeDispatch:
             if applied and fields.get("outcome") in TERMINAL_OUTCOMES:
                 record_event(
                     cursor,
-                    self.store.project_id,
+                    None,
                     lease.episode_id,
                     "finished",
                     now,
@@ -205,7 +204,7 @@ class EpisodeDispatch:
         with self.store.transaction() as cursor:
             record_event(
                 cursor,
-                self.store.project_id,
+                None,
                 episode["id"],
                 "published",
                 now,
@@ -215,8 +214,8 @@ class EpisodeDispatch:
             )
             cursor.execute(
                 """UPDATE episodes SET dispatched_at = %s
-                   WHERE project_id = %s AND id = %s AND stage = %s AND attempt = %s
+                   WHERE id = %s AND stage = %s AND attempt = %s
                      AND outcome = 'pending'
                      AND organize_result->'work' IS NULL""",
-                (now, self.store.project_id, episode["id"], episode["stage"], episode["attempt"]),
+                (now, episode["id"], episode["stage"], episode["attempt"]),
             )

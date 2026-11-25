@@ -39,6 +39,7 @@ class DomainUpdateItem(BaseModel):
 
 
 class CreateSpaceRequest(BaseModel):
+    project_id: str = Field(..., description="所属项目；云端由网关鉴权后填入")
     space_name: str
     instructions: str = ""
     domains: list[DomainItem] | None = None
@@ -107,6 +108,7 @@ def create_router(plugin, *, legacy_flush: bool = False) -> APIRouter:
     def create_space(req: CreateSpaceRequest):
         sp = guarded(
             svc().create_space,
+            req.project_id,
             req.space_name,
             req.instructions,
             [d.model_dump() for d in req.domains or []],

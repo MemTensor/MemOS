@@ -17,6 +17,7 @@ import httpx
 
 
 USER = "promem_smoke"
+PROJECT = "local-project"
 DOMAIN = "本地验收"
 DECISION = (
     "决定了：蓝莓构建的验证报告保留 14 天，索引写入 artifacts/blueberry/reports.json。",
@@ -124,6 +125,7 @@ def payload(
     return {
         "task_id": task_id,
         "user_id": USER,
+        "project_id": PROJECT,
         "allow_memory_view": ["project"],
         "space_ids": spaces,
         "domains": [DOMAIN],
@@ -190,7 +192,11 @@ def run_smoke(
             space = post(
                 endpoint,
                 "/product/create_space",
-                {"space_name": f"{run_id}-{index}", "domains": [{"name": DOMAIN}]},
+                {
+                    "project_id": PROJECT,
+                    "space_name": f"{run_id}-{index}",
+                    "domains": [{"name": DOMAIN}],
+                },
             )
             spaces.append(space["space_id"])
 
@@ -262,11 +268,25 @@ def run_smoke(
         if require_topic:
             for space in spaces:
                 memory = post(peer, "/product/get_memory", {"space_id": space})
-                require(
-                    any(topic["id"] in topic_ids for topic in memory["topic_detail_list"]),
-                    f"No committed Topic for Space {space}; check Formation configuration and model",
+                topics = [t for t in memory["topic_detail_list"] if t["id"] in topic_ids]
+                require(bool(topics), f"No committed Topic for Space {space}")
+                expected = topics[0]
+                recalled = post(
+                    peer,
+                    "/product/search",
+                    {
+                        "user_id": USER,
+                        "space_ids": [space],
+                        "conversation_id": f"{run_id}:recall",
+                        "include_memory_view": ["project"],
+                        "query": expected["topic_name"],
+                    },
                 )
-            print("PASS committed Topics visible in both Spaces")
+                require(
+                    any(t["id"] == expected["id"] for t in recalled["topic_detail_list"]),
+                    f"Search did not return the committed Topic in Space {space}",
+                )
+            print("PASS committed Topics retrieved from another conversation in both Spaces")
     finally:
         if keep:
             print(f"Scratch Spaces: {', '.join(spaces)}")

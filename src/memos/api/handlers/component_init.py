@@ -206,6 +206,7 @@ def init_server() -> dict[str, Any]:
         feedback_reranker_config=feedback_reranker_config,
         internet_retriever_config=internet_retriever_config,
     )
+    plugin_context["shared"]["project_db"] = project_db
     plugin_manager.discover()
     plugin_manager.init_components(plugin_context)
 
@@ -357,4 +358,5 @@ def init_server() -> dict[str, Any]:
         "deepsearch_agent": deepsearch_agent,
         # Read by the project retrieval service for /get_message; set by the project plugin.
         "project_message_store": plugin_context.get("project_message_store"),
+        "project_embedder": plugin_context["shared"].get("project_embedder"),
     }

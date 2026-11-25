@@ -503,7 +503,10 @@ def test_relational_search_and_get_keep_member_stance_times_private(add_store):
 
     service = ProjectMemoryService(RelationalProjectView(add_store), Writer())
     request = SimpleNamespace(
-        space_ids=["space"], query="Export daily", project_item_types=["decision"]
+        project_id="project-a",
+        space_ids=["space"],
+        query="Export daily",
+        project_item_types=["decision"],
     )
     (search_topic,) = service.search_result(request)["topic_detail_list"]
     request.project_result_format = "item"

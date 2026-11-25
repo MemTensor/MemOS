@@ -26,10 +26,10 @@ class DraftWitnessError(MemOSError):
     """A draft does not have the durable source witness claimed in its extraction."""
 
 
-def _query_episode(cursor: Any, project: str, episode_id: str, space: str) -> dict | None:
+def _query_episode(cursor: Any, episode_id: str, space: str) -> dict | None:
     cursor.execute(
-        "SELECT * FROM episodes WHERE project_id = %s AND space_id = %s AND id = %s FOR UPDATE",
-        (project, space, episode_id),
+        "SELECT * FROM episodes WHERE space_id = %s AND id = %s FOR UPDATE",
+        (space, episode_id),
     )
     return cursor.fetchone()
 
@@ -198,7 +198,7 @@ def _staged_episodes(
     for episode_id, update in sorted(by_id.items()):
         if episode_id in scoped:
             continue
-        row = _query_episode(cursor, project, episode_id, space)
+        row = _query_episode(cursor, episode_id, space)
         if row is None or row["staged_status"] != "active":
             raise VersionConflictError("A staged Episode is no longer eligible for Formation")
         if row["updated_at"].isoformat() != update.get("expected_updated_at"):
@@ -308,7 +308,6 @@ def commit_changeset(
     work_token: str | None = None,
 ) -> dict:
     """Write the prepared result once under the caller's Space gate."""
-    project = store.project_id
     space = changeset["space_id"]
     if changeset["episode_id"] != episode_id:
         raise EpisodeFenceError("ChangeSet belongs to a different Episode")
@@ -318,13 +317,14 @@ def commit_changeset(
         cursor.execute(
             f"""SELECT s.*, {SPACE_STATE}, clock_timestamp() AS commit_clock
                   FROM spaces s LEFT JOIN add_space_state st ON st.space_id = s.id
-                 WHERE s.project_id = %s AND s.id = %s FOR UPDATE OF s""",
-            (project, space),
+                 WHERE s.id = %s FOR UPDATE OF s""",
+            (space,),
         )
         scope = cursor.fetchone()
         if scope is None:
-            raise EpisodeFenceError("Space no longer exists in this project")
-        current = _query_episode(cursor, project, episode_id, space)
+            raise EpisodeFenceError("Space no longer exists")
+        project = scope["project_id"]
+        current = _query_episode(cursor, episode_id, space)
         if current is None:
             raise EpisodeFenceError("Episode no longer exists in this Space")
         if current["commit_key"] == key:
@@ -388,7 +388,6 @@ def _advance_formation(cursor: Any, space: str, consumed: int) -> None:
 
 def commit_formation(store: PostgresAddStore, changeset: dict) -> dict:
     """Write a Space-level Formation that no new Episode carries, under the Space gate."""
-    project = store.project_id
     space = changeset["space_id"]
     formation = changeset.get("formation")
     if changeset.get("episode_id") is not None or not formation:
@@ -397,12 +396,13 @@ def commit_formation(store: PostgresAddStore, changeset: dict) -> dict:
         cursor.execute(
             f"""SELECT s.*, {SPACE_STATE}, clock_timestamp() AS commit_clock
                   FROM spaces s LEFT JOIN add_space_state st ON st.space_id = s.id
-                 WHERE s.project_id = %s AND s.id = %s FOR UPDATE OF s""",
-            (project, space),
+                 WHERE s.id = %s FOR UPDATE OF s""",
+            (space,),
         )
         scope = cursor.fetchone()
         if scope is None:
-            raise EpisodeFenceError("Space no longer exists in this project")
+            raise EpisodeFenceError("Space no longer exists")
+        project = scope["project_id"]
         if scope["formation_version"] != formation["version"]:
             raise VersionConflictError("Default Topic Formation changed during preparation")
         scoped = _staged_episodes(cursor, changeset, project, space)

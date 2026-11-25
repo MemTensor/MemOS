@@ -1,0 +1,51 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Configuration } from '../../src/config/config.ts';
+import { Store } from '../../src/storage/store.ts';
+import { Deliveries } from '../../src/storage/deliveries.ts';
+import { DatabaseSync } from 'node:sqlite';
+
+test('legacy connection migration backs up data, assigns engineering identity and preserves accepted snapshots', t => {
+    const dir = mkdtempSync(join(tmpdir(), 'pm-legacy-cloud-'));
+    const config = new Configuration(dir), path = join(dir, 'memory.sqlite');
+    config.update({ baseUrl: 'http://localhost:9999/product', apiKey: 'fixture-key' });
+    let store = new Store(path, config);
+    const project = store.bindProject('demo', '/demo', 'A', config.value.baseUrl, 'codex-cli');
+    const session = store.registerSession({ agentType: 'codex-cli', nativeSessionId: 'legacy', cwd: '/demo' });
+    store.setSpaceDomains(config.value.baseUrl, 'A', ['原领域']);
+    new Deliveries(store);
+    store.db.prepare('INSERT INTO batches(id,sessionId,objectId,messages,status,uploaded,attempts,createdAt) VALUES(?,?,?,?,?,?,?,?)')
+        .run('legacy-batch', session.id, project.scopeId, '[{"role":"user","content":"original"}]', 'completed', 1, 1, '2020-01-01T00:00:00Z');
+    store.db.prepare('INSERT INTO batch_deliveries(batchId,baseUrl,connectionId,spaceId,kind,status,attempts,taskId) VALUES(?,?,?,?,?,?,?,?)')
+        .run('legacy-batch', config.value.baseUrl, store.connectionId(), 'A', 'live', 'completed', 1, 'original-task');
+    const before = store.row('SELECT messages,status,uploaded,attempts FROM batches WHERE id=?', 'legacy-batch');
+    store.close();
+    const db = new DatabaseSync(path);
+    db.exec(`DROP TRIGGER batch_connection;
+ALTER TABLE bindings DROP COLUMN connectionId;
+ALTER TABLE batches DROP COLUMN connectionId;
+CREATE TABLE domains_old(baseUrl TEXT NOT NULL,spaceId TEXT NOT NULL,domains TEXT NOT NULL,PRIMARY KEY(baseUrl,spaceId));
+INSERT INTO domains_old SELECT baseUrl,spaceId,domains FROM space_domains;
+DROP TABLE space_domains; ALTER TABLE domains_old RENAME TO space_domains;
+DROP TABLE create_space_boundaries;
+CREATE TABLE create_space_boundaries(scopeId TEXT NOT NULL,spaceId TEXT NOT NULL,baseUrl TEXT NOT NULL,startedAfter TEXT NOT NULL,PRIMARY KEY(scopeId,spaceId,baseUrl));
+CREATE TABLE delivery_old(batchId TEXT NOT NULL REFERENCES batches(id),baseUrl TEXT NOT NULL,spaceId TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,taskId TEXT,processingStatus TEXT,error TEXT,PRIMARY KEY(batchId,baseUrl,spaceId));
+INSERT INTO delivery_old SELECT batchId,baseUrl,spaceId,kind,status,attempts,taskId,processingStatus,error FROM batch_deliveries;
+DROP TABLE batch_deliveries; ALTER TABLE delivery_old RENAME TO batch_deliveries;`);
+    db.close();
+    Object.assign(config.value, { apiMode: 'algorithm', authMode: 'none', cloudProjectId: 'test1' });
+    store = new Store(path, config); new Deliveries(store);
+    t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+    const legacyIdentity = JSON.stringify(['engineering', config.value.baseUrl, '']);
+    assert.equal(store.binding(project.scopeId)!.connectionId, legacyIdentity);
+    assert.equal(store.row('SELECT connectionId FROM batch_deliveries')!.connectionId, legacyIdentity);
+    assert.equal(store.row('SELECT taskId FROM batch_deliveries')!.taskId, 'original-task');
+    assert.deepEqual(store.row('SELECT messages,status,uploaded,attempts FROM batches WHERE id=?', 'legacy-batch'), before);
+    assert.deepEqual(store.spaceDomains(config.value.baseUrl, 'A', legacyIdentity), ['原领域']);
+    assert.equal(store.spaceDomains(config.value.baseUrl, 'A'), undefined);
+    assert.ok(readdirSync(dir).some(name => name.includes('before-cloud-connections')));
+    assert.ok(readdirSync(dir).some(name => name.includes('before-delivery-connections')));
+});

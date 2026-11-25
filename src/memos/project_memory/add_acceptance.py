@@ -54,6 +54,7 @@ class AcceptedAdd:
 
 @dataclass(frozen=True)
 class _Request:
+    project_id: str
     task_id: str
     user_id: str
     agent_id: Any
@@ -80,9 +81,13 @@ class AddAcceptance:
 
     def accept(self, request: Any) -> AcceptedAdd:
         """Commit messages and ownership before handing any closed Episode to the scheduler."""
-        project_id = getattr(request, "project_id", None)
-        if project_id is not None and project_id != self.store.project_id:
-            raise AddRequestError("SPACE_NOT_FOUND", "Project memory Space was not found", 404)
+        # project_id is optional: the project is the one the Spaces belong to. When the request
+        # names a project, Spaces outside it are not found.
+        requested_project = getattr(request, "project_id", None)
+        if not isinstance(requested_project, str) or not requested_project.strip():
+            requested_project = None
+        else:
+            requested_project = requested_project.strip()
         user_id = request.user_id
         task_id = getattr(request, "task_id", None) or str(uuid4())
         try:
@@ -115,8 +120,11 @@ class AddAcceptance:
             self._lock(cursor, "task", task_id)
             self._lock(cursor, "conversation", conversation_key)
             scopes = self._scopes(cursor, spaces, domains)
+            project_id = self._project(scopes, requested_project)
             now = self._now(cursor)
-            ctx = _Request(task_id, user_id, agent_id, conversation_id, conversation_key, now)
+            ctx = _Request(
+                project_id, task_id, user_id, agent_id, conversation_id, conversation_key, now
+            )
             turns = normalize_turns(request.messages, task_id, user_id, member_map, now)
             owners = self._owners(cursor, ctx, spaces, turns)
             exact_replay = self._replayed_task(
@@ -137,7 +145,7 @@ class AddAcceptance:
             return AcceptedAdd(task_id, closed)
 
     def _lock(self, cursor: Any, key_type: str, key: str) -> None:
-        lock_id = json.dumps([self.store.schema_name, self.store.project_id, key_type, key])
+        lock_id = json.dumps([self.store.schema_name, key_type, key])
         cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_id,))
 
     def _now(self, cursor: Any) -> datetime:
@@ -148,12 +156,12 @@ class AddAcceptance:
 
     def _scopes(self, cursor: Any, spaces: list[str], domains: list[str]) -> list[dict[str, Any]]:
         cursor.execute(
-            """SELECT s.id, COALESCE(st.resource_bindings, '[]'::jsonb) AS resource_bindings,
+            """SELECT s.id, s.project_id, COALESCE(st.resource_bindings, '[]'::jsonb) AS resource_bindings,
                       ARRAY(SELECT domain FROM domains d WHERE d.space_id = s.id ORDER BY domain) AS domains
                FROM spaces s LEFT JOIN add_space_state st ON st.space_id = s.id
-               WHERE s.project_id = %s AND s.id = ANY(%s::text[])
+               WHERE s.id = ANY(%s::text[])
                ORDER BY s.id FOR SHARE OF s""",
-            (self.store.project_id, spaces),
+            (spaces,),
         )
         scopes = cursor.fetchall()
         if len(scopes) != len(spaces):
@@ -170,6 +178,16 @@ class AddAcceptance:
             scope["domains"] = sorted(domains) if domains else scope["domains"]
         return scopes
 
+    @staticmethod
+    def _project(scopes: list[dict[str, Any]], requested: str | None) -> str:
+        """The project the Spaces belong to; a request naming another project sees no Space."""
+        projects = {scope["project_id"] for scope in scopes}
+        if requested is not None and projects != {requested}:
+            raise AddRequestError("SPACE_NOT_FOUND", "Project memory Space was not found", 404)
+        if len(projects) != 1:
+            raise AddRequestError("INVALID_PARAMS", "space_ids must belong to one project")
+        return projects.pop()
+
     def _owners(
         self, cursor: Any, ctx: _Request, spaces: list[str], turns: list[list[dict[str, Any]]]
     ) -> dict[tuple[str, str], dict[str, Any]]:
@@ -179,7 +197,7 @@ class AddAcceptance:
                WHERE t.project_id = %s AND t.conversation_key = %s
                  AND t.space_id = ANY(%s::text[]) AND t.turn_id = ANY(%s::text[])""",
             (
-                self.store.project_id,
+                ctx.project_id,
                 ctx.conversation_key,
                 spaces,
                 [turn_source(turn)["message_id"] for turn in turns],
@@ -199,7 +217,7 @@ class AddAcceptance:
         cursor.execute(
             """SELECT space_id, conversation_key, turn_id, user_id FROM episode_turns
                WHERE project_id = %s AND task_id = %s""",
-            (self.store.project_id, ctx.task_id),
+            (ctx.project_id, ctx.task_id),
         )
         previous = cursor.fetchall()
         complete = len(owners) == space_count * len(turns)
@@ -241,13 +259,13 @@ class AddAcceptance:
         cursor.execute(
             """SELECT message_id, turn_id, content_sha256 FROM messages
                WHERE project_id = %s AND conversation_key = %s AND message_id = ANY(%s::text[])""",
-            (self.store.project_id, ctx.conversation_key, source_ids),
+            (ctx.project_id, ctx.conversation_key, source_ids),
         )
         stored = {row["message_id"]: row for row in cursor.fetchall()}
         cursor.execute(
             """SELECT COALESCE(MAX(turn_seq), 0) AS last_seq FROM messages
                WHERE project_id = %s AND conversation_key = %s""",
-            (self.store.project_id, ctx.conversation_key),
+            (ctx.project_id, ctx.conversation_key),
         )
         turn_seq = cursor.fetchone()["last_seq"]
         for turn in turns:
@@ -267,7 +285,7 @@ class AddAcceptance:
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                               %s, %s, %s, %s, %s, %s)""",
                     (
-                        self.store.project_id,
+                        ctx.project_id,
                         ctx.conversation_key,
                         ctx.conversation_id,
                         message["message_id"],
@@ -314,7 +332,7 @@ class AddAcceptance:
             """SELECT message_id FROM messages
                WHERE project_id = %s AND conversation_key = %s AND turn_id = %s
                ORDER BY msg_seq, message_id""",
-            (self.store.project_id, ctx.conversation_key, turn_id),
+            (ctx.project_id, ctx.conversation_key, turn_id),
         )
         if [row["message_id"] for row in cursor.fetchall()] != [
             message["message_id"] for message in turn
@@ -330,7 +348,7 @@ class AddAcceptance:
             """SELECT id, domains, idle_due_at, max_wait_due_at, anchors, anchor_keys
                FROM episodes WHERE project_id = %s AND space_id = %s AND conversation_key = %s
                  AND state = 'open' FOR UPDATE""",
-            (self.store.project_id, space["id"], ctx.conversation_key),
+            (ctx.project_id, space["id"], ctx.conversation_key),
         )
         episode = cursor.fetchone()
         closed = []
@@ -370,8 +388,8 @@ class AddAcceptance:
             """SELECT COUNT(DISTINCT et.turn_id) AS turns,
                       COALESCE(SUM(char_length(m.content) + COALESCE(char_length(m.tool_calls::text), 0)), 0) AS size
                FROM episode_turns et JOIN messages m USING (project_id, conversation_key, turn_id)
-               WHERE et.project_id = %s AND et.episode_id = %s AND m.role <> 'system'""",
-            (self.store.project_id, episode_id),
+               WHERE et.episode_id = %s AND m.role <> 'system'""",
+            (episode_id,),
         )
         row = cursor.fetchone()
         return row["turns"], row["size"]
@@ -379,7 +397,7 @@ class AddAcceptance:
     def _open(
         self, cursor: Any, ctx: _Request, space: dict[str, Any], chat_time: datetime
     ) -> dict[str, Any]:
-        project_id = self.store.project_id
+        project_id = ctx.project_id
         episode_id = str(uuid4())
         cursor.execute(
             """INSERT INTO episodes (id, project_id, space_id, conversation_key, conversation_id,
@@ -430,7 +448,7 @@ class AddAcceptance:
                     turn_seq, message_count, task_id, user_id, agent_id, chat_time, accepted_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
-                self.store.project_id,
+                ctx.project_id,
                 space["id"],
                 ctx.conversation_key,
                 first["message_id"],
@@ -480,14 +498,14 @@ class AddAcceptance:
                 episode["anchor_keys"],
                 ctx.now,
                 [first["message_id"]] if suspect else [],
-                self.store.project_id,
+                ctx.project_id,
                 episode["id"],
             ),
         )
         # The Turn's input size weighs this Task's share of the Episode's model usage.
         record_event(
             cursor,
-            self.store.project_id,
+            None,
             episode["id"],
             "turn",
             ctx.now,
@@ -531,13 +549,13 @@ class AddAcceptance:
         cursor.execute(
             """UPDATE episodes SET state = 'closed', stage = 'extracting', close_reason = %s,
                                       closed_at = %s, updated_at = %s
-               WHERE project_id = %s AND id = %s AND state = 'open'""",
-            (reason, now, now, self.store.project_id, episode_id),
+               WHERE id = %s AND state = 'open'""",
+            (reason, now, now, episode_id),
         )
         if cursor.rowcount == 1:
             record_event(
                 cursor,
-                self.store.project_id,
+                None,
                 episode_id,
                 "closed",
                 now,
@@ -551,9 +569,9 @@ class AddAcceptance:
             now = self._now(cursor)
             cursor.execute(
                 """SELECT id, idle_due_at, max_wait_due_at FROM episodes
-                   WHERE project_id = %s AND state = 'open' AND LEAST(idle_due_at, max_wait_due_at) <= %s
+                   WHERE state = 'open' AND LEAST(idle_due_at, max_wait_due_at) <= %s
                    ORDER BY LEAST(idle_due_at, max_wait_due_at), id LIMIT %s FOR UPDATE SKIP LOCKED""",
-                (self.store.project_id, now, limit),
+                (now, limit),
             )
             closed = []
             for episode in cursor.fetchall():
@@ -568,27 +586,27 @@ class AddAcceptance:
             now = self._now(cursor)
             cursor.execute(
                 """SELECT id FROM episodes
-                   WHERE project_id = %s AND space_id = %s AND state = 'open'
+                   WHERE space_id = %s AND state = 'open'
                      AND (%s::text IS NULL OR conversation_id = %s)
                    ORDER BY opened_at, id FOR UPDATE SKIP LOCKED""",
-                (self.store.project_id, space_id, conversation_id, conversation_id),
+                (space_id, conversation_id, conversation_id),
             )
             return [self._close(cursor, row["id"], "idle", now) for row in cursor.fetchall()]
 
     def status(self, task_id: str, user_id: str) -> dict[str, Any] | None:
         with self.store.transaction(readonly=True) as cursor:
             cursor.execute(
-                """SELECT t.conversation_key, t.turn_id, t.message_count, e.stage, e.outcome,
+                """SELECT t.project_id, t.conversation_key, t.turn_id, t.message_count, e.stage, e.outcome,
                           e.result, e.error
                    FROM episode_turns t JOIN episodes e ON e.id = t.episode_id
-                   WHERE t.project_id = %s AND t.task_id = %s AND t.user_id = %s
+                   WHERE t.task_id = %s AND t.user_id = %s
                    ORDER BY t.accepted_at, e.id""",
-                (self.store.project_id, task_id, user_id),
+                (task_id, user_id),
             )
             rows = cursor.fetchall()
             if not rows:
                 return None
-            metrics = task_metrics(cursor, self.store.project_id, task_id, user_id)
+            metrics = task_metrics(cursor, rows[0]["project_id"], task_id, user_id)
         status = "completed"
         if any(row["outcome"] == "pending" and row["stage"] != "episode_open" for row in rows):
             status = "in_progress"
