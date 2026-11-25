@@ -776,3 +776,62 @@ def test_assignment_prompts_treat_carrying_out_a_rule_as_the_same_work():
 
     for prompt in (_ASSIGN, _ASSIGN_BATCH, _FORMATION):
         assert "按候选已有的规则或决定去落实的回报" in prompt
+
+
+def _reference_episode():
+    quote = "按刚才那个导出接口的规则把重试补上"
+    drafts = [{"kind": "timeline", "content": "补上重试", "origin": "delegated", "quote": quote}]
+    return episode("new", episode_summary="补上导出重试", drafts=drafts)
+
+
+@pytest.mark.parametrize(
+    ("quote", "attached"),
+    [("刚才那个导出接口", True), ("上次说的导入接口", False), (None, False)],
+    ids=["quoted", "not-in-episode", "missing"],
+)
+def test_explicit_reference_is_the_model_s_call_backed_by_a_quote(quote, attached):
+    target = topic("export", "project", name="导出接口")
+    current = _reference_episode()
+    reply = {
+        "action": "attach",
+        "topic_id": "export",
+        "same_deliverable": True,
+        "relationship": "same_work",
+        "positive_basis": "explicit_reference",
+        "independently_deliverable": False,
+        "affects_existing_decisions": True,
+        "reference_quote": quote,
+    }
+    candidates = recall_candidates(current, [target])
+    assert "explicit_reference" not in candidates[0]["recall"]["channels"]
+    plan = organize_episode(
+        Writer([reply]),
+        current,
+        candidates,
+        [],
+        {"staged_since_last_formation": 0, "last_formation_at": NOW},
+        now=NOW,
+    )
+    assert bool(plan["assignments"]) is attached
+
+
+@pytest.mark.parametrize(
+    ("deliverable", "formed"),
+    [("export retry policy", True), ("api/v2/import retries", False), (None, False)],
+    ids=["witnessed", "unwitnessed-token", "missing"],
+)
+def test_unlinked_episodes_join_on_a_stated_deliverable_from_their_own_text(deliverable, formed):
+    new = episode("new", episode_summary="export retry policy for api/v1/export")
+    old = episode(
+        "old",
+        episode_summary="导出任务的重试策略落地",
+        staged_at=NOW - timedelta(hours=3),
+    )
+    reply = formation_reply(["new", "old"])
+    reply["clusters"][0]["deliverable"] = deliverable
+    plan = _formation_plan(Writer([reply]), new, [old])
+    assert bool(plan["assignments"]) is formed
+    if not formed:
+        assert plan["formation"]["rejected"] == [
+            {"episode_ids": ["new", "old"], "reason": "unlinked_episode"}
+        ]
