@@ -115,6 +115,23 @@ def experience_content(card: JsonPart) -> str:
 
 
 # ---------- entry rows ----------
+def entry_status(entry: AnyEntry) -> int:
+    """Status written for an upserted entry: experiences honour ARCHIVED (retired) and
+    ACTIVE; everything else is written ACTIVE (decision child rows come from history /
+    conflicts, never from the caller's status)."""
+    if entry.entry_type == "experience" and entry.status == EntryStatus.ARCHIVED:
+        return int(EntryStatus.ARCHIVED)
+    return int(EntryStatus.ACTIVE)
+
+
+def _overwritable(entry: AnyEntry) -> list[int]:
+    """Stored statuses an upsert by id may replace: a retired experience can be
+    re-activated; other types only replace ACTIVE rows."""
+    if entry.entry_type == "experience":
+        return [int(EntryStatus.ACTIVE), int(EntryStatus.ARCHIVED)]
+    return [int(EntryStatus.ACTIVE)]
+
+
 def _entry_values(entry: AnyEntry) -> tuple:
     """(entry_type, content, chat_time, user_ids, extra, embedding) of an ACTIVE row."""
     content = entry.content
@@ -153,7 +170,7 @@ def _new_rows(
         entry_id = str(uuid.uuid4())
         entry_type, content, chat_time, user_ids, extra, embedding = _entry_values(entry)
         rows.append(
-            (entry_id, topic_id, space_id, entry_type, int(EntryStatus.ACTIVE), None, content,
+            (entry_id, topic_id, space_id, entry_type, entry_status(entry), None, content,
              chat_time, user_ids, extra, embedding, stamp, stamp)
         )  # fmt: skip
         if entry.entry_type == "decision":
@@ -227,21 +244,20 @@ def _replace_children(
 def _overwrite_entry(
     cur: Any, space_id: str, topic_id: str, entry: AnyEntry, stamp: datetime
 ) -> None:
-    """Replace an ACTIVE entry whole (a missing embedding clears the vector); the type
-    cannot change."""
+    """Replace an entry whole (a missing embedding clears the vector); the type cannot
+    change. Experiences may be retired or re-activated through status."""
     entry_type, content, chat_time, user_ids, extra, embedding = _entry_values(entry)
     cur.execute(
         f"""UPDATE {SCHEMA}.project_entries SET content = %s, chat_time = %s, user_ids = %s,
-                extra = %s::jsonb, embedding = %s::vector, version = version + 1,
+                extra = %s::jsonb, embedding = %s::vector, status = %s, version = version + 1,
                 update_time = %s
-            WHERE id = %s AND topic_id = %s AND status = %s AND entry_type = %s""",
-        (content, chat_time, user_ids, extra, embedding, stamp, entry.id, topic_id,
-         int(EntryStatus.ACTIVE), entry_type),
+            WHERE id = %s AND topic_id = %s AND status = ANY(%s) AND entry_type = %s
+              AND parent_decision_id IS NULL""",
+        (content, chat_time, user_ids, extra, embedding, entry_status(entry), stamp, entry.id,
+         topic_id, _overwritable(entry), entry_type),
     )  # fmt: skip
     if cur.rowcount == 0:
-        raise EntryNotFoundError(
-            f"Active {entry_type} entry not found in topic {topic_id}: {entry.id}"
-        )
+        raise EntryNotFoundError(f"{entry_type} entry not found in topic {topic_id}: {entry.id}")
     if entry_type == "decision":
         _replace_children(cur, space_id, topic_id, entry, stamp)
 

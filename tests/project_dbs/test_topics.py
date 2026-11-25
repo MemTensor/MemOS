@@ -412,6 +412,48 @@ def test_delete_entry_ids_take_active_rows_and_cascade(db, space):
     assert db.get_entry(a.history[0].id) is None and db.get_entry(a.conflicts[0].id) is None
 
 
+def test_experiences_can_be_retired_and_reactivated(db, space):
+    plain = create(db, space, name="plain", updated=600)
+    # 5h older, but one verified experience (+6h): ranks first while it is active
+    topic_id = create(
+        db,
+        space,
+        name="exp",
+        updated=600 - 5 * 60,
+        entries=[
+            experience(status="verified", task_intent="kept"),
+            experience(task_intent="born retired").model_copy(
+                update={"status": EntryStatus.ARCHIVED}
+            ),
+            decision(status=EntryStatus.ARCHIVED),  # ignored: decisions stay ACTIVE
+            timeline().model_copy(update={"status": EntryStatus.ARCHIVED}),  # ignored too
+        ],
+    )
+    topic = detail(db, topic_id)
+    (x,) = topic.experiences
+    assert x.extra.card.task_intent == "kept"
+    assert [len(topic.decisions), len(topic.timeline)] == [1, 1]
+    assert topic.decisions[0].status == topic.timeline[0].status == EntryStatus.ACTIVE
+    assert [t.id for t in db.list_topics(space.id).items] == [topic_id, plain]
+
+    retired = x.model_copy(update={"status": EntryStatus.ARCHIVED})
+    update(db, space, topic_id=topic_id, expected_version=1, upsert_entries=[retired])
+    assert detail(db, topic_id).experiences == []
+    assert db.list_entries(topic_id, "experience").total == 0
+    assert db.list_topics(space.id).items[1].experiences == []
+    got = db.get_entry(x.id)
+    assert (got.status, got.version) == (EntryStatus.ARCHIVED, 2)
+    assert [t.id for t in db.list_topics(space.id).items] == [plain, topic_id]  # no bonus
+
+    update(db, space, topic_id=topic_id, expected_version=2, delete_entry_ids=[x.id])
+    assert db.get_entry(x.id) is not None  # delete_entry_ids takes ACTIVE rows only
+
+    active = x.model_copy(update={"status": EntryStatus.ACTIVE})
+    update(db, space, topic_id=topic_id, expected_version=3, upsert_entries=[active])
+    assert [e.id for e in detail(db, topic_id).experiences] == [x.id]
+    assert [t.id for t in db.list_topics(space.id).items] == [topic_id, plain]
+
+
 # ---------- clear and delete ----------
 def test_clear_space_rejects_older_tasks(db, space):
     create(db, space)

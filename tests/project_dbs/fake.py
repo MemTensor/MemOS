@@ -38,6 +38,7 @@ from memos.project_dbs.postgres_rows import ENTRY_TYPES, TOPIC_FIELDS
 from memos.project_dbs.postgres_writer import (
     anchor_keys,
     conversation_ids,
+    entry_status,
     experience_content,
     merge_sources,
 )
@@ -383,7 +384,8 @@ class FakeProjectDB(BaseProjectDB):
 
     def _insert(self, rows: dict, space_id, topic_id, entry, now) -> None:
         extra = entry.extra.model_dump(mode="json")
-        row = self._row(space_id, topic_id, entry.entry_type, ACTIVE, None, entry, extra, now)
+        status = entry_status(entry)
+        row = self._row(space_id, topic_id, entry.entry_type, status, None, entry, extra, now)
         if entry.entry_type == "experience":
             row["content"] = experience_content(entry.extra.card)
         rows[row["id"]] = row
@@ -399,7 +401,9 @@ class FakeProjectDB(BaseProjectDB):
         if (
             old is None
             or old["topic_id"] != topic_id
-            or old["status"] != ACTIVE
+            or old["parent_decision_id"] is not None
+            or old["status"]
+            not in ((ACTIVE, ARCHIVED) if entry.entry_type == "experience" else (ACTIVE,))
             or old["entry_type"] != entry.entry_type
         ):
             raise EntryNotFoundError(f"Active entry not found in topic {topic_id}: {entry.id}")
@@ -410,6 +414,7 @@ class FakeProjectDB(BaseProjectDB):
             chat_time=entry.chat_time,
             user_ids=list(entry.user_ids),
             extra=entry.extra.model_dump(mode="json"),
+            status=entry_status(entry),
             version=old["version"] + 1,
             update_time=now,
         )
