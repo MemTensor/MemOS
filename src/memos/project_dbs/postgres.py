@@ -1,6 +1,7 @@
 """PostgreSQL + pgvector implementation of project memory storage."""
 
 import json
+import re
 import uuid
 
 from collections.abc import Generator
@@ -66,6 +67,47 @@ _TOPIC_FIELDS = {"decision": "decisions", "experience": "experiences", "timeline
 _RANGE_OPS = (("gt", ">"), ("gte", ">="), ("lt", "<"), ("lte", "<="))
 
 
+def required_extensions(text_search_parser: str) -> list[str]:
+    """Extensions a privileged account must install before init: vector for the embedding
+    columns, btree_gist for the episodes EXCLUDE constraint, zhparser when configured."""
+    required = ["vector", "btree_gist"]
+    if text_search_parser == "zhparser":
+        required.append("zhparser")
+    return required
+
+
+def render_ddl(
+    embedding_dimension: int, text_search_parser: str = "zhparser", schema: str = SCHEMA
+) -> str:
+    """postgres_init.sql with its placeholders filled; `schema` replaces project_memory
+    (tests install into scratch schemas)."""
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema):
+        raise ValueError("Project memory schema names must be lowercase identifiers")
+    if text_search_parser == "zhparser":
+        create = (
+            f"CREATE TEXT SEARCH CONFIGURATION {schema}.zh (PARSER = zhparser); "
+            f"ALTER TEXT SEARCH CONFIGURATION {schema}.zh "
+            "ADD MAPPING FOR n, v, a, i, e, l WITH simple;"
+        )
+    else:
+        create = f"CREATE TEXT SEARCH CONFIGURATION {schema}.zh (COPY = simple);"
+    # Guarded so a pre-existing configuration does not break init.
+    text_search = (
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_ts_config c "
+        "JOIN pg_namespace n ON n.oid = c.cfgnamespace "
+        f"WHERE c.cfgname = 'zh' AND n.nspname = '{schema}') THEN {create} END IF; END $$;"
+    )
+    template = INIT_SQL.read_text(encoding="utf-8")
+    for placeholder in ("{embedding_dimension}", "{text_search_config}"):
+        if placeholder not in template:
+            raise ProjectDBError(f"Placeholder {placeholder} missing in {INIT_SQL.name}")
+    if schema != SCHEMA:
+        template = re.sub(rf"\b{SCHEMA}\b", schema, template)
+    return template.replace("{embedding_dimension}", str(int(embedding_dimension))).replace(
+        "{text_search_config}", text_search
+    )
+
+
 class PostgresProjectDB(BaseProjectDB):
     @require_python_package(
         import_name="psycopg2",
@@ -113,9 +155,7 @@ class PostgresProjectDB(BaseProjectDB):
             self.pool.putconn(conn)
 
     def _check_extensions(self) -> None:
-        required = ["vector"]
-        if self.config.text_search_parser == "zhparser":
-            required.append("zhparser")
+        required = required_extensions(self.config.text_search_parser)
         with self._tx() as cur:
             cur.execute("SELECT extname FROM pg_extension WHERE extname = ANY(%s)", (required,))
             installed = {row[0] for row in cur.fetchall()}
@@ -128,27 +168,7 @@ class PostgresProjectDB(BaseProjectDB):
 
     def _render_ddl(self) -> str:
         """Fill the placeholders of postgres_init.sql from the config."""
-        if self.config.text_search_parser == "zhparser":
-            create = (
-                f"CREATE TEXT SEARCH CONFIGURATION {SCHEMA}.zh (PARSER = zhparser); "
-                f"ALTER TEXT SEARCH CONFIGURATION {SCHEMA}.zh "
-                "ADD MAPPING FOR n, v, a, i, e, l WITH simple;"
-            )
-        else:
-            create = f"CREATE TEXT SEARCH CONFIGURATION {SCHEMA}.zh (COPY = simple);"
-        # Guarded so a pre-existing configuration does not break init.
-        text_search = (
-            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_ts_config c "
-            "JOIN pg_namespace n ON n.oid = c.cfgnamespace "
-            f"WHERE c.cfgname = 'zh' AND n.nspname = '{SCHEMA}') THEN {create} END IF; END $$;"
-        )
-        template = INIT_SQL.read_text(encoding="utf-8")
-        for placeholder in ("{embedding_dimension}", "{text_search_config}"):
-            if placeholder not in template:
-                raise ProjectDBError(f"Placeholder {placeholder} missing in {INIT_SQL.name}")
-        return template.replace(
-            "{embedding_dimension}", str(int(self.config.embedding_dimension))
-        ).replace("{text_search_config}", text_search)
+        return render_ddl(self.config.embedding_dimension, self.config.text_search_parser)
 
     def _init_schema(self) -> None:
         """Create the schema once. Existing installs are left untouched, so a restart
