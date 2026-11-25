@@ -16,32 +16,65 @@ from tests.project_dbs.fake import FakeProjectDB
 
 
 HOST = os.getenv("PROJECT_DB_TEST_HOST")
+# Small vectors keep the PostgreSQL tests fast; production uses 1024.
+DIM = 8
 
 
-@pytest.fixture(scope="session")
-def pg_db():
-    if not HOST:
-        pytest.skip("PROJECT_DB_TEST_HOST not set")
-    psycopg2 = pytest.importorskip("psycopg2")
-    from memos.configs.project_db import PostgresProjectDBConfig
-    from memos.project_dbs.postgres import PostgresProjectDB
-
-    kwargs = {
+def pg_kwargs() -> dict:
+    return {
         "host": HOST,
         "port": int(os.getenv("PROJECT_DB_TEST_PORT", "5432")),
         "user": os.getenv("PROJECT_DB_TEST_USER", "postgres"),
         "password": os.getenv("PROJECT_DB_TEST_PASSWORD", "postgres"),
         "dbname": os.getenv("PROJECT_DB_TEST_NAME", "postgres"),
     }
-    conn = psycopg2.connect(**kwargs)
+
+
+@pytest.fixture(scope="session")
+def pg_conn():
+    """Autocommit admin connection with the required extensions installed."""
+    if not HOST:
+        pytest.skip("PROJECT_DB_TEST_HOST not set")
+    psycopg2 = pytest.importorskip("psycopg2")
+    conn = psycopg2.connect(**pg_kwargs())
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        cur.execute("DROP SCHEMA IF EXISTS project_memory CASCADE")
+        cur.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
+    yield conn
     conn.close()
+
+
+@pytest.fixture
+def scratch_schema(pg_conn):
+    """Factory for throwaway schemas; dropped after the test."""
+    created = []
+
+    def make(name: str) -> str:
+        with pg_conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {name} CASCADE")
+        created.append(name)
+        return name
+
+    yield make
+    with pg_conn.cursor() as cur:
+        for name in created:
+            cur.execute(f"DROP SCHEMA IF EXISTS {name} CASCADE")
+
+
+@pytest.fixture(scope="session")
+def pg_db(pg_conn):
+    from memos.configs.project_db import PostgresProjectDBConfig
+    from memos.project_dbs.postgres import PostgresProjectDB
+
+    with pg_conn.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS project_memory CASCADE")
+    kwargs = pg_kwargs()
     kwargs["db_name"] = kwargs.pop("dbname")
     # zhparser is usually not installed locally; the schema is the same with simple
-    store = PostgresProjectDB(PostgresProjectDBConfig(**kwargs, text_search_parser="simple"))
+    store = PostgresProjectDB(
+        PostgresProjectDBConfig(**kwargs, text_search_parser="simple", embedding_dimension=DIM)
+    )
     yield store
     store.close()
 
@@ -63,14 +96,16 @@ def add_topic(db, space_id: str, domain: str) -> str:
     (result,) = db.apply_changes(
         TopicChangeSet(
             space_id=space_id,
-            accepted_at=now,
+            accept_time=now,
             creates=[
                 TopicCreate(
                     domain=domain,
                     topic_name="n",
                     topic_summary="s",
                     topic_description="d",
-                    entries=[Decision(content="c", time=now, user_ids=[])],
+                    create_time=now,
+                    update_time=now,
+                    entries=[Decision(content="c", chat_time=now, user_ids=[])],
                 )
             ],
         )

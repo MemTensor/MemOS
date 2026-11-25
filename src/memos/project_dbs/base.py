@@ -1,8 +1,14 @@
 """Abstract storage interface for project memory.
 
-Ownership is checked by the outer layer (Playground). Storage reads and writes by
-space_id, topic id or decision id directly; only the space-level methods
-create_space, list_spaces and assert_spaces take project_id.
+Ownership is checked by the outer layer (Playground): storage reads and writes by space_id,
+topic id or entry id directly; only the space-level methods create_space, list_spaces and
+assert_spaces take project_id.
+
+Filter parameters mean the same everywhere:
+  filters  list[TopicFilter]; groups are ORed, conditions inside a group ANDed; None or []
+           means no filter. Only create_time and update_time exist this phase.
+  domains  domain names; None means no filter.
+messages, episodes and add_jobs are read and written by the Add plugin's storage, not here.
 """
 
 from abc import ABC, abstractmethod
@@ -14,6 +20,7 @@ from memos.project_dbs.item import (
     Decision,
     Domain,
     DomainUpdate,
+    EntryHit,
     Page,
     SearchHit,
     Space,
@@ -59,7 +66,7 @@ class BaseProjectDB(ABC):
 
     @abstractmethod
     def delete_space(self, space_id: str) -> None:
-        """Delete the space; domains, topics and entries cascade. Idempotent."""
+        """Delete the space; domains, topics, entries and Episodes cascade. Idempotent."""
 
     # ---------- domains ----------
     @abstractmethod
@@ -93,33 +100,50 @@ class BaseProjectDB(ABC):
         size: int = 10,
         preview_size: int = 5,
     ) -> Page[Topic]:
-        """get/memory by space_id. Topics newest update_time first; each topic carries at
-        most preview_size entries per type (newest time first) without history/conflicts.
-        Filter groups are ORed, conditions inside a group ANDed; None or [] means no filter."""
+        """get/memory by space_id. Topics by importance (extra.rank_time, see ranking.py)
+        newest first, then update_time newest first, then id. Each topic carries at most
+        preview_size ACTIVE entries per type, without history/conflicts: decisions with open
+        conflicts first, then more user_ids, then newest chat_time; experiences verified
+        first, then higher confidence, then newest chat_time; timeline the newest
+        preview_size, returned oldest first."""
 
     @abstractmethod
     def list_entries(
         self,
         topic_id: str,
         entry_type: Literal["decision", "experience", "timeline"],
+        filters: list[TopicFilter] | None = None,
         page: int = 1,
         size: int = 10,
     ) -> Page[AnyEntry]:
-        """get/memory by topic_id. Entries of one type, newest time first, with full
-        history/conflicts."""
+        """get/memory by topic_id. ACTIVE entries of one type in the list_topics preview
+        order (timeline oldest first), paginated; decisions carry their full history and
+        conflicts. Filter ranges (create_time and update_time alike) compare the entry
+        chat_time."""
 
     @abstractmethod
-    def get_topics_detail(self, topic_ids: list[str]) -> list[Topic]:
-        """Full topics with all entries, for organizing and retrieval. Unknown ids are skipped."""
+    def get_topics_detail(self, topic_ids: list[str], with_entries: bool = True) -> list[Topic]:
+        """Full topics with all ACTIVE entries (decisions with history/conflicts), for
+        organizing and retrieval, in the given order. Unknown ids are skipped.
+        with_entries=False returns the topic headers only."""
+
+    @abstractmethod
+    def get_entry(self, entry_id: str) -> AnyEntry | None:
+        """get/memory/{id}: one entry with topic_id and space_id; a decision child-row id
+        returns its decision. None when the id does not exist."""
 
     # ---------- topic writes ----------
     @abstractmethod
     def apply_changes(self, change_set: TopicChangeSet) -> list[TopicChangeResult]:
         """Write creates and updates in one transaction; any failure rolls back the batch:
-        SpaceNotFoundError, SpaceClearedError (accepted_at <= cleared_at), VersionConflictError,
+        SpaceNotFoundError, SpaceClearedError (accept_time <= clear_time), VersionConflictError,
         DomainNotFoundError (unregistered domain), TopicNotFoundError (unknown topic),
-        EntryNotFoundError (upserted entry id not in the topic).
-        Entry upserts by id replace the whole entry, including embedding (None clears it)."""
+        EntryNotFoundError (upserted entry or child id not found).
+        Writing sources recomputes conversation_ids, writing anchors recomputes anchor_keys,
+        in the same statement. Decision history becomes ARCHIVED child rows (append-only;
+        items with an id are kept untouched), conflicts replace the CONFLICT child rows
+        (items with an id keep it). An entry upserted by id is replaced whole; a missing
+        embedding clears the stored vector. Results: creates (ADD) then updates (UPDATE)."""
 
     @abstractmethod
     def update_decision(
@@ -129,18 +153,20 @@ class BaseProjectDB(ABC):
         content: str,
         embedding: list[float] | None = None,
     ) -> Decision:
-        """update/memory. Replace content and embedding (None clears it), clear conflicts,
-        bump the entry version, all in one UPDATE; the parent topic is left unchanged.
-        UpdateConflictError if update_time differs (exact, microsecond precision) or the id
-        is not a decision. expected_update_time must be timezone-aware."""
+        """update/memory. Replace content and embedding (None clears it), delete the
+        CONFLICT child rows and bump the entry version, in one transaction; the topic
+        version is unchanged. UpdateConflictError if update_time differs (exact, microsecond
+        precision) or the id is not an ACTIVE decision. expected_update_time must be
+        timezone-aware."""
 
     @abstractmethod
     def delete_topics(self, topic_ids: list[str]) -> int:
-        """Entries cascade with topics. Returns the number of deleted topics."""
+        """Entries cascade with topics; Episodes filed under them get topic_id NULL.
+        Returns the number of deleted topics."""
 
     @abstractmethod
     def clear_space(self, space_id: str) -> int:
-        """Delete topics and entries and record cleared_at; keep space and domains.
+        """Delete topics and entries and record clear_time; keep space and domains.
         Returns the number of deleted topics."""
 
     # ---------- search ----------
@@ -164,7 +190,34 @@ class BaseProjectDB(ABC):
         filters: list[TopicFilter] | None = None,
         top_k: int = 20,
     ) -> list[SearchHit]:
-        """Recall topic headers by database full-text rank within the supplied filters."""
+        """Recall topic headers matching any query term, best match first."""
+
+    @abstractmethod
+    def search_entries_by_embedding(
+        self,
+        space_ids: list[str],
+        query_vec: list[float],
+        domains: list[str] | None = None,
+        filters: list[TopicFilter] | None = None,
+        top_k: int = 20,
+        per_topic: int = 6,
+    ) -> list[EntryHit]:
+        """Recall entries across the spaces, not limited to recalled topics. Decision child
+        rows count for their decision (best score kept); retired experiences are skipped.
+        Returns the entries of the top_k best topics, at most per_topic each, best first.
+        filters apply to the topic times."""
+
+    @abstractmethod
+    def search_entries_by_fulltext(
+        self,
+        space_ids: list[str],
+        query_text: str,
+        domains: list[str] | None = None,
+        filters: list[TopicFilter] | None = None,
+        top_k: int = 20,
+        per_topic: int = 6,
+    ) -> list[EntryHit]:
+        """Same as search_entries_by_embedding, matching any query term by full-text rank."""
 
     # ---------- lifecycle ----------
     def close(self) -> None:  # noqa: B027 - optional hook
