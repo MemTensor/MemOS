@@ -20,6 +20,10 @@ import {
 } from "../../core/config/index.js";
 import { bootstrapMemoryCore } from "../../core/index.js";
 import { memoryBuffer } from "../../core/logger/index.js";
+import { createLlmClient } from "../../core/llm/client.js";
+import type { LlmClient } from "../../core/llm/types.js";
+import { diagnosticError } from "../../core/util/diagnostics.js";
+import type { DiagnosticSink } from "../../core/util/diagnostics.js";
 import { readPluginPackageVersion } from "../../core/util/package-version.js";
 import { startHttpServer } from "../../server/http.js";
 import type { ServerHandle } from "../../server/types.js";
@@ -41,6 +45,8 @@ import {
 } from "./host-llm.js";
 import { registerDeepSeekHarnessTools } from "./tools.js";
 import { memosMessageSource } from "./message-source.js";
+import { DshDiagnostics } from "./diagnostics.js";
+import { registerDiagnosticFilterTool } from "./diagnostic-tool.js";
 
 export const name = DEEPSEEK_HARNESS_PLUGIN;
 export const inject = ["systemPrompt", "tools", "llm"];
@@ -75,6 +81,7 @@ export interface Config {
   contextMaxChars: number;
   toolResultMaxChars: number;
   failOnStartupError: boolean;
+  diagnosticsEnabled?: boolean;
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -93,6 +100,7 @@ export const Config: Schema<Config> = Schema.object({
   contextMaxChars: Schema.number().min(256).default(6_000),
   toolResultMaxChars: Schema.number().min(128).default(1_200),
   failOnStartupError: Schema.boolean().default(false),
+  diagnosticsEnabled: Schema.boolean().default(false),
 });
 
 /** Keep DSH foreground memory work within the product-level 3s SLA. */
@@ -243,6 +251,8 @@ export async function apply(
   let viewerRetryController: AbortController | undefined;
   let viewerRetryTask: Promise<void> | undefined;
   let disposing = false;
+  let diagnostics: DshDiagnostics | undefined;
+  let probeLlm: LlmClient | undefined;
   const registrations: Array<() => void> = [];
   const unregisterAll = (): void => {
     for (const unregister of registrations.splice(0).reverse()) {
@@ -263,9 +273,26 @@ export async function apply(
       loaded.config,
       config.hostLlmEnabled,
     );
+    if (config.diagnosticsEnabled) {
+      try {
+        diagnostics = new DshDiagnostics(home.logsDir);
+        diagnostics.record("adapter.starting", {
+          pluginVersion: readPluginPackageVersion(), provider: memoryConfig.llm.provider,
+          model: memoryConfig.llm.model, lightweightMemory: memoryConfig.algorithm.lightweightMemory.enabled,
+          viewerEnabled: config.viewerEnabled, viewerAvailable: false,
+          viewerPort: config.viewerPort, failOnStartupError: config.failOnStartupError,
+        });
+        ctx.logger.info(`memos-local-memory: diagnostics file ${diagnostics.file}`);
+      } catch (error) {
+        ctx.logger.warn(`memos-local-memory: diagnostics unavailable: ${String(error)}`);
+      }
+    }
     const routes = new DeepSeekHarnessLlmRouteContext();
+    const onDiagnostic: DiagnosticSink | undefined = diagnostics
+      ? (event, fields) => diagnostics!.record(event, { sessionId: routes.current()?.sessionId, ...fields })
+      : undefined;
     const hostLlmBridge = config.hostLlmEnabled
-      ? createDeepSeekHarnessHostLlmBridge({ llm: ctx.llm, routes })
+      ? createDeepSeekHarnessHostLlmBridge({ llm: ctx.llm, routes, onDiagnostic })
       : null;
     if (hostLlmBridge) {
       registrations.push(registerDeepSeekHarnessHostLlmCapabilityInvalidation(
@@ -288,6 +315,7 @@ export async function apply(
       hostLlmBridge,
       autoRecovery: autoRecoveryEnabled,
       initLogging: false,
+      onDiagnostic,
     });
     await core.init();
 
@@ -298,6 +326,7 @@ export async function apply(
           core: core!,
           home,
           logTail: () => memoryBuffer().tail({ limit: 200 }),
+          ...(diagnostics ? { diagnostics: () => diagnostics!.snapshot() } : {}),
         },
         {
           port: config.viewerPort,
@@ -314,8 +343,10 @@ export async function apply(
           );
         }
         viewer = await startViewer();
+        diagnostics?.record("viewer.started", { viewerAvailable: true, viewerPort: config.viewerPort });
         ctx.logger.info(`memos-local-memory: viewer live at ${viewer.url}`);
       } catch (error) {
+        diagnostics?.record("viewer.unavailable", { viewerAvailable: false, viewerPort: config.viewerPort, ...diagnosticError(error) });
         const err = error as NodeJS.ErrnoException;
         const detail = isAddressInUse(error)
           ? `viewer port :${config.viewerPort} is already in use`
@@ -348,11 +379,13 @@ export async function apply(
                   return;
                 }
                 viewer = candidate;
+                diagnostics?.record("viewer.recovered", { viewerAvailable: true, viewerPort: config.viewerPort });
                 ctx.logger.info(
                   `memos-local-memory: viewer recovered at ${candidate.url}`,
                 );
                 return;
               } catch (retryError) {
+                diagnostics?.record("viewer.retry_failed", { viewerAvailable: false, ...diagnosticError(retryError) });
                 if (isAddressInUse(retryError)) continue;
                 const retryMessage = retryError instanceof Error
                   ? retryError.message
@@ -400,6 +433,7 @@ export async function apply(
         if (error instanceof Error && error.stack) ctx.logger.warn(error.stack);
       },
       onInfo: (message) => ctx.logger.info(`memos-local-memory: ${message}`),
+      onDiagnostic,
     });
 
     registrations.push(ctx.systemPrompt.section({
@@ -443,6 +477,11 @@ export async function apply(
         runWithLlmRoute: (route, operation) => routes.run(route, operation),
       }));
     }
+    if (diagnostics) {
+      if (memoryConfig.llm.provider) probeLlm = createLlmClient({ ...memoryConfig.llm, provider: memoryConfig.llm.provider, openRouter: memoryConfig.llm.openRouter ?? false, maxRetries: 0 });
+      registrations.push(registerDiagnosticFilterTool(ctx, { llm: probeLlm ?? null, routes, onDiagnostic }));
+      diagnostics.record("adapter.ready", { registeredProviders: ctx.llm.listProviders?.().map((provider) => provider.id) ?? [] });
+    }
 
     ctx.logger.info(
       `memos-local-memory: ready (home=${home.root}, recall=${String(config.recallEnabled)}, ` +
@@ -452,6 +491,7 @@ export async function apply(
       `viewer=${viewer?.url ?? (config.viewerEnabled ? "unavailable" : "disabled")})`,
     );
   } catch (error) {
+    diagnostics?.record("adapter.startup_failed", diagnosticError(error));
     disposing = true;
     unregisterAll();
     viewerRetryController?.abort();
@@ -463,8 +503,13 @@ export async function apply(
         /* best-effort cleanup after failed bootstrap */
       }
     }
-    if (bridge) await bridge.dispose();
-    else if (core) await core.shutdown();
+    try {
+      if (bridge) await bridge.dispose();
+      else if (core) await core.shutdown();
+    } finally {
+      await probeLlm?.close();
+      diagnostics?.close();
+    }
     const message = error instanceof Error ? error.message : String(error);
     ctx.logger.warn(`memos-local-memory: startup failed: ${message}`);
     if (config.failOnStartupError) throw error;
@@ -472,6 +517,7 @@ export async function apply(
   }
 
   return async () => {
+    diagnostics?.record("adapter.disposing", {});
     disposing = true;
     unregisterAll();
     viewerRetryController?.abort();
@@ -483,7 +529,11 @@ export async function apply(
         ctx.logger.warn(`memos-local-memory: viewer close failed: ${String(error)}`);
       }
     }
-    await bridge!.dispose();
+    try { await bridge!.dispose(); }
+    finally {
+      await probeLlm?.close();
+      diagnostics?.close();
+    }
     ctx.logger.info("memos-local-memory: stopped");
   };
 }

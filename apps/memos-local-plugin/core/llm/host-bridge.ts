@@ -12,6 +12,8 @@
 import type { LlmMessage, LlmUsage } from "./types.js";
 
 export interface HostLlmCompleteInput {
+  /** Logical call site, used only for metadata diagnostics. */
+  op?: string;
   messages: LlmMessage[];
   /** Optional override, in case the host supports multiple models. */
   model?: string;

@@ -141,6 +141,22 @@ class RegistrationRecordingAdapter extends LlmAdapter {
 }
 
 describe("DeepSeek Harness host LLM bridge", () => {
+  it("diagnoses native adapter failures with the exact route and registered providers", async () => {
+    const routes = new DeepSeekHarnessLlmRouteContext();
+    const onDiagnostic = vi.fn();
+    const llm = { ...streamFrom([]), listProviders: () => [{ id: "other" }],
+      resolveModelInfo: vi.fn(async () => { throw new LlmError("private provider body", "NO_ADAPTER"); }),
+    };
+    const bridge = createDeepSeekHarnessHostLlmBridge({ llm, routes, onDiagnostic });
+    await expect(routes.run(ROUTE, () => bridge.complete({ messages: [{ role: "user", content: "DO_NOT_EXPORT" }], op: "filter" }))).rejects.toThrow();
+    expect(onDiagnostic).toHaveBeenCalledWith("llm.failed", expect.objectContaining({
+      provider: ROUTE.provider, model: ROUTE.model, op: "filter", errorCode: "NO_ADAPTER", registeredProviders: ["other"],
+    }));
+    bridge.invalidateModelCapabilities();
+    expect(onDiagnostic).toHaveBeenCalledWith("llm.adapters_updated", { registeredProviders: ["other"] });
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(/DO_NOT_EXPORT|private provider body/);
+  });
+
   it("maps MemOS messages and uses a declared no-reasoning effort", async () => {
     let request: GenerateOptions | undefined;
     let prepared: { config: LlmCallConfig; signal?: AbortSignal } | undefined;

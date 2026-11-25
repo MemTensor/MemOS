@@ -50,7 +50,11 @@ function summarize(obj: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(obj)) {
     if (v == null) continue;
-    parts.push(`${k}=${shortVal(v)}`);
+    const error = ["err", "error", "detail"].includes(k) && typeof v === "object" && !Array.isArray(v)
+      ? v as Record<string, unknown> : null;
+    if (error && typeof error.message === "string") {
+      parts.push(`${k}=${JSON.stringify({ name: error.name, code: error.code, message: error.message.slice(0, 500) })}`);
+    } else parts.push(`${k}=${shortVal(v)}`);
   }
   return parts.join(" ");
 }

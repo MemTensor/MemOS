@@ -38,6 +38,7 @@ export class HostLlmProvider implements LlmProvider {
     }
     const t0 = Date.now();
     const res = await bridge.complete({
+      ...(opts.op ? { op: opts.op } : {}),
       messages,
       model: ctx.config.model || undefined,
       temperature: opts.temperature,

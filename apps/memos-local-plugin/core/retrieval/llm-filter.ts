@@ -21,6 +21,8 @@
  */
 
 import type { LlmClient } from "../llm/index.js";
+import { randomUUID } from "node:crypto";
+import { diagnosticError, emitDiagnostic, type DiagnosticSink } from "../util/diagnostics.js";
 import type { Logger } from "../logger/types.js";
 import { RETRIEVAL_FILTER_PROMPT } from "../llm/prompts/index.js";
 import type { RankedCandidate } from "./ranker.js";
@@ -47,6 +49,7 @@ export interface FilterInput {
 }
 
 export interface FilterDeps {
+  onDiagnostic?: DiagnosticSink;
   llm: LlmClient | null;
   log: Logger;
   timeoutMs?: number;
@@ -100,6 +103,21 @@ export async function llmFilterCandidates(
   input: FilterInput,
   deps: FilterDeps,
 ): Promise<FilterResult> {
+  if (!deps.onDiagnostic) return runFilter(input, deps);
+  const startedAt = Date.now();
+  const attempted = Boolean(deps.config.llmFilterEnabled && deps.llm && input.ranked.length > 0 && input.ranked.length >= deps.config.llmFilterMinCandidates && input.query.trim() && !deps.signal?.aborted);
+  let errorCode: string | undefined;
+  const result = await runFilter(input, { ...deps, reportFailure: (error) => { errorCode = diagnosticError(error).errorCode; } });
+  emitDiagnostic(deps.onDiagnostic, "filter.result", {
+    requestId: randomUUID(), episodeId: input.episodeId, candidateCount: input.ranked.length,
+    attempted, durationMs: Date.now() - startedAt, timeoutMs: deps.timeoutMs,
+    outcome: result.outcome, kept: result.kept.length, dropped: result.dropped.length,
+    ...(errorCode ? { errorCode } : {}),
+  });
+  return result;
+}
+
+async function runFilter(input: FilterInput, deps: FilterDeps & { reportFailure?: (error: unknown) => void }): Promise<FilterResult> {
   const { ranked, query } = input;
   if (!deps.config.llmFilterEnabled) {
     return passthrough(ranked, "disabled");
@@ -208,6 +226,7 @@ ${list}`,
       sufficient,
     };
   } catch (err) {
+    deps.reportFailure?.(err);
     deps.log.warn("llm_filter.failed", {
       err: err instanceof Error ? err.message : String(err),
       candidateCount: ranked.length,

@@ -13,6 +13,12 @@ const base: LogRecord = {
 };
 
 describe("logger/format", () => {
+  it("shows nested error codes and messages without dumping other object fields", () => {
+    const out = formatPretty({ ...base, data: { err: { code: "NO_ADAPTER", message: "No registered adapter", privatePayload: "DO_NOT_PRINT" } } }, { color: false });
+    expect(out).toContain("NO_ADAPTER");
+    expect(out).toContain("No registered adapter");
+    expect(out).not.toContain("DO_NOT_PRINT");
+  });
   it("pretty formatter displays configured local time", () => {
     const out = formatPretty({ ...base, tz: "America/Los_Angeles" }, { color: false });
     expect(out.startsWith("14:30:45.123 INFO  [core.session] session.opened")).toBe(true);

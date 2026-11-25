@@ -320,6 +320,8 @@ export interface RetrievalConfig {
    * window pays for itself).
    */
   llmFilterCandidateBodyChars?: number;
+  /** Cap for deadline-bound filtering; the caller's deadline still wins. */
+  llmFilterTimeoutMs?: number;
   /** Low-cost mode: retrieve raw trace memories only. */
   lightweightMemory?: boolean;
   /**
@@ -687,6 +689,7 @@ export interface RetrievalEmbedder {
 }
 
 export interface RetrievalDeps {
+  onDiagnostic?: import("../util/diagnostics.js").DiagnosticSink;
   repos: RetrievalRepos;
   embedder: RetrievalEmbedder;
   config: RetrievalConfig;

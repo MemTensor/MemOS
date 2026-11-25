@@ -110,6 +110,22 @@ const session: DshSessionLike = {
 };
 
 describe("DeepSeek Harness bridge", () => {
+  it("records queued, prepared and committed capture before completing disposal", async () => {
+    const core = makeCore();
+    const onDiagnostic = vi.fn();
+    const bridge = createDeepSeekHarnessBridge({ core, profileId: "web", recallEnabled: false, captureEnabled: true,
+      recallTimeoutMs: 3000, contextMaxChars: 6000, createRecallMessage: recallMessage, onDiagnostic });
+    bridge.onSessionEvent(session, { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } });
+    bridge.onSessionEvent(session, { type: "user/message", seq: 1, time: 2, data: userMessage("DO_NOT_EXPORT") });
+    bridge.onSessionEvent(session, { type: "turn/end", seq: 2, time: 3, data: { turn: 1 } });
+    await bridge.dispose();
+    const names = onDiagnostic.mock.calls.map(([name]) => name);
+    expect(names).toEqual(expect.arrayContaining(["capture.queued", "capture.started", "capture.prepared", "capture.committed", "dispose.started", "dispose.finished"]));
+    expect(names.indexOf("capture.queued")).toBeLessThan(names.indexOf("capture.committed"));
+    expect(onDiagnostic).toHaveBeenCalledWith("capture.committed", expect.objectContaining({ sessionId: session.id, turn: 1, traceId: "trace-1" }));
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toContain("DO_NOT_EXPORT");
+  });
+
   it.each([undefined, "standard", "research"])(
     "uses the configured memory profile for recall and capture with preset %s",
     async (preset) => {

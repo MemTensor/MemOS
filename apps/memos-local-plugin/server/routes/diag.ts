@@ -52,6 +52,7 @@ export function registerDiagRoutes(routes: Routes, deps: ServerDeps): void {
       apiLogs: logs.total,
       sessionsHave: m.sessions,
       embeddings: m.embeddings,
+      ...(deps.diagnostics ? { dshDiagnostics: deps.diagnostics() } : {}),
     };
   });
 

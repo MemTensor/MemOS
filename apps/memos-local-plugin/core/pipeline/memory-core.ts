@@ -119,6 +119,7 @@ import {
 import { createHubRuntime, type HubMemorySearchHit, type HubRuntime } from "../hub/runtime.js";
 import { llmFilterCandidates } from "../retrieval/llm-filter.js";
 import { createRequestDeadline } from "../util/request-deadline.js";
+import { emitDiagnostic, retrievalFilterTimeoutMs, type DiagnosticSink } from "../util/diagnostics.js";
 import type { RankedCandidate } from "../retrieval/ranker.js";
 import type {
   RetrievalConfig,
@@ -130,7 +131,6 @@ import type { UserFeedback } from "../reward/types.js";
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
-const DEADLINE_FILTER_SAFE_CUTOFF_MS = 2_000;
 
 type DedicatedLlmConfig = {
   provider?: string;
@@ -150,6 +150,7 @@ type DedicatedLlmConfig = {
 };
 
 export interface BootstrapOptions {
+  onDiagnostic?: DiagnosticSink;
   agent: AgentKind;
   namespace?: RuntimeNamespace;
   /**
@@ -305,6 +306,7 @@ export async function bootstrapMemoryCoreFull(
       at?: number;
     },
   ): void {
+    emitDiagnostic(options.onDiagnostic, "model.error", { role, ...detail, errorCode: detail.code ?? "UNKNOWN" });
     try {
       repos.apiLogs.insert({
         toolName: "system_error",
@@ -336,6 +338,7 @@ export async function bootstrapMemoryCoreFull(
       phase?: string;
     },
   ): void {
+    emitDiagnostic(options.onDiagnostic, "model.status", { role, ...detail });
     try {
       repos.apiLogs.insert({
         toolName: "system_model_status",
@@ -550,12 +553,14 @@ export async function bootstrapMemoryCoreFull(
     log,
     namespace,
     now: options.now,
+    onDiagnostic: options.onDiagnostic,
   };
   const handle = createPipeline(deps);
 
   const core = createMemoryCore(handle, home, options.pkgVersion ?? "dev", {
     autoRecovery: options.autoRecovery ?? true,
     telemetry: options.telemetry ?? null,
+    onDiagnostic: options.onDiagnostic,
     onShutdown: () => {
       try {
         db.close();
@@ -573,6 +578,7 @@ export async function bootstrapMemoryCoreFull(
 // ─── Facade factory ──────────────────────────────────────────────────────────
 
 export interface CreateMemoryCoreOptions {
+  onDiagnostic?: DiagnosticSink;
   /**
    * Run automatic startup/periodic episode recovery. Defaults to true.
    * This does not disable normal turn capture or explicit repair operations.
@@ -925,15 +931,8 @@ export function createMemoryCore(
       {
         llm: handle.retrievalDeps().llm ?? null,
         log,
-        timeoutMs: input.deadlineAt === undefined
-          ? FINAL_HUB_LLM_FILTER_TIMEOUT_MS
-          : Math.max(
-              1,
-              Math.min(
-                DEADLINE_FILTER_SAFE_CUTOFF_MS,
-                input.deadlineAt - Date.now(),
-              ),
-            ),
+        timeoutMs: retrievalFilterTimeoutMs(input.deadlineAt, input.config.llmFilterTimeoutMs) ?? FINAL_HUB_LLM_FILTER_TIMEOUT_MS,
+        onDiagnostic: options.onDiagnostic,
         deadlineAt: input.deadlineAt,
         signal: input.signal,
         malformedRetries: input.llmFilterMalformedRetries,
@@ -2961,6 +2960,8 @@ export function createMemoryCore(
     const foregroundDeadline = query.deadlineAt !== undefined
       ? createRequestDeadline(query.deadlineAt)
       : null;
+    const diagnosticRequestId = randomUUID();
+    emitDiagnostic(options.onDiagnostic, "retrieval.started", { requestId: diagnosticRequestId, sessionId, reason: query.reason, remainingMs: query.deadlineAt === undefined ? null : query.deadlineAt - startedAt });
     const requestSignal = foregroundDeadline && execution.signal
       ? AbortSignal.any([foregroundDeadline.signal, execution.signal])
       : foregroundDeadline?.signal ?? execution.signal;
@@ -3176,6 +3177,7 @@ export function createMemoryCore(
       }
       foregroundDeadline?.dispose();
       leaveForeground?.();
+      emitDiagnostic(options.onDiagnostic, "retrieval.finished", { requestId: diagnosticRequestId, sessionId, reason: query.reason, durationMs: Date.now() - startedAt, success: ok, kept: filtered.length });
     }
   }
 

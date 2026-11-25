@@ -17,6 +17,7 @@ import type { MemoryCore } from "../../agent-contract/memory-core.js";
 import type { DeepSeekHarnessLlmRoute } from "./host-llm.js";
 import { deepSeekHarnessNamespace } from "./namespace.js";
 import { waitForDeepSeekHarnessDeadline } from "./deadline.js";
+import { diagnosticError, emitDiagnostic, type DiagnosticSink } from "../../core/util/diagnostics.js";
 
 export const DEEPSEEK_HARNESS_AGENT = "deepseek-harness";
 export const DEEPSEEK_HARNESS_PLUGIN = "memos-local-memory";
@@ -107,6 +108,7 @@ export interface DeepSeekHarnessBridgeOptions {
   now?: () => number;
   onWarn?: (message: string, error?: unknown) => void;
   onInfo?: (message: string) => void;
+  onDiagnostic?: DiagnosticSink;
 }
 
 interface MutableToolCall extends ToolCallDTO {
@@ -162,6 +164,7 @@ export class DeepSeekHarnessBridge {
   private readonly now: () => number;
   private readonly onWarn: (message: string, error?: unknown) => void;
   private readonly onInfo: (message: string) => void;
+  private readonly onDiagnostic?: DiagnosticSink;
 
   private readonly turns = new Map<DshSessionLike, Map<number, TurnState>>();
   private readonly activeTurnBySession = new Map<DshSessionLike, number>();
@@ -189,6 +192,7 @@ export class DeepSeekHarnessBridge {
     this.now = options.now ?? (() => Date.now());
     this.onWarn = options.onWarn ?? (() => undefined);
     this.onInfo = options.onInfo ?? (() => undefined);
+    this.onDiagnostic = options.onDiagnostic;
   }
 
   async beforeStep(
@@ -290,6 +294,7 @@ export class DeepSeekHarnessBridge {
       case "turn/start": {
         const turn = readNumber(event.data, "turn");
         if (turn === undefined) return;
+        emitDiagnostic(this.onDiagnostic, "turn.started", { sessionId: session.id, turn, hostSeq: event.seq, hostTime: event.time });
         this.ensureTurn(session, turn).startedAt = event.time;
         this.activeTurnBySession.set(session, turn);
         return;
@@ -357,6 +362,7 @@ export class DeepSeekHarnessBridge {
         const turn = readNumber(data, "turn");
         if (turn === undefined) return;
         const state = this.getTurn(session, turn);
+        emitDiagnostic(this.onDiagnostic, "turn.ended", { sessionId: session.id, turn, hostSeq: event.seq, hostTime: event.time, status: !state ? "missing_state" : state.captureQueued ? "duplicate" : "observed" });
         if (!state || state.captureQueued) return;
         const persistedRoute = extractDeepSeekHarnessLlmRoute({
           id: session.id,
@@ -370,9 +376,11 @@ export class DeepSeekHarnessBridge {
           this.activeTurnBySession.delete(session);
         }
         if (!this.captureEnabled || !state.userText) {
+          emitDiagnostic(this.onDiagnostic, "capture.skipped", { sessionId: session.id, turn, reason: this.captureEnabled ? "no_user_text" : "disabled" });
           this.deleteTurn(session, turn);
           return;
         }
+        emitDiagnostic(this.onDiagnostic, "capture.queued", { sessionId: session.id, turn, queueDepth: this.pendingBySession.size });
         this.enqueue(session.id, async () => this.captureTurn(state));
         return;
       }
@@ -411,6 +419,7 @@ export class DeepSeekHarnessBridge {
     if (existing) return existing;
 
     const closing = (async () => {
+      emitDiagnostic(this.onDiagnostic, "session.close_started", { sessionId: session.id });
       await this.flush(session.id);
       const memorySessionIds = this.memorySessionIdsFor(session);
       for (const memorySessionId of memorySessionIds) {
@@ -421,6 +430,7 @@ export class DeepSeekHarnessBridge {
       this.knownDshSessions.delete(session);
       this.memorySessionsByDsh.delete(session);
       this.lastLlmRouteBySession.delete(session);
+      emitDiagnostic(this.onDiagnostic, "session.close_finished", { sessionId: session.id });
     })();
     this.closingBySession.set(session, closing);
     try {
@@ -435,27 +445,42 @@ export class DeepSeekHarnessBridge {
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.disposePromise = (async () => {
-      await this.flush();
-      await Promise.all([...this.knownDshSessions].map((session) => this.closeSession(session)));
-      await this.flush();
+      const startedAt = this.now();
+      let phase = "capture_queue";
+      const report = (): void => emitDiagnostic(this.onDiagnostic, "dispose.progress", { phase, durationMs: this.now() - startedAt, pendingCount: this.pendingBySession.size });
+      emitDiagnostic(this.onDiagnostic, "dispose.started", { pendingCount: this.pendingBySession.size });
+      const progress = this.onDiagnostic ? setInterval(report, 1000) : undefined;
+      progress?.unref();
+      try {
+        await this.flush();
+        phase = "close_sessions";
+        await Promise.all([...this.knownDshSessions].map((session) => this.closeSession(session)));
+        await this.flush();
 
-      // Defensive orphan cleanup before the global pipeline drain.
-      for (const sessionId of [...this.memorySessionOwners.keys()]) {
-        const owner = this.memorySessionOwners.get(sessionId)?.values().next().value;
-        try {
-          await this.withSessionLlmRoute(
-            owner,
-            () => this.core.closeSession(sessionId),
-          );
-        } catch (error) {
-          this.warn(`MemOS closeSession failed for ${sessionId}`, error);
-        } finally {
-          this.memorySessionOwners.delete(sessionId);
+        // Defensive orphan cleanup before the global pipeline drain.
+        for (const sessionId of [...this.memorySessionOwners.keys()]) {
+          const owner = this.memorySessionOwners.get(sessionId)?.values().next().value;
+          try {
+            await this.withSessionLlmRoute(
+              owner,
+              () => this.core.closeSession(sessionId),
+            );
+          } catch (error) {
+            this.warn(`MemOS closeSession failed for ${sessionId}`, error);
+          } finally {
+            this.memorySessionOwners.delete(sessionId);
+          }
         }
-      }
-      await Promise.allSettled([...this.closingMemorySessions.values()]);
-      await this.core.shutdown();
-      this.lastLlmRouteBySession.clear();
+        await Promise.allSettled([...this.closingMemorySessions.values()]);
+        phase = "core_shutdown";
+        report();
+        await this.core.shutdown();
+        this.lastLlmRouteBySession.clear();
+        emitDiagnostic(this.onDiagnostic, "dispose.finished", { durationMs: this.now() - startedAt, pendingCount: this.pendingBySession.size });
+      } catch (error) {
+        emitDiagnostic(this.onDiagnostic, "dispose.failed", { phase, ...diagnosticError(error) });
+        throw error;
+      } finally { if (progress) clearInterval(progress); }
     })();
     return this.disposePromise;
   }
@@ -517,6 +542,8 @@ export class DeepSeekHarnessBridge {
   }
 
   private async captureTurn(state: TurnState): Promise<void> {
+    const metadata = { sessionId: state.dshSessionId, turn: state.turn };
+    emitDiagnostic(this.onDiagnostic, "capture.started", metadata);
     try {
       let memorySessionId = state.memorySessionId;
       let episodeId = state.episodeId;
@@ -547,8 +574,10 @@ export class DeepSeekHarnessBridge {
         episodeId = prepared.episodeId;
         state.memorySessionId = memorySessionId;
         state.episodeId = episodeId;
+        emitDiagnostic(this.onDiagnostic, "capture.prepared", { ...metadata, episodeId });
         this.trackMemorySession(state.dshSession, memorySessionId);
       } catch (error) {
+        emitDiagnostic(this.onDiagnostic, "capture.prepare_failed", { ...metadata, ...diagnosticError(error) });
         this.warn(
           `MemOS background turn routing failed for DSH session ${state.dshSessionId}; using a lazy episode`,
           error,
@@ -598,6 +627,10 @@ export class DeepSeekHarnessBridge {
       this.onInfo(
         `capture session=${state.dshSessionId} turn=${state.turn} trace=${result.traceId}`,
       );
+      emitDiagnostic(this.onDiagnostic, "capture.committed", { ...metadata, episodeId, traceId: result.traceId });
+    } catch (error) {
+      emitDiagnostic(this.onDiagnostic, "capture.failed", { ...metadata, ...diagnosticError(error) });
+      throw error;
     } finally {
       this.deleteTurn(state.dshSession, state.turn);
     }

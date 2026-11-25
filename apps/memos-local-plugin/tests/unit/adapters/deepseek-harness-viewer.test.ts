@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -104,12 +104,13 @@ function makeContext() {
 }
 
 async function loadAdapter(options: {
+  home?: ResolvedHome;
   startViewer?: () => Promise<unknown>;
   bindHost?: string;
   lifecycle?: string[];
 } = {}) {
   const lifecycle = options.lifecycle ?? [];
-  const home = resolvedHome();
+  const home = options.home ?? resolvedHome();
   const config = memoryConfig(options.bindHost);
   const core = {
     init: vi.fn(async () => {
@@ -215,6 +216,23 @@ async function settlesBeforeRealDeadline(
 }
 
 describe("DeepSeek Harness Viewer lifecycle", () => {
+  it("keeps opt-in diagnostics and a synthetic probe available without a Viewer", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "memos-dsh-diag-"));
+    try {
+      const home = { ...resolvedHome(), root, logsDir: resolve(root, "logs") };
+      const adapter = await loadAdapter({ home });
+      const { context } = makeContext();
+      const dispose = await adapter.apply(context as never, adapterConfig({ diagnosticsEnabled: true, viewerEnabled: false }));
+      expect(adapter.bootstrapMemoryCore).toHaveBeenCalledWith(expect.objectContaining({ onDiagnostic: expect.any(Function) }));
+      expect(context.tools.register).toHaveBeenCalledWith(expect.objectContaining({ name: "memos_diagnostic_filter" }));
+      await dispose();
+      const files = readdirSync(home.logsDir);
+      expect(files).toHaveLength(1);
+      const events = readFileSync(resolve(home.logsDir, files[0]!), "utf8");
+      expect(events).toContain('"viewerAvailable":false');
+      expect(events).toContain('"diagnostics.closed"');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   it("passes the installed package version to the Viewer memory core", async () => {
     const runtime = await loadAdapter();
     const host = makeContext();

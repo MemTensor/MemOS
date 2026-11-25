@@ -106,6 +106,8 @@ export interface ServerDeps {
    * If absent, `/api/v1/logs` starts empty.
    */
   logTail?: () => LogRecord[];
+  /** Opt-in DSH process diagnostics, independent of the memory database. */
+  diagnostics?: () => Record<string, unknown>;
   /**
    * Optional host-transport health surfaced on `/api/v1/health`.
    * Hermes uses this for the Python provider ↔ Node bridge connection.

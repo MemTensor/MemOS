@@ -16,6 +16,8 @@ import {
 } from "@deepseek-ai/dsh-llm";
 import { deadline, timeoutOf } from "@deepseek-ai/dsh-timeout";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import { diagnosticError, emitDiagnostic, type DiagnosticSink } from "../../core/util/diagnostics.js";
 import { memosMessageSource } from "./message-source.js";
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
@@ -42,6 +44,7 @@ export interface DeepSeekHarnessLlmRoute {
 
 /** Public subset of DSH's LLM runtime used by this adapter. */
 export interface DeepSeekHarnessLlmLike {
+  listProviders?(): readonly { id: string }[];
   resolveModelInfo(
     provider: string,
     model: string,
@@ -109,6 +112,7 @@ export class DeepSeekHarnessLlmRouteContext {
 export interface CreateDeepSeekHarnessHostLlmBridgeOptions {
   readonly llm: DeepSeekHarnessLlmLike;
   readonly routes: DeepSeekHarnessLlmRouteContext;
+  readonly onDiagnostic?: DiagnosticSink;
 }
 
 /**
@@ -124,15 +128,24 @@ export function createDeepSeekHarnessHostLlmBridge(
     entries: new Map(),
     generation: 0,
   };
+  const providers = (): string[] => {
+    try { return options.llm.listProviders?.().map((provider) => provider.id) ?? []; }
+    catch { return []; }
+  };
   return {
     id: HOST_LLM_BRIDGE_ID,
     invalidateModelCapabilities(): void {
       capabilityCache.generation++;
       capabilityCache.entries.clear();
+      emitDiagnostic(options.onDiagnostic, "llm.adapters_updated", { registeredProviders: providers() });
     },
     async complete(input: HostLlmCompleteInput): Promise<HostLlmCompletion> {
       const route = options.routes.current();
+      const callId = randomUUID();
+      const metadata = { callId, ...route, routePresent: Boolean(route), op: input.op, timeoutMs: input.timeoutMs };
+      emitDiagnostic(options.onDiagnostic, "llm.started", { ...metadata, registeredProviders: providers() });
       if (!route) {
+        emitDiagnostic(options.onDiagnostic, "llm.failed", { ...metadata, errorCode: "NO_ACTIVE_ROUTE", registeredProviders: providers() });
         throw new MemosError(
           ERROR_CODES.LLM_UNAVAILABLE,
           "no active DeepSeek Harness LLM route for this MemOS operation",
@@ -193,6 +206,7 @@ export function createDeepSeekHarnessHostLlmBridge(
           );
         }
 
+        emitDiagnostic(options.onDiagnostic, "llm.succeeded", { ...metadata, durationMs: Date.now() - startedAt });
         return {
           text,
           model: route.model,
@@ -201,6 +215,10 @@ export function createDeepSeekHarnessHostLlmBridge(
         };
       } catch (error) {
         const timeout = timeoutOf(callDeadline.signal, HOST_LLM_TIMEOUT_CODE);
+        emitDiagnostic(options.onDiagnostic, "llm.failed", {
+          ...metadata, ...diagnosticError(error), ...(timeout ? { errorCode: timeout.code } : {}),
+          registeredProviders: providers(), durationMs: Date.now() - startedAt,
+        });
         if (timeout) {
           throw new MemosError(
             ERROR_CODES.LLM_TIMEOUT,

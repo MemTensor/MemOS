@@ -593,6 +593,7 @@ const AlgorithmSchema = Type.Object({
      * slightly larger window pays for itself).
      */
     llmFilterCandidateBodyChars: NumberInRange(500, 120, 2000),
+    llmFilterTimeoutMs: NumberInRange(2000, 1, 60_000),
     /**
      * Tier-2 vector scan time-window bound (ms). When > 0, the
      * vector scan path (`scanAndTopK` in `core/storage/vector.ts`)

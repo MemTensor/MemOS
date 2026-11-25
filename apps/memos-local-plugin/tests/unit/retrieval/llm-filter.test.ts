@@ -58,6 +58,19 @@ function trace(id: string, score: number): RankedCandidate {
 }
 
 describe("retrieval/llm-filter", () => {
+  it("records each filter outcome without query text and preserves native error codes", async () => {
+    const diagnostics = vi.fn();
+    const llm: any = { completeJson: vi.fn().mockRejectedValue(Object.assign(new Error("synthetic failure"), { code: "NO_ADAPTER" })) };
+    await llmFilterCandidates({ query: "DO_NOT_EXPORT", ranked: [trace("a", 1)] }, { llm, log, config: cfg, onDiagnostic: diagnostics });
+    expect(diagnostics).toHaveBeenCalledWith("filter.result", expect.objectContaining({ attempted: true, outcome: "llm_failed_safe_cutoff", errorCode: "NO_ADAPTER", candidateCount: 1, durationMs: expect.any(Number) }));
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("DO_NOT_EXPORT");
+  });
+
+  it("does not let a failed diagnostic observer break a successful filter", async () => {
+    const llm: any = { completeJson: vi.fn().mockResolvedValue({ value: { ranked: [1] } }) };
+    const result = await llmFilterCandidates({ query: "synthetic", ranked: [trace("a", 1)] }, { llm, log, config: cfg, onDiagnostic: () => { throw new Error("observer failed"); } });
+    expect(result.outcome).toBe("llm_kept_all");
+  });
   it("disabled → passthrough with null sufficient", async () => {
     const result = await llmFilterCandidates(
       { query: "anything", ranked: [trace("a", 0.9), trace("b", 0.5)] },

@@ -137,6 +137,7 @@ export interface SessionRoutingConfig {
  * infrastructure; the pipeline wires the algorithm subscribers together.
  */
 export interface PipelineDeps {
+  onDiagnostic?: import("../util/diagnostics.js").DiagnosticSink;
   agent: AgentKind;
   home: ResolvedHome;
   config: ResolvedConfig;

@@ -34,6 +34,7 @@ import type { RetrievalEventBus } from "./events.js";
 import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
+import { retrievalFilterTimeoutMs } from "../util/diagnostics.js";
 import { rank } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
@@ -429,7 +430,8 @@ async function runAll(
             config: deps.config,
             signal: opts.signal,
             deadlineAt: opts.deadlineAt,
-            timeoutMs: filterTimeoutMs(opts.deadlineAt),
+            timeoutMs: retrievalFilterTimeoutMs(opts.deadlineAt, deps.config.llmFilterTimeoutMs),
+            onDiagnostic: deps.onDiagnostic,
             malformedRetries: opts.llmFilterMalformedRetries,
           },
         );
@@ -490,7 +492,8 @@ async function runAll(
           config: deps.config,
           signal: opts.signal,
           deadlineAt: opts.deadlineAt,
-          timeoutMs: filterTimeoutMs(opts.deadlineAt),
+          timeoutMs: retrievalFilterTimeoutMs(opts.deadlineAt, deps.config.llmFilterTimeoutMs),
+          onDiagnostic: deps.onDiagnostic,
           malformedRetries: opts.llmFilterMalformedRetries,
         },
       );
@@ -686,11 +689,6 @@ async function runAll(
     });
     return emptyResult(ctx.reason, agent, sessionId, episodeId, ts, deps.now());
   }
-}
-
-function filterTimeoutMs(deadlineAt?: number): number | undefined {
-  if (deadlineAt === undefined) return undefined;
-  return Math.max(1, Math.min(2_000, deadlineAt - Date.now()));
 }
 
 function emptyResult(

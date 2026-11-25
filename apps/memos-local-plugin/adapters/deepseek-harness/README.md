@@ -351,6 +351,7 @@ profile, place a row with the same `id` in
     contextMaxChars: 6000
     toolResultMaxChars: 1200
     failOnStartupError: false
+    diagnosticsEnabled: false
 ```
 
 DSH patch layers replace the target row's complete `config` value rather than
@@ -370,7 +371,15 @@ deep-merging keys, so keep every field when overriding one.
 | `recallTimeoutMs` | `3000` | Requested deadline shared by automatic recall, explicit `memos_search`, and the adapter's hard fail-open guard; minimum `100`, with an effective DSH maximum of `3000`. Filter failures use `safeCutoff` when ranked candidates exist. |
 | `contextMaxChars` | `6000` | Maximum injected `<memos_context>` size; minimum `256`. |
 | `toolResultMaxChars` | `1200` | Maximum body size rendered by memory tools; minimum `128`. |
-| `failOnStartupError` | `false` | When `true`, an adapter startup error, including an enabled-Viewer bind failure, fails DSH profile boot. |
+| `failOnStartupError` | `false` | When `true`, an adapter startup error, including an enabled-Viewer bind failure, rejects MemOS plugin startup and rolls it back. DSH may keep the host running when its startup audit treats this plugin as optional. |
+| `diagnosticsEnabled` | `false` | Write per-process metadata-only JSONL diagnostics, expose counters under `/api/v1/diag/counts`, and register the explicit synthetic `memos_diagnostic_filter` probe. See [Windows supplemental testing](DIAGNOSTICS.md). |
+
+Diagnostic mode does not extend normal automatic recall or `memos_search`
+beyond 3000ms. `algorithm.retrieval.llmFilterTimeoutMs` in MemOS `config.yaml`
+controls the filter's cap (default `2000`, range `1`–`60000`), while the
+foreground request's remaining deadline always wins. A larger value can
+therefore still time out before the filter finishes. The synthetic probe has
+its own explicit timeout and does not search or write the memory database.
 
 ### Runtime home and core configuration
 
@@ -590,7 +599,9 @@ adapter:
   conflicts and invalid bind settings require correction before a later
   profile restart. When
   `failOnStartupError` is true, the same failure rolls back the MemOS runtime
-  and fails DSH profile boot.
+  and rejects MemOS plugin startup. The host may continue without MemOS if
+  its startup audit treats the plugin as optional; this flag does not make
+  the plugin a required DSH startup entry.
 - `session/flush` does not wait for MemOS capture or classification work, so a
   slow auxiliary model call cannot delay DSH's durability checkpoint or the
   next agent request.
@@ -598,9 +609,9 @@ adapter:
   not instructions or authority. It may also be stale, so
   correctness-sensitive facts should be verified.
 
-Set `failOnStartupError: true` in CI or controlled deployments where silently
-running without memory or the configured Viewer is worse than failing the
-profile boot. Invalid Cordis configuration, missing modules or peers, schema
+Set `failOnStartupError: true` to reject partial MemOS startup. Deployments
+that also require the entire host to fail must enforce a required-plugin
+startup policy in DSH. Invalid Cordis configuration, missing modules or peers, schema
 validation errors, and failures before `apply()` runs are ordinary DSH load
 errors and are not fail-open.
 
