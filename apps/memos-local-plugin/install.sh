@@ -1391,8 +1391,9 @@ CFGEOF
 }
 
 # ─── DeepSeek Harness install ─────────────────────────────────────────────
-# DSH owns its profile dependency graph and bundle reconciliation. We never
-# unpack into the profile or edit package.json/cordis.patch.yml ourselves.
+# DSH owns its profile dependency graph and serializes profile writes. We never
+# unpack into the profile. An explicit install can repair this package's missing
+# bundle registration through `dsh plugin exec`, under DSH's manifest lock.
 # Pin tsx's esbuild resolution and preseed the reviewed pnpm build policy
 # in the installing profile before the first add. Published dependency locks
 # and package-level overrides do not constrain DSH's consumer graph. Unknown
@@ -1628,6 +1629,22 @@ install_dsh() {
     error "DSH could not compose profile ${DSH_PROFILE} after installation."
     printf '%s\n' "${composed}" >&2
     return 1
+  fi
+  if ! grep -Fq "${NPM_PACKAGE}" <<< "${composed}" \
+    || ! grep -Eq 'id:[[:space:]]*memos-local-memory' <<< "${composed}"; then
+    step "Registering the installed MemOS bundle in DSH profile ${DSH_PROFILE}"
+    # DSH anchors ./ paths to the installer's invocation directory. Keep this
+    # bare relative path so pnpm exec resolves it in the selected profile.
+    if ! "${dsh_bin}" plugin --profile "${DSH_PROFILE}" exec node \
+      "node_modules/${NPM_PACKAGE}/scripts/ensure-dsh-bundle.mjs"; then
+      error "Unable to register the installed MemOS bundle in the selected DSH profile."
+      return 1
+    fi
+    if ! composed="$("${dsh_bin}" --profile "${DSH_PROFILE}" --dump-config 2>&1)"; then
+      error "DSH could not compose profile ${DSH_PROFILE} after bundle registration."
+      printf '%s\n' "${composed}" >&2
+      return 1
+    fi
   fi
   if ! grep -Fq "${NPM_PACKAGE}" <<< "${composed}" \
     || ! grep -Eq 'id:[[:space:]]*memos-local-memory' <<< "${composed}"; then

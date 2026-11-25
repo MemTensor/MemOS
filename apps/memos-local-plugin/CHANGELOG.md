@@ -5,6 +5,12 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
+- Unreleased — Repair missing DSH bundle registration after an installation
+  retry. The installer runs an idempotent registration helper through DSH's
+  locked package-command path when the composed configuration lacks MemOS,
+  then verifies activation again. Ship the same dependency-free helper for
+  direct CLI installs on Windows, macOS and Linux; preserve unrelated profile
+  settings and other plugins' enablement.
 - Unreleased — Fix DSH installation dependency drift by pinning `tsx` to
   `4.21.0` and its esbuild dependency to the reviewed `0.27.7` in source
   package-manager overrides and the installer-managed DSH profile. Preserve

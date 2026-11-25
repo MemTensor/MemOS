@@ -188,6 +188,33 @@ commands, install it persistently if needed:
 npm install -g pnpm@11.7.0
 ```
 
+### Recover a bundle missing after an installation retry
+
+DSH `0.2.1-rc.3` can retain the package in `dependencies` after a failed
+installation without adding it to `dsh.profile.bundles`. A subsequent `add`
+can exit successfully while still leaving the adapter absent. The MemOS
+one-command installer detects that state, registers only this installed bundle
+through DSH's locked package-command path, and repeats `--dump-config` before
+reporting success. Other plugins' selection and order are preserved.
+
+For direct `dsh plugin add` installs, including Windows PowerShell, run the
+packaged registration helper after a successful add:
+
+```sh
+dsh plugin --profile web exec node node_modules/@memtensor/memos-local-plugin/scripts/ensure-dsh-bundle.mjs
+dsh --profile web --dump-config
+```
+
+Replace `web` with the profile you actually use. Run the helper through
+`dsh plugin exec` so DSH holds the selected profile's manifest lock. The helper
+checks the dependency, bundle metadata, patch and compiled adapter before
+atomically appending MemOS to the bundle list. It is idempotent and never
+re-enables another dependency. A valid dump must contain the MemOS adapter and
+`id: memos-local-memory`; if it still does not, check compatibility and profile
+overrides. Registration does not grant a version exemption, override a disabled
+Cordis row, or change credentials. This repairs the MemOS installation path;
+it does not modify DSH's own package-manager implementation.
+
 ### Review dependency build scripts
 
 The adapter entry point in a packed tarball is already compiled; it does not

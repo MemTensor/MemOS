@@ -112,7 +112,7 @@ function makeDshFixture(options: {
   firstAdd?: "success" | "ignored-builds" | "unknown-build" | "error";
   approval?: "success" | "error";
   secondAdd?: "success" | "error";
-  dump?: "success" | "missing-bundle";
+  dump?: "success" | "missing-bundle" | "incompatible";
   pnpm?: "present" | "missing";
   npmBootstrap?: "success" | "error";
   sqliteProbe?: "success" | "repairable" | "error";
@@ -148,6 +148,22 @@ function makeDshFixture(options: {
     "utf8",
   );
   const hostNode = findHostExecutable("node");
+  const profileDir = path.dirname(profileWorkspace);
+  const profileManifest = path.join(profileDir, "package.json");
+  writeFileSync(profileManifest, JSON.stringify({
+    name: "synthetic-dsh-profile",
+    dependencies: { "@memtensor/memos-local-plugin": "file:synthetic.tgz", "disabled-plugin": "1.0.0" },
+    dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "enabled-plugin"] } },
+  }, null, 2));
+  const pluginDir = path.join(profileDir, "node_modules/@memtensor/memos-local-plugin");
+  mkdirSync(path.join(pluginDir, "dist/adapters/deepseek-harness"), { recursive: true });
+  mkdirSync(path.join(pluginDir, "adapters/deepseek-harness"), { recursive: true });
+  writeFileSync(path.join(pluginDir, "package.json"), JSON.stringify({
+    name: "@memtensor/memos-local-plugin", version: "2.0.21-beta.1",
+    dsh: { bundle: { patch: "./adapters/deepseek-harness/cordis.patch.yml" } },
+  }));
+  writeFileSync(path.join(pluginDir, "dist/adapters/deepseek-harness/index.js"), "export {};\n");
+  writeFileSync(path.join(pluginDir, "adapters/deepseek-harness/cordis.patch.yml"), "[]\n");
 
   const pnpm = options.pnpm ?? "present";
   if (pnpm === "present") {
@@ -246,12 +262,17 @@ if [[ "\${1:-}" == "plugin" ]]; then
 fi
 
 if [[ "$*" == "--profile web --dump-config" ]]; then
-  if [[ "${dump}" == "missing-bundle" ]]; then
+  if [[ "${dump}" == "incompatible" ]] || { [[ "${dump}" == "missing-bundle" ]] && ! "${hostNode}" -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(p.dsh.profile.bundles.includes("@memtensor/memos-local-plugin") ? 0 : 1)' "${profileManifest}"; }; then
     printf '%s\\n' '# no external bundle'
     exit 0
   fi
   printf '%s\\n' '# bundle: @memtensor/memos-local-plugin' '  - id: memos-local-memory'
   exit 0
+fi
+
+if [[ "$1" == "plugin" && "$4" == "exec" && "$5" == "node" ]]; then
+  [[ "$6" == "node_modules/@memtensor/memos-local-plugin/scripts/ensure-dsh-bundle.mjs" ]] || exit 65
+  exec "${hostNode}" "${REPO_ROOT}/scripts/ensure-dsh-bundle.mjs" --profile-dir "${profileDir}"
 fi
 
 if [[ "$1" == "plugin" && "$4" == "add" ]]; then
@@ -308,6 +329,7 @@ exit 64
     pnpmActionLog,
     nativeProbeLog,
     profileWorkspace,
+    profileManifest,
     env: {
       HOME: home,
       DSH_HOME: dshHome,
@@ -321,6 +343,35 @@ exit 64
 }
 
 describe("install.sh — CLI surface", () => {
+  it("repairs a retained dependency missing from bundles after installation retry", () => {
+    const fixture = makeDshFixture({ dump: "missing-bundle" });
+    try {
+      const r = run(["--agent", "dsh", "--version", "2.0.21-beta.1"], fixture.env);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      const profile = JSON.parse(readFileSync(fixture.profileManifest, "utf8"));
+      expect(profile.dsh.profile.bundles).toEqual([
+        "@deepseek-ai/dsh-base", "enabled-plugin", "@memtensor/memos-local-plugin",
+      ]);
+      expect(profile.dependencies["disabled-plugin"]).toBe("1.0.0");
+      expect(readFileSync(fixture.log, "utf8").trim().split("\n")).toEqual([
+        "plugin --profile web add @memtensor/memos-local-plugin@2.0.21-beta.1",
+        "--profile web --dump-config",
+        "plugin --profile web exec node node_modules/@memtensor/memos-local-plugin/scripts/ensure-dsh-bundle.mjs",
+        "--profile web --dump-config",
+      ]);
+    } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("still fails if registration does not make the adapter appear in the composed profile", () => {
+    const fixture = makeDshFixture({ dump: "incompatible" });
+    try {
+      const r = run(["--agent", "dsh", "--version", "2.0.21-beta.1"], fixture.env);
+      expect(r.code).not.toBe(0);
+      expect(r.stdout).not.toContain("DeepSeek Harness install complete");
+      expect(readFileSync(fixture.log, "utf8")).toContain("exec node node_modules/@memtensor/memos-local-plugin/scripts/ensure-dsh-bundle.mjs");
+    } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
   it("prints usage on --help and exits 0", () => {
     const r = run(["--help"]);
     expect(r.code).toBe(0);
