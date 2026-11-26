@@ -10,7 +10,7 @@ import pytest
 from memos.project_memory.add_dispatch import label_for
 from memos.project_memory.add_runtime import EpisodeAddRuntime, RuntimeSettings
 from memos.project_memory.add_store import PostgresAddStore
-from memos.project_memory.judge import ModelError
+from memos.project_memory.judge import Answer, ModelError
 
 
 @pytest.fixture
@@ -533,21 +533,18 @@ def _close_and_publish(runtime):
 def test_boundary_split_creates_sibling_episodes_before_extraction(store):
     calls = []
 
+    def judge(scope, state, questions):
+        calls.append(scope)
+        assert [turn["member"] for turn in state["turns"]] == ["Fix the export.", "Now docs."]
+        return {q: Answer(q, "yes") for q in questions}
+
     def write(scope, _prompt, inputs):
         calls.append(scope)
-        if scope == "episode.boundary":
-            assert [turn["member"] for turn in inputs["turns"]] == ["Fix the export.", "Now docs."]
-            return {
-                "continues_previous": False,
-                "segments": [
-                    {"start_turn": 0},
-                    {"start_turn": 1, "reason": "docs", "quote": "Now docs."},
-                ],
-            }
         return {"episode_summary": "", "drafts": []}
 
     hub = Mock()
     hub.write.side_effect = write
+    hub.judge.side_effect = judge
     work = []
     runtime = EpisodeAddRuntime(store, hub, work.extend, Mock(), RuntimeSettings())
     task = _conversation(runtime, "task", "Fix the export.", "Now docs.")["task_id"]
@@ -575,12 +572,11 @@ def test_boundary_split_creates_sibling_episodes_before_extraction(store):
 
 def test_boundary_model_outage_falls_back_after_the_retries(store):
     def write(scope, _prompt, _inputs):
-        if scope == "episode.boundary":
-            raise ModelError("boundary down")
         return {"episode_summary": "", "drafts": []}
 
     hub = Mock()
     hub.write.side_effect = write
+    hub.judge.side_effect = ModelError("boundary down")
     work = []
     clock = [datetime.now(timezone.utc)]
     runtime = EpisodeAddRuntime(
@@ -613,11 +609,12 @@ def test_a_switch_drops_the_previous_topic_from_recall(store, monkeypatch):
         return []
 
     monkeypatch.setattr(add_runtime, "recall_candidates", recall)
-    switch = {"continues_previous": False}
+    switch = {"continues": "no"}
+
+    def judge(scope, state, questions):
+        return {q: Answer(q, switch.get(q, "no")) for q in questions}
 
     def write(scope, _prompt, inputs):
-        if scope == "episode.boundary":
-            return {**switch, "segments": [{"start_turn": 0}]}
         (message,) = inputs["episode"]
         quote = message["content"]
         draft = {"kind": "decision", "message_id": message["id"], "quote": quote, "content": quote}
@@ -625,13 +622,14 @@ def test_a_switch_drops_the_previous_topic_from_recall(store, monkeypatch):
 
     hub = Mock()
     hub.write.side_effect = write
+    hub.judge.side_effect = judge
     work = []
     runtime = EpisodeAddRuntime(store, hub, work.extend, Mock(), RuntimeSettings())
     for task, text in (("one", "We use the old API."), ("two", "We ship on Friday.")):
         _conversation(runtime, task, text)
         _close_and_publish(runtime)
         _drain(runtime, work)
-    switch["continues_previous"] = True
+    switch["continues"] = "yes"
     _conversation(runtime, "three", "We keep shipping on Friday.")
     _close_and_publish(runtime)
     _drain(runtime, work)

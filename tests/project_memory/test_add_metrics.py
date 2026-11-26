@@ -14,7 +14,7 @@ from memos.llms.usage import CHAT, record_usage
 from memos.project_memory.add_metrics import allocate, attribute, episode_timeline
 from memos.project_memory.add_runtime import EpisodeAddRuntime, RuntimeSettings
 from memos.project_memory.add_store import PostgresAddStore
-from memos.project_memory.judge import ModelError
+from memos.project_memory.judge import Answer, ModelError
 
 
 T0 = datetime(2026, 11, 23, 8, 0, tzinfo=timezone.utc)
@@ -118,8 +118,6 @@ def test_merged_episode_bills_each_add_by_its_turns(store, monkeypatch):
     calls = []
 
     def write(scope, _prompt, _inputs):
-        if scope == "episode.boundary":  # Two Turns: one judgment, before extraction.
-            return {"continues_previous": False, "segments": [{"start_turn": 0}]}
         assert scope == "episode.extract"
         calls.append(clock["now"])
         if len(calls) == 1:
@@ -130,6 +128,8 @@ def test_merged_episode_bills_each_add_by_its_turns(store, monkeypatch):
 
     hub = Mock()
     hub.write.side_effect = write
+    # Two Turns: one boundary judgment before extraction, answered "no switch".
+    hub.judge.side_effect = lambda scope, state, questions: {q: Answer(q, "no") for q in questions}
     runtime = EpisodeAddRuntime(
         store, hub, queue.extend, Mock(), RuntimeSettings(), clock=lambda: clock["now"]
     )
