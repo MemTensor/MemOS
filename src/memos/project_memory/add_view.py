@@ -376,6 +376,18 @@ class RelationalProjectView:
                 self._retract(cursor, space_id, sorted(removed))
             return sorted(removed)
 
+    def delete_topics_by_id(self, topic_ids: list[str]) -> list[str]:
+        """Delete topics by ID in whichever space they are; entries cascade. Unknown IDs are
+        ignored. Returns the deleted IDs. The retrieval mirror is left as is: it is being
+        replaced by reads of these tables."""
+        if not topic_ids:
+            return []
+        with self.store.transaction() as cursor:
+            cursor.execute(
+                "DELETE FROM topics WHERE id = ANY(%s::text[]) RETURNING id", (list(topic_ids),)
+            )
+            return sorted(row["id"] for row in cursor.fetchall())
+
     def _retract(self, cursor: Any, space_id: str, topic_ids: list[str]) -> None:
         cursor.execute(
             "SELECT project_id, clock_timestamp() AS now FROM spaces WHERE id = %s", (space_id,)

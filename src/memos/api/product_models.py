@@ -991,7 +991,13 @@ class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
     writable_cube_ids: list[str] | None = Field(None, description="Writable cube IDs")
-    memory_ids: list[str] | None = Field(None, description="Memory IDs")
+    memory_ids: list[str] | None = Field(
+        None,
+        description=(
+            "Memory IDs. Without space_id, IDs starting with `topic_` delete those project "
+            "memory topics; they cannot be mixed with other IDs or delete conditions."
+        ),
+    )
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(
         None,

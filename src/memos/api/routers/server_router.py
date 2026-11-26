@@ -505,8 +505,8 @@ def get_memory_by_ids(memory_ids: list[str]):
     "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
 )
 def delete_memories(memory_req: DeleteMemoryRequest):
-    if memory_req.space_id:
-        # memory view `project`: delete topics, keep the space, instructions and domains
+    if memory_req.space_id or project_view.deletes_topics(memory_req):
+        # memory view `project`: clear a space or delete topics by ID; spaces and domains stay
         return DeleteMemoryResponse(
             message="Memories deleted successfully",
             data=project_view.delete_topics(memory_req),

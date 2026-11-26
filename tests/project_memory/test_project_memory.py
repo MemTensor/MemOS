@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -458,6 +459,60 @@ def test_search_get_and_delete(app):
     assert client.post("/product/list_domains", json={"space_id": sid}).json()["data"]["domains"], (
         "清空主题保留领域"
     )
+
+
+def test_delete_topics_by_id_without_space(app):
+    """memory_ids of Topics alone delete those Topics; unknown IDs are ignored."""
+    client, sched, plugin = app
+    sid = _space(client)
+    _run_all(client, sched, sid, DECISION_ROUNDS)
+    topics = plugin.service.store.list_topics(sid)
+    assert topics
+    target = topics[0]
+
+    out = plugin.service.delete(
+        SimpleNamespace(space_id=None, memory_ids=[target.id, "topic_gone"])
+    )
+    assert out == {"deleted_topic_ids": [target.id]}
+    assert plugin.service.store.get_topic(target.id) is None
+    assert plugin.service.store.list_decisions(sid, target.id) == []
+    assert {t.id for t in plugin.service.store.list_topics(sid)} == {t.id for t in topics[1:]}
+
+
+def test_delete_memory_routes_topic_ids_to_project_memory(app, monkeypatch):
+    import memos.api.routers.server_router as server_router
+
+    client, _, _ = app
+    personal = []
+    monkeypatch.setattr(
+        server_router.handlers.memory_handler,
+        "handle_delete_memories",
+        lambda delete_mem_req, naive_mem_cube: personal.append(delete_mem_req.memory_ids)
+        or {"code": 200, "message": "ok", "data": {}},
+    )
+
+    # Topic IDs without space_id go to project memory, never to personal memory
+    r = client.post("/product/delete_memory", json={"memory_ids": ["topic_a", "topic_b"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"] == {"deleted_topic_ids": []}
+    assert personal == []
+
+    # Topic IDs mixed with other IDs or with a personal delete condition delete nothing
+    for body in (
+        {"memory_ids": ["topic_a", "mem-1"]},
+        {"memory_ids": ["topic_a"], "filter": {"user_id": "u1"}},
+        {"memory_ids": ["topic_a"], "user_id": "u1"},
+        {"memory_ids": ["topic_a"], "writable_cube_ids": ["cube"]},
+    ):
+        r = client.post("/product/delete_memory", json=body)
+        assert r.status_code == 400, body
+        assert r.json()["reason"] == "INVALID_PARAM"
+    assert personal == []
+
+    # Only an exact `topic_` prefix is a Topic ID; anything else stays personal memory
+    r = client.post("/product/delete_memory", json={"memory_ids": ["mem-1", "Topic_a", " topic_b"]})
+    assert r.status_code == 200
+    assert personal == [["mem-1", "Topic_a", " topic_b"]]
 
 
 def test_delete_space(app):

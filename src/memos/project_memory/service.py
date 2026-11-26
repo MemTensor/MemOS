@@ -1152,6 +1152,9 @@ class ProjectMemoryService:
 
     def delete(self, req: Any) -> dict[str, Any]:
         ids = list(getattr(req, "memory_ids", None) or [])
+        if not getattr(req, "space_id", None):
+            # Topic IDs only: the topics may be in different spaces; unknown IDs are ignored.
+            return {"deleted_topic_ids": self._delete_topics_by_id(ids)}
         if isinstance(self.store, RelationalProjectView):
             return {
                 "space_id": req.space_id,
@@ -1174,6 +1177,17 @@ class ProjectMemoryService:
         for t in targets:
             self.store.delete_topic(t)
         return {"space_id": space.space_id, "deleted_topic_ids": [t.id for t in targets]}
+
+    def _delete_topics_by_id(self, topic_ids: list[str]) -> list[str]:
+        if isinstance(self.store, RelationalProjectView):
+            return self.store.delete_topics_by_id(topic_ids)
+        removed = []
+        for topic_id in dict.fromkeys(topic_ids):
+            topic = self.store.get_topic(topic_id)
+            if topic is not None:
+                self.store.delete_topic(topic)
+                removed.append(topic.id)
+        return sorted(removed)
 
     def task_status(self, task_id: str, user_id: str) -> dict[str, Any] | None:
         task = self.store.get_task(task_id)

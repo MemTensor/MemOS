@@ -47,6 +47,42 @@ def test_preserves_domain_identity_and_topic_reads(add_store):
     assert view.get_topic("topic", "wrong-space") is None
 
 
+def test_delete_topics_by_id_across_spaces(add_store):
+    """Topics are deleted by ID wherever they are; entries cascade, unknown IDs are ignored."""
+    view = RelationalProjectView(add_store)
+    for space_id in ("s1", "s2"):
+        view.put_space(
+            Space(space_id=space_id, project_id="p", space_name=space_id, domains=[Domain("dev")])
+        )
+    with add_store.transaction() as cursor:
+        for topic_id, space_id in (("topic_a", "s1"), ("topic_keep", "s1"), ("topic_b", "s2")):
+            cursor.execute(
+                """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary,
+                                       topic_description, create_time, update_time)
+                   SELECT %s, %s, id, 'T', '', '', now(), now() FROM domains WHERE space_id = %s""",
+                (topic_id, space_id, space_id),
+            )
+            cursor.execute(
+                """INSERT INTO project_entries (id, topic_id, space_id, entry_type, content,
+                                               chat_time, user_ids)
+                   VALUES (%s, %s, %s, 'decision', 'D', now(), '{member}')""",
+                (f"decision_of_{topic_id}", topic_id, space_id),
+            )
+
+    assert view.delete_topics_by_id(["topic_b", "topic_a", "topic_a", "topic_gone"]) == [
+        "topic_a",
+        "topic_b",
+    ]
+    assert view.delete_topics_by_id([]) == []
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT id FROM topics ORDER BY id")
+        assert [row["id"] for row in cursor.fetchall()] == ["topic_keep"]
+        cursor.execute("SELECT topic_id FROM project_entries ORDER BY topic_id")
+        assert [row["topic_id"] for row in cursor.fetchall()] == ["topic_keep"]
+    # Spaces and domains stay
+    assert view.get_space("s2").domain_names() == ["dev"]
+
+
 def test_clear_fences_open_episodes(add_store):
     view = RelationalProjectView(add_store)
     view.put_space(
@@ -193,7 +229,6 @@ def test_get_memory_lists_important_topics_before_newer_quiet_ones(add_store):
     out = service.list_topics(SimpleNamespace(space_id="space", filter=None, size=None, page=1))
     assert [t["id"] for t in out["topic_detail_list"]] == ["busy", "quiet"]
     assert [d["id"] for d in out["topic_detail_list"][0]["decisions"]] == ["wide", "new", "old"]
-
 
 
 def test_domains_are_addressed_by_id(add_store):
