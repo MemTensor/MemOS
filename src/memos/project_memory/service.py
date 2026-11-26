@@ -39,6 +39,7 @@ from .graph_store import ProjectStore, cosine, lexical_sim
 from .locks import InProcessLocks, conv_key, task_key, topic_key, topics_key
 from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
 from .types import (
+    EXP_VERIFIED,
     OP_ADD,
     PROJECT_DECISION,
     PROJECT_EXPERIENCE,
@@ -999,8 +1000,12 @@ class ProjectMemoryService:
             )
             timeline = self._relevant(query, timeline, lambda x: x.get("content", ""))
         else:
-            decisions.sort(key=lambda d: d.time)
-            experiences.sort(key=lambda e: e.confidence, reverse=True)
+            # Topic-page order: open conflicts and wider agreement first, then the newest;
+            # verified experiences first, then by confidence; timeline stays chronological.
+            decisions.sort(key=lambda d: (not d.conflicts, -len(d.user_ids), _newest(d.time)))
+            experiences.sort(
+                key=lambda e: (e.exp_status != EXP_VERIFIED, -e.confidence, _newest(e.time))
+            )
         if types is not None:  # project_item_types：只带要的那几类条目
             decisions = decisions if "decision" in types else []
             experiences = experiences if "experience" in types else []
@@ -1263,6 +1268,11 @@ def _item_types(req: Any) -> list[str]:
     if bad:
         raise ValueError(f"project_item_types 不支持：{bad}，可选 {list(ITEM_TYPES)}")
     return raw or list(ITEM_TYPES)
+
+
+def _newest(value: Any) -> float:
+    """Sort key that puts later times first."""
+    return -time_key(value) if value else 0.0
 
 
 def _match_filter(t: Topic, flt: dict[str, Any]) -> bool:
