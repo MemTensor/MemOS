@@ -113,6 +113,11 @@ def now_iso() -> str:
 class Domain:
     name: str
     description: str = ""
+    # 领域的稳定标识：改名不变，修改、删除按它定位
+    domain_id: str = ""
+
+    def to_api(self) -> dict[str, Any]:
+        return {"domain_id": self.domain_id, "name": self.name, "description": self.description}
 
 
 @dataclass
@@ -150,7 +155,16 @@ class Space:
             space_name=p.get("space_name", ""),
             instructions=p.get("instructions", "") or "",
             project_id=p.get("project_id", "") or "",
-            domains=[Domain(**d) for d in p.get("domains") or []],
+            domains=[
+                Domain(
+                    name=d.get("name", ""),
+                    description=d.get("description") or "",
+                    # 加 domain_id 之前写入的领域没有 ID：按空间和名称给一个固定的，下次写回时落库
+                    domain_id=d.get("domain_id")
+                    or stable_uuid(f"project-domain:{p.get('space_id', '')}:{d.get('name', '')}"),
+                )
+                for d in p.get("domains") or []
+            ],
             epoch=int(p.get("epoch") or 0),
             create_time=p.get("create_time") or now_iso(),
             update_time=p.get("update_time") or now_iso(),
@@ -161,7 +175,7 @@ class Space:
             "space_id": self.space_id,
             "space_name": self.space_name,
             "instructions": self.instructions,
-            "domains": [asdict(d) for d in self.domains],
+            "domains": [d.to_api() for d in self.domains],
             "create_time": self.create_time,
             "update_time": self.update_time,
         }

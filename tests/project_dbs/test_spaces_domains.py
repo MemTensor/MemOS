@@ -24,6 +24,11 @@ def names(domains):
     return [d.domain for d in domains]
 
 
+def ids(db, space_id):
+    """Domain name -> domain_id of a space."""
+    return {d.domain: d.id for d in db.list_domains(space_id)}
+
+
 # ---------- spaces ----------
 def test_create_space_with_initial_domains(db, project):
     space = db.create_space(
@@ -123,35 +128,39 @@ def test_update_domains_renames_and_keeps_id(db, project):
     space = db.create_space(
         project, "s", domains=[Domain(domain="开发", description="说明"), Domain(domain="运维")]
     )
-    before = {d.domain: d.id for d in db.list_domains(space.id)}
+    before = ids(db, space.id)
     result = db.update_domains(
         space.id,
         [
-            DomainUpdate(domain="开发", new_domain="工程"),
-            DomainUpdate(domain="运维", description="值班"),
+            DomainUpdate(domain_id=before["开发"], new_domain="工程"),
+            DomainUpdate(domain_id=before["运维"], description="值班"),
         ],
     )
     assert [(d.domain, d.description) for d in result] == [("工程", "说明"), ("运维", "值班")]
     assert result[0].id == before["开发"]
-    assert sorted(names(db.list_domains(space.id))) == ["工程", "运维"]
-    cleared = db.update_domains(space.id, [DomainUpdate(domain="工程", description="")])
+    assert ids(db, space.id) == {"工程": before["开发"], "运维": before["运维"]}
+    cleared = db.update_domains(space.id, [DomainUpdate(domain_id=before["开发"], description="")])
     assert cleared[0].description == ""
 
 
 def test_update_domains_rejects_whole_batch_on_error(db, project):
     space = db.create_space(project, "s", domains=[Domain(domain="开发"), Domain(domain="运维")])
+    by_name = ids(db, space.id)
     with pytest.raises(DomainAlreadyExistsError):
         db.update_domains(
             space.id,
             [
-                DomainUpdate(domain="开发", description="已改"),
-                DomainUpdate(domain="运维", new_domain="开发"),
+                DomainUpdate(domain_id=by_name["开发"], description="已改"),
+                DomainUpdate(domain_id=by_name["运维"], new_domain="开发"),
             ],
         )
     with pytest.raises(DomainNotFoundError):
         db.update_domains(
             space.id,
-            [DomainUpdate(domain="开发", new_domain="工程"), DomainUpdate(domain="不存在")],
+            [
+                DomainUpdate(domain_id=by_name["开发"], new_domain="工程"),
+                DomainUpdate(domain_id="不存在"),
+            ],
         )
     assert {d.domain: d.description for d in db.list_domains(space.id)} == {"开发": "", "运维": ""}
 
@@ -159,24 +168,35 @@ def test_update_domains_rejects_whole_batch_on_error(db, project):
 def test_same_domain_name_allowed_across_spaces(db, project):
     a = db.create_space(project, "a", domains=[Domain(domain="开发")])
     b = db.create_space(project, "b", domains=[Domain(domain="开发")])
-    db.update_domains(a.id, [DomainUpdate(domain="开发", new_domain="工程")])
+    db.update_domains(a.id, [DomainUpdate(domain_id=ids(db, a.id)["开发"], new_domain="工程")])
     assert names(db.list_domains(b.id)) == ["开发"]
+
+
+def test_domain_of_another_space_cannot_be_changed_or_deleted(db, project):
+    a = db.create_space(project, "a", domains=[Domain(domain="开发")])
+    b = db.create_space(project, "b", domains=[Domain(domain="运维")])
+    other = ids(db, b.id)["运维"]
+    with pytest.raises(DomainNotFoundError):
+        db.update_domains(a.id, [DomainUpdate(domain_id=other, new_domain="x")])
+    assert db.delete_domains(a.id, [other]) == []
+    assert ids(db, b.id) == {"运维": other}
 
 
 def test_delete_domains_ignores_missing(db, project):
     space = db.create_space(project, "s", domains=[Domain(domain="开发"), Domain(domain="运维")])
-    deleted = db.delete_domains(space.id, ["运维", "不存在"])
+    deleted = db.delete_domains(space.id, [ids(db, space.id)["运维"], "不存在"])
     assert names(deleted) == ["运维"]
     assert names(db.list_domains(space.id)) == ["开发"]
 
 
 def test_delete_domains_rejects_whole_batch_when_in_use(db, project):
     space = db.create_space(project, "s", domains=[Domain(domain="开发"), Domain(domain="运维")])
+    by_name = ids(db, space.id)
     add_topic(db, space.id, "开发")
     with pytest.raises(DomainInUseError):
-        db.delete_domains(space.id, ["运维", "开发"])
+        db.delete_domains(space.id, [by_name["运维"], by_name["开发"]])
     assert sorted(names(db.list_domains(space.id))) == ["开发", "运维"]
-    assert names(db.delete_domains(space.id, ["运维"])) == ["运维"]
+    assert names(db.delete_domains(space.id, [by_name["运维"]])) == ["运维"]
 
 
 def test_create_domains_dedupes_within_batch_and_lists_earliest_first(db, project):
@@ -197,18 +217,23 @@ def test_update_space_requires_a_field(db, project):
 
 def test_update_domains_rename_to_same_name_and_chain(db, project):
     space = db.create_space(project, "s", domains=[Domain(domain="a"), Domain(domain="b")])
-    assert names(db.update_domains(space.id, [DomainUpdate(domain="a", new_domain="a")])) == ["a"]
+    by_name = ids(db, space.id)
+    renamed = db.update_domains(space.id, [DomainUpdate(domain_id=by_name["a"], new_domain="a")])
+    assert names(renamed) == ["a"]
     # sequential semantics: free "a" first, then reuse the name
     db.update_domains(
         space.id,
-        [DomainUpdate(domain="a", new_domain="c"), DomainUpdate(domain="b", new_domain="a")],
+        [
+            DomainUpdate(domain_id=by_name["a"], new_domain="c"),
+            DomainUpdate(domain_id=by_name["b"], new_domain="a"),
+        ],
     )
-    assert sorted(names(db.list_domains(space.id))) == ["a", "c"]
+    assert ids(db, space.id) == {"c": by_name["a"], "a": by_name["b"]}
 
 
 def test_domain_methods_on_missing_space(db):
     with pytest.raises(DomainNotFoundError):
-        db.update_domains("missing", [DomainUpdate(domain="a", description="x")])
+        db.update_domains("missing", [DomainUpdate(domain_id="a", description="x")])
     assert db.delete_domains("missing", ["a"]) == []
     assert db.list_domains("missing") == []
 
@@ -227,15 +252,18 @@ def test_full_space_and_domain_flow(db, project):
 
     added = db.create_domains(space.id, [Domain(domain="运维", description="部署")])
     assert names(added) == ["运维"]
-    db.update_domains(space.id, [DomainUpdate(domain="代码开发", new_domain="工程开发")])
+    by_name = ids(db, space.id)
+    db.update_domains(
+        space.id, [DomainUpdate(domain_id=by_name["代码开发"], new_domain="工程开发")]
+    )
     assert sorted(names(db.list_domains(space.id))) == ["工程开发", "运维"]
     with pytest.raises(DomainNotFoundError):
         db.assert_spaces(project, [space.id], ["代码开发"])  # old name is gone
 
     add_topic(db, space.id, "工程开发")
     with pytest.raises(DomainInUseError):
-        db.delete_domains(space.id, ["工程开发", "运维"])
-    assert names(db.delete_domains(space.id, ["运维"])) == ["运维"]
+        db.delete_domains(space.id, [by_name["代码开发"], by_name["运维"]])
+    assert names(db.delete_domains(space.id, [by_name["运维"]])) == ["运维"]
 
     db.delete_space(space.id)
     assert db.list_spaces(project) == []

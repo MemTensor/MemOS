@@ -168,7 +168,10 @@ def plan_migration(
         plan.spaces.append(row)
         for domain in configured:
             name = domain["name"]
-            domain_id = stable_uuid(f"project-domain:{identifier}:{name}")
+            # 已带 domain_id 的沿用，接入方拿到过的 ID 迁移后不变
+            domain_id = domain.get("domain_id") or stable_uuid(
+                f"project-domain:{identifier}:{name}"
+            )
             domains[(identifier, name)] = domain_id
             plan.domains.append(
                 {

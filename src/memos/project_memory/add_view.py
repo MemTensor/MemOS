@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class _StoredSpace(Space):
-    domain_ids: dict[int, str] = field(default_factory=dict, repr=False)
+    """A Space read from the database; writing it back checks it has not changed since."""
 
 
 def _topic(row: dict[str, Any]) -> Topic:
@@ -116,7 +116,8 @@ class RelationalProjectView:
         if row is None:
             return None
         domains = [
-            Domain(domain["name"], domain["description"]) for domain in row["configured_domains"]
+            Domain(domain["name"], domain["description"], domain["id"])
+            for domain in row["configured_domains"]
         ]
         return _StoredSpace(
             space_id=row["id"],
@@ -126,10 +127,6 @@ class RelationalProjectView:
             domains=domains,
             create_time=row["create_time"].isoformat(),
             update_time=row["update_time"].isoformat(),
-            domain_ids={
-                id(domain): raw["id"]
-                for domain, raw in zip(domains, row["configured_domains"], strict=True)
-            },
         )
 
     def put_space(self, space: Space) -> None:
@@ -190,18 +187,23 @@ class RelationalProjectView:
         cursor.execute("SELECT id, domain FROM domains WHERE space_id = %s", (space.space_id,))
         existing = {row["id"]: row["domain"] for row in cursor.fetchall()}
         names = {name: domain_id for domain_id, name in existing.items()}
-        tracked = space.domain_ids if isinstance(space, _StoredSpace) else {}
         seen = set()
         renamed = []
         for domain in space.domains:
-            domain_id = tracked.get(id(domain)) or names.get(domain.name) or str(uuid4())
+            # A domain keeps its ID across renames; one without an ID is matched by name or is new.
+            domain_id = domain.domain_id or names.get(domain.name) or str(uuid4())
+            domain.domain_id = domain_id
             seen.add(domain_id)
             cursor.execute(
                 """INSERT INTO domains (id, space_id, domain, description) VALUES (%s, %s, %s, %s)
                    ON CONFLICT (id) DO UPDATE SET domain = EXCLUDED.domain,
-                       description = EXCLUDED.description, update_time = clock_timestamp()""",
+                       description = EXCLUDED.description, update_time = clock_timestamp()
+                   WHERE domains.space_id = EXCLUDED.space_id""",
                 (domain_id, space.space_id, domain.name, domain.description),
             )
+            if cursor.rowcount == 0:
+                # The ID belongs to a domain of another Space; never overwrite it.
+                raise ValueError(f"领域未登记：{domain_id}")
             if domain_id in existing and existing[domain_id] != domain.name:
                 renamed.append(domain_id)
                 # Unfinished and staged Episodes keep their candidate domains by name.
@@ -355,24 +357,17 @@ class RelationalProjectView:
             if self.store.retrieval_index and cursor.rowcount:
                 self._retract(cursor, topic.space_id, [topic.id])
 
-    def delete_topics(self, space_id: str, topic_ids: list[str]) -> list[str]:
+    def delete_topics_by_id(self, topic_ids: list[str]) -> list[str]:
+        """Delete topics by ID in whichever space they are; entries cascade. Unknown IDs are
+        ignored. Returns the deleted IDs. The retrieval mirror is left as is: it is being
+        replaced by reads of these tables."""
         if not topic_ids:
-            return self.clear_space_topics(space_id)
+            return []
         with self.store.transaction() as cursor:
-            cursor.execute("SELECT id FROM spaces WHERE id = %s FOR UPDATE", (space_id,))
-            if cursor.fetchone() is None:
-                raise LookupError("Space 不存在")
             cursor.execute(
-                "DELETE FROM topics WHERE space_id = %s AND id = ANY(%s::text[]) RETURNING id",
-                (space_id, topic_ids),
+                "DELETE FROM topics WHERE id = ANY(%s::text[]) RETURNING id", (list(topic_ids),)
             )
-            removed = {row["id"] for row in cursor.fetchall()}
-            missing = set(topic_ids) - removed
-            if missing:
-                raise LookupError(f"主题不在这个 Space 里：{sorted(missing)}")
-            if self.store.retrieval_index:
-                self._retract(cursor, space_id, sorted(removed))
-            return sorted(removed)
+            return sorted(row["id"] for row in cursor.fetchall())
 
     def _retract(self, cursor: Any, space_id: str, topic_ids: list[str]) -> None:
         cursor.execute(

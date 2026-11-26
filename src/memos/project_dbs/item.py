@@ -41,7 +41,7 @@ class Domain(BaseModel):  # one domains row
 
 
 class DomainUpdate(BaseModel):  # one item of update/domains
-    domain: str  # name before the change
+    domain_id: str  # the domain to change; a rename keeps the ID
     new_domain: str | None = None
     description: str | None = None  # empty string clears the description
 

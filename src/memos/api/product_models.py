@@ -991,7 +991,13 @@ class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
     writable_cube_ids: list[str] | None = Field(None, description="Writable cube IDs")
-    memory_ids: list[str] | None = Field(None, description="Memory IDs")
+    memory_ids: list[str] | None = Field(
+        None,
+        description=(
+            "Memory IDs. When all of them start with `topic_`, those project memory topics "
+            "are deleted. Cannot be used together with space_id."
+        ),
+    )
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(
         None,
@@ -1018,7 +1024,10 @@ class DeleteMemoryRequest(BaseRequest):
     )
     space_id: str | None = Field(
         None,
-        description="Project memory: delete topics of this space (keeps the space itself).",
+        description=(
+            "Project memory: clear all topics of this space (keeps the space and its domains). "
+            "Cannot be used together with memory_ids, file_ids, filter, user_id or session_id."
+        ),
     )
 
     @model_validator(mode="after")

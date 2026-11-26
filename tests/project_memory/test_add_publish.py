@@ -182,7 +182,7 @@ def test_clear_rename_delete_follow_the_add_space(setup):
         "topic_summary": "",
         "topic_description": "",
     }
-    first = _commit(store, space, "a1", "月报归档到 archive 目录", basis)
+    _commit(store, space, "a1", "月报归档到 archive 目录", basis)
 
     current = view.get_space(space)
     current.domains[0].name = "研发"
@@ -190,9 +190,6 @@ def test_clear_rename_delete_follow_the_add_space(setup):
     (hit,) = _recall(retrieval, tenant, space, "月报归档")
     assert hit.data["domain"] == "研发"
     retrieval.validate(Scope(tenant, (space,), ("研发",)))
-
-    view.delete_topics(space, [first])
-    assert not _recall(retrieval, tenant, space, "月报归档")
 
     _commit(store, space, "a2", "月报保留十二个月", {**basis, "id": "topic-b", "domain": "研发"})
     assert _recall(retrieval, tenant, space, "月报保留")

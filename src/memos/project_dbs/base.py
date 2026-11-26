@@ -76,13 +76,14 @@ class BaseProjectDB(ABC):
 
     @abstractmethod
     def update_domains(self, space_id: str, updates: list[DomainUpdate]) -> list[Domain]:
-        """Apply in order, locating each by its current name; returns the updated rows.
-        DomainNotFoundError (also for a missing space) / DomainAlreadyExistsError roll back
-        the whole batch."""
+        """Apply in order, locating each by domain_id within the space; returns the updated
+        rows. DomainNotFoundError (unknown id, an id of another space, or a missing space) /
+        DomainAlreadyExistsError roll back the whole batch."""
 
     @abstractmethod
-    def delete_domains(self, space_id: str, names: list[str]) -> list[Domain]:
-        """Missing names (or a missing space) are ignored; returns the deleted rows.
+    def delete_domains(self, space_id: str, domain_ids: list[str]) -> list[Domain]:
+        """Delete by domain_id within the space. Unknown ids, ids of another space and a
+        missing space are ignored; returns the deleted rows.
         DomainInUseError rejects the whole batch if any domain is used by a topic."""
 
     @abstractmethod

@@ -149,14 +149,43 @@ def test_space_and_domain_crud(app):
     assert list(after) == ["代码开发", "产品设计", "运营物料", "测试"]
     assert after["代码开发"] == before["代码开发"]
 
-    # 同一批里重名的整批失败（PRD 共同规则），三个批量接口都一样
-    for path, doms in (
-        ("/product/create_domains", [{"name": "甲"}, {"name": "甲"}]),
-        ("/product/update_domains", [{"name": "测试"}, {"name": "测试", "new_name": "乙"}]),
-        ("/product/delete_domains", ["测试", "测试"]),
+    # 每个领域带稳定的 domain_id，create_domains 返回完整清单（含被跳过的同名领域）
+    ids = {d["name"]: d["domain_id"] for d in r.json()["data"]["domains"]}
+    assert list(ids) == list(after) and all(ids.values()) and len(set(ids.values())) == 4
+    assert r.json()["data"]["domains"][0] == {
+        "domain_id": ids["代码开发"],
+        "name": "代码开发",
+        "description": before["代码开发"],
+    }
+
+    def listed():
+        return client.post("/product/list_domains", json={"space_id": sid}).json()["data"][
+            "domains"
+        ]
+
+    assert {d["name"]: d["domain_id"] for d in listed()} == ids
+    space_domains = client.post("/product/get_space", json={"space_id": sid}).json()["data"][
+        "domains"
+    ]
+    assert {d["name"]: d["domain_id"] for d in space_domains} == ids
+
+    # 同一批里重名或 domain_id 重复的整批失败（PRD 共同规则），三个批量接口都一样
+    for path, body in (
+        ("/product/create_domains", {"domains": [{"name": "甲"}, {"name": "甲"}]}),
+        (
+            "/product/update_domains",
+            {
+                "domains": [
+                    {"domain_id": ids["测试"], "description": "x"},
+                    {"domain_id": ids["测试"], "new_name": "乙"},
+                ]
+            },
+        ),
+        ("/product/delete_domains", {"domain_ids": [ids["测试"], ids["测试"]]}),
     ):
-        r = client.post(path, json={"space_id": sid, "domains": doms})
+        r = client.post(path, json={"space_id": sid, **body})
         assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_DUPLICATE", path
+        assert ("domain_id 重复" in r.json()["message"]) == (path != "/product/create_domains")
     r = client.post(
         "/product/create_space",
         json={
@@ -166,21 +195,138 @@ def test_space_and_domain_crud(app):
         },
     )
     assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_DUPLICATE"
-    assert [
-        d["name"]
-        for d in client.post("/product/list_domains", json={"space_id": sid}).json()["data"][
-            "domains"
-        ]
-    ] == ["代码开发", "产品设计", "运营物料", "测试"]
+    assert [d["name"] for d in listed()] == ["代码开发", "产品设计", "运营物料", "测试"]
 
-    # 已不存在的名称忽略（PRD）
+    # update_domains 按 domain_id 定位；改名不改变 domain_id；成功时 data 为空
+    r = client.post(
+        "/product/update_domains",
+        json={
+            "space_id": sid,
+            "domains": [
+                {"domain_id": ids["测试"], "new_name": "质量保障"},
+                {"domain_id": ids["运营物料"], "description": "海报与文案"},
+            ],
+        },
+    )
+    assert r.status_code == 200 and r.json()["data"] is None
+    assert {d["domain_id"]: (d["name"], d["description"]) for d in listed()} == {
+        ids["代码开发"]: ("代码开发", before["代码开发"]),
+        ids["产品设计"]: ("产品设计", before["产品设计"]),
+        ids["运营物料"]: ("运营物料", "海报与文案"),
+        ids["测试"]: ("质量保障", ""),
+    }
+    # 不属于这个 Space 的 domain_id、旧的按名称写法、空 domain_id 都改不了
+    other = client.post(
+        "/product/create_space",
+        json={"project_id": "project", "space_name": "另一个", "domains": [{"name": "代码开发"}]},
+    ).json()["data"]
+    # create_space、update_space 返回的 Space 也带 domain_id
+    assert other["domains"][0]["domain_id"] and other["domains"][0]["name"] == "代码开发"
+    updated = client.post(
+        "/product/update_space", json={"space_id": sid, "space_name": "MemOS 云服务"}
+    ).json()["data"]
+    assert {d["name"]: d["domain_id"] for d in updated["domains"]} == {
+        "代码开发": ids["代码开发"],
+        "产品设计": ids["产品设计"],
+        "运营物料": ids["运营物料"],
+        "质量保障": ids["测试"],
+    }
+    for bad_id in ("没有这个", other["domains"][0]["domain_id"]):
+        r = client.post(
+            "/product/update_domains",
+            json={"space_id": sid, "domains": [{"domain_id": bad_id, "new_name": "丙"}]},
+        )
+        assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_NOT_REGISTERED", bad_id
+    r = client.post(
+        "/product/update_domains",
+        json={"space_id": sid, "domains": [{"name": "代码开发", "new_name": "丙"}]},
+    )
+    assert r.status_code == 422
+    r = client.post(
+        "/product/update_domains",
+        json={"space_id": sid, "domains": [{"domain_id": " ", "new_name": "丙"}]},
+    )
+    assert r.status_code == 400 and r.json()["reason"] == "FIELD_EMPTY"
+    r = client.post(
+        "/product/update_domains",
+        json={"space_id": sid, "domains": [{"domain_id": ids["测试"], "new_name": "代码开发"}]},
+    )
+    assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_RENAME_CONFLICT"
+    # 链式改名（甲改成乙现在的名称、乙同批改走）和两个领域改成同一个新名称：不论批内顺序都拒绝
+    chain = [
+        {"domain_id": ids["产品设计"], "new_name": "代码开发"},
+        {"domain_id": ids["代码开发"], "new_name": "研发"},
+    ]
+    same_target = [
+        {"domain_id": ids["产品设计"], "new_name": "新名称"},
+        {"domain_id": ids["代码开发"], "new_name": "新名称"},
+    ]
+    for batch in (chain, chain[::-1], same_target):
+        r = client.post("/product/update_domains", json={"space_id": sid, "domains": batch})
+        assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_RENAME_CONFLICT", batch
+    # 改成自己现在的名称不算冲突
+    r = client.post(
+        "/product/update_domains",
+        json={"space_id": sid, "domains": [{"domain_id": ids["代码开发"], "new_name": "代码开发"}]},
+    )
+    assert r.status_code == 200
+    assert [d["name"] for d in listed()] == ["代码开发", "产品设计", "运营物料", "质量保障"]
+
+    # delete_domains 按 domain_id；已不存在的、别的 Space 的 ID 忽略（PRD）；成功时 data 为空
     r = client.post(
         "/product/delete_domains",
-        json={"space_id": sid, "domains": ["运营物料", "测试", "没有这个"]},
+        json={
+            "space_id": sid,
+            "domain_ids": [
+                f"  {ids['运营物料']} ",  # 首尾空白与 update_domains 一样先去掉
+                ids["测试"],
+                "没有这个",
+                "",
+                " ",
+                other["domains"][0]["domain_id"],
+            ],
+        },
     )
-    assert r.status_code == 200 and len(r.json()["data"]["domains"]) == 2
+    assert r.status_code == 200 and r.json()["data"] is None
+    assert [d["name"] for d in listed()] == ["代码开发", "产品设计"]
+    assert (
+        len(
+            client.post("/product/list_domains", json={"space_id": other["space_id"]}).json()[
+                "data"
+            ]["domains"]
+        )
+        == 1
+    )
+    # 旧的按名称写法不再接受
+    r = client.post("/product/delete_domains", json={"space_id": sid, "domains": ["代码开发"]})
+    assert r.status_code == 422
 
     assert client.post("/product/get_space", json={"space_id": "nope"}).status_code == 404
+
+
+def test_domains_stored_without_an_id_get_a_stable_one():
+    """加 domain_id 之前写入的领域：每次读到同一个 ID，写回后保存下来，改名也不变。"""
+    from memos.project_memory.types import Space
+
+    stored = {
+        "space_id": "space-1",
+        "space_name": "S",
+        "domains": [{"name": "代码开发", "description": "d"}, {"name": "产品设计"}],
+    }
+    first, again = Space.from_props(stored), Space.from_props(stored)
+    ids = [d.domain_id for d in first.domains]
+    assert all(ids) and len(set(ids)) == 2 and ids == [d.domain_id for d in again.domains]
+    assert Space.from_props({**stored, "space_id": "space-2"}).domains[0].domain_id != ids[0]
+
+    first.domains[0].name = "工程开发"
+    saved = first.to_props()
+    assert saved["domains"][0] == {"name": "工程开发", "description": "d", "domain_id": ids[0]}
+    assert [d.domain_id for d in Space.from_props(saved).domains] == ids
+    assert first.to_api()["domains"][1] == {
+        "domain_id": ids[1],
+        "name": "产品设计",
+        "description": "",
+    }
 
 
 def test_write_requires_space_and_domains(app):
@@ -312,6 +458,55 @@ def test_search_get_and_delete(app):
     assert client.post("/product/list_domains", json={"space_id": sid}).json()["data"]["domains"], (
         "清空主题保留领域"
     )
+
+
+def test_delete_memory_routes_by_space_id_or_topic_ids(app, monkeypatch):
+    import memos.api.routers.server_router as server_router
+
+    client, _, _ = app
+    personal, project = [], []
+    monkeypatch.setattr(
+        server_router.handlers.memory_handler,
+        "handle_delete_memories",
+        lambda delete_mem_req, naive_mem_cube: personal.append(delete_mem_req.memory_ids)
+        or {"code": 200, "message": "ok", "data": {}},
+    )
+    monkeypatch.setattr(
+        server_router.project_view,
+        "delete_topics",
+        lambda request: project.append((request.space_id, request.memory_ids)) or {},
+    )
+
+    # memory_ids alone that are all Topic IDs: project memory
+    assert (
+        client.post(
+            "/product/delete_memory", json={"memory_ids": ["topic_a", "topic_b"]}
+        ).status_code
+        == 200
+    )
+    # space_id alone: clear the space
+    assert client.post("/product/delete_memory", json={"space_id": "s1"}).status_code == 200
+    assert project == [(None, ["topic_a", "topic_b"]), ("s1", None)]
+    assert personal == []
+
+    # space_id is one delete mode: it cannot come with memory_ids or a personal delete condition
+    for other in (
+        {"memory_ids": ["topic_a"]},
+        {"file_ids": ["file-1"]},
+        {"filter": {"user_id": "u1"}},
+        {"user_id": "u1"},
+        {"session_id": "conv-1"},
+        {"conversation_id": "conv-1"},
+    ):
+        r = client.post("/product/delete_memory", json={"space_id": "s1", **other})
+        assert r.status_code == 400 and r.json()["reason"] == "INVALID_PARAM", other
+    assert len(project) == 2
+
+    # Everything else is the existing personal memory delete
+    for ids in (["mem-1", "topic_a"], ["mem-1", "Topic_a", " topic_b"]):
+        assert client.post("/product/delete_memory", json={"memory_ids": ids}).status_code == 200
+    assert personal == [["mem-1", "topic_a"], ["mem-1", "Topic_a", " topic_b"]]
+    assert len(project) == 2
 
 
 def test_delete_space(app):

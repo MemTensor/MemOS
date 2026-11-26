@@ -170,10 +170,10 @@ class FakeProjectDB(BaseProjectDB):
             working = [d.model_copy() for d in self._domains.get(space_id, [])]
             updated: dict[str, Domain] = {}
             for item in updates:
-                current = next((d for d in working if d.domain == item.domain), None)
+                current = next((d for d in working if d.id == item.domain_id), None)
                 if current is None:
                     raise DomainNotFoundError(
-                        f"Domain not found in space {space_id}: {item.domain}"
+                        f"Domain not found in space {space_id}: {item.domain_id}"
                     )
                 if item.new_domain is not None:
                     if any(d.domain == item.new_domain and d is not current for d in working):
@@ -188,10 +188,10 @@ class FakeProjectDB(BaseProjectDB):
                 self._domains[space_id] = working
             return [d.model_copy() for d in updated.values()]
 
-    def delete_domains(self, space_id, names) -> list[Domain]:
+    def delete_domains(self, space_id, domain_ids) -> list[Domain]:
         with self._lock:
             domains = self._domains.get(space_id, [])
-            deleted = [d for d in domains if d.domain in names]
+            deleted = [d for d in domains if d.id in domain_ids]
             used = {t["domain_id"] for t in self._topics.values() if t["space_id"] == space_id}
             if any(d.id in used for d in deleted):
                 raise DomainInUseError(f"Domain still referenced by topics in space {space_id}")
