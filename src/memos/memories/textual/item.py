@@ -159,6 +159,14 @@ class TextualMemoryMetadata(BaseModel):
         description="Internal algorithm metadata reserved for system use.",
     )
 
+    @field_validator("history", mode="before")
+    @classmethod
+    def _decode_history(cls, value: Any) -> Any:
+        # Neo4j stores each archived snapshot as a JSON string in its property list.
+        if isinstance(value, list):
+            return [json.loads(entry) if isinstance(entry, str) else entry for entry in value]
+        return value
+
     @field_validator("internal_info", "info", mode="before")
     @classmethod
     def _decode_dict_metadata(cls, value: Any, validation_info: ValidationInfo) -> Any:

@@ -28,7 +28,7 @@ from memos.mem_feedback.utils import (
 )
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.read_multi_modal import detect_lang
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import ArchivedTextualMemory, TextualMemoryItem
 from memos.memories.textual.tree_text_memory.organize.manager import (
     MemoryManager,
     extract_working_binding_ids,
@@ -368,6 +368,16 @@ class MemFeedback(BaseMemFeedback):
                 "[Memory Feedback UPDATE] history fallback for %s: %s", old_memory_item.id, e
             )
             updated_item = old_memory_item.model_copy(deep=True)
+            # Preserve the pre-update version even when no version plugin is available.
+            updated_item.metadata.history.append(
+                ArchivedTextualMemory(
+                    version=old_memory_item.metadata.version,
+                    memory=old_memory_item.memory,
+                    is_fast=bool(old_memory_item.metadata.is_fast),
+                    update_type="feedback",
+                )
+            )
+            updated_item.metadata.version = old_memory_item.metadata.version + 1
             updated_item.memory = new_memory_item.memory
             updated_item.metadata.key = new_memory_item.metadata.key
             updated_item.metadata.tags = new_memory_item.metadata.tags
@@ -383,6 +393,10 @@ class MemFeedback(BaseMemFeedback):
                 updated_item.metadata.preference = updated_item.memory
             updated_fields = {
                 "memory": updated_item.memory,
+                "version": updated_item.metadata.version,
+                "history": [
+                    entry.model_dump(exclude_none=True) for entry in updated_item.metadata.history
+                ],
                 "key": updated_item.metadata.key,
                 "tags": updated_item.metadata.tags,
                 "embedding": updated_item.metadata.embedding,

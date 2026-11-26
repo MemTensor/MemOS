@@ -417,6 +417,8 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         user_name = user_name if user_name else self.config.user_name
         fields = fields.copy()  # Avoid mutating external dict
+        if "history" in fields:
+            fields["history"] = _sanitize_neo4j_value(fields["history"])
         set_clauses = []
         params = {"id": id, "fields": fields}
 

@@ -9,12 +9,30 @@ import pytest
 from pydantic import ValidationError
 
 from memos.memories.textual.item import (
+    ArchivedTextualMemory,
     PreferenceTextualMemoryMetadata,
     SearchedTreeNodeTextualMemoryMetadata,
     TextualMemoryItem,
     TextualMemoryMetadata,
     TreeNodeTextualMemoryMetadata,
 )
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+def test_history_accepts_existing_objects_and_json_entries(encoded):
+    entry = {"memory": "old", "version": 3, "update_type": "feedback"}
+    history = [json.dumps(entry) if encoded else entry]
+    item = TextualMemoryItem(memory="new", metadata={"history": history, "version": 4})
+    assert item.metadata.history == [
+        ArchivedTextualMemory(**entry, created_at=item.metadata.history[0].created_at)
+    ]
+    assert history == [json.dumps(entry) if encoded else entry]
+
+
+@pytest.mark.parametrize("entry", ["not json", "[]", "null", "42"])
+def test_history_rejects_invalid_json_entries(entry):
+    with pytest.raises(ValidationError):
+        TextualMemoryItem(memory="new", metadata={"history": [entry]})
 
 
 @pytest.mark.parametrize(
