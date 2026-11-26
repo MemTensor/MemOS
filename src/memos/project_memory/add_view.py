@@ -204,10 +204,21 @@ class RelationalProjectView:
             )
             if domain_id in existing and existing[domain_id] != domain.name:
                 renamed.append(domain_id)
+                # Unfinished and staged Episodes keep their candidate domains by name.
                 cursor.execute(
-                    """UPDATE episodes SET domains = array_replace(domains, %s, %s)
-                       WHERE space_id = %s AND outcome = 'pending'""",
-                    (existing[domain_id], domain.name, space.space_id),
+                    """UPDATE add_jobs SET domains = array_replace(domains, %s, %s),
+                          organize_result = CASE
+                              WHEN organize_result->'staged'->>'domain' = %s
+                              THEN jsonb_set(organize_result, '{staged,domain}', to_jsonb(%s::text))
+                              ELSE organize_result END
+                       WHERE space_id = %s AND outcome IN ('pending', 'staged')""",
+                    (
+                        existing[domain_id],
+                        domain.name,
+                        existing[domain_id],
+                        domain.name,
+                        space.space_id,
+                    ),
                 )
         missing = list(existing.keys() - seen)
         if missing:
@@ -218,9 +229,10 @@ class RelationalProjectView:
             if cursor.fetchone():
                 raise ValueError("领域仍被主题引用，不能删除")
             cursor.execute(
-                """UPDATE episodes SET staged_domain_id = NULL
-                   WHERE space_id = %s AND staged_domain_id = ANY(%s)""",
-                (space.space_id, missing),
+                """UPDATE add_jobs SET organize_result = jsonb_set(
+                          organize_result, '{staged,domain}', 'null'::jsonb)
+                   WHERE space_id = %s AND organize_result->'staged'->>'domain' = ANY(%s)""",
+                (space.space_id, [existing[domain_id] for domain_id in missing]),
             )
             cursor.execute(
                 "DELETE FROM domains WHERE space_id = %s AND id = ANY(%s)",
@@ -229,37 +241,34 @@ class RelationalProjectView:
         return renamed
 
     def _clear_topics(self, cursor: Any, space_id: str, now: Any) -> list[str]:
+        """Record clear_time, reset Formation, fail the unfinished Episodes, retire the staged
+        ones and delete the Topics (entries cascade, episodes.topic_id is set NULL)."""
         cursor.execute(
-            "UPDATE spaces SET cleared_at = %s WHERE id = %s RETURNING project_id",
+            """UPDATE spaces SET clear_time = %s, last_formation_time = NULL,
+                      formation_version = formation_version + 1
+               WHERE id = %s RETURNING project_id""",
             (now, space_id),
         )
         project_id = cursor.fetchone()["project_id"]
-        cursor.execute(
-            """INSERT INTO add_space_state AS st (space_id, formation_version) VALUES (%s, 1)
-               ON CONFLICT (space_id) DO UPDATE SET last_formation_at = NULL,
-                   staged_since_last_formation = 0, formation_version = st.formation_version + 1""",
-            (space_id,),
-        )
+        error = {"reason": "SPACE_CLEARED", "message": "Space was cleared"}
         cursor.execute(
             """WITH pending AS (
-                   SELECT id, state FROM episodes
+                   SELECT episode_id, stage FROM add_jobs
                    WHERE space_id = %s AND outcome = 'pending' FOR UPDATE
                )
-               UPDATE episodes e SET
-                      state = CASE WHEN e.state = 'open' THEN 'closed' ELSE e.state END,
-                      stage = 'done', outcome = 'failed', closed_at = COALESCE(e.closed_at, %s),
-                      updated_at = %s, error = %s
-               FROM pending WHERE e.id = pending.id
-               RETURNING e.id, e.attempt, pending.state AS previous_state""",
-            (
-                space_id,
-                now,
-                now,
-                json_value({"reason": "SPACE_CLEARED", "message": "Space was cleared"}),
-            ),
+               UPDATE add_jobs j SET stage = 'done', outcome = 'failed', close_due_time = NULL,
+                      next_retry_time = NULL, update_time = %s, error = %s,
+                      organize_result = CASE WHEN pending.stage = 'episode_open'
+                          THEN COALESCE(j.organize_result, '{}'::jsonb) || jsonb_build_object(
+                              'close', jsonb_build_object('reason', 'space_cleared',
+                                                          'at', %s::text))
+                          ELSE j.organize_result END
+               FROM pending WHERE j.episode_id = pending.episode_id
+               RETURNING j.episode_id AS id, j.attempt, pending.stage AS previous_stage""",
+            (space_id, now, json_value(error), now.isoformat()),
         )
         for row in cursor.fetchall():
-            if row["previous_state"] == "open":
+            if row["previous_stage"] == "episode_open":
                 record_event(
                     cursor,
                     None,
@@ -279,14 +288,16 @@ class RelationalProjectView:
                 detail={"outcome": "failed", "reason": "SPACE_CLEARED"},
             )
         cursor.execute(
-            """UPDATE episodes SET staged_status = 'archived', updated_at = %s
-               WHERE space_id = %s AND staged_status = 'active'""",
+            """UPDATE add_jobs SET outcome = 'skipped', update_time = %s,
+                      organize_result = jsonb_set(organize_result, '{staged,status}',
+                                                  '"archived"'::jsonb)
+               WHERE space_id = %s AND outcome = 'staged'""",
             (now, space_id),
         )
         cursor.execute("DELETE FROM topics WHERE space_id = %s RETURNING id", (space_id,))
         removed = sorted(row["id"] for row in cursor.fetchall())
         if self.store.retrieval_index:
-            # cleared_at hides every snapshot accepted before the clear.
+            # clear_time hides every snapshot accepted before the clear.
             sync_space(cursor, project_id, space_id)
         return removed
 
@@ -377,7 +388,7 @@ class RelationalProjectView:
         with self.store.transaction(readonly=True) as cursor:
             cursor.execute(
                 """SELECT i.entry_type AS kind, i.topic_id, i.space_id FROM project_entries i
-                   WHERE i.id = %s""",
+                   WHERE i.id = %s AND i.parent_decision_id IS NULL""",
                 (memory_id,),
             )
             return cursor.fetchone()
@@ -391,7 +402,7 @@ class RelationalProjectView:
         if kind == "conv":
             with self.store.transaction(readonly=True) as cursor:
                 cursor.execute(
-                    """SELECT DISTINCT space_id FROM episode_turns
+                    """SELECT DISTINCT space_id FROM add_jobs
                        WHERE conversation_key = %s ORDER BY space_id""",
                     (identifier,),
                 )
@@ -414,7 +425,7 @@ class RelationalProjectView:
         with self.store.transaction(readonly=True) as cursor:
             cursor.execute(
                 """SELECT t.id FROM topics t JOIN spaces s ON s.id = t.space_id
-                   WHERE s.cleared_at IS NULL AND t.id = ANY(%s::text[])""",
+                   WHERE s.clear_time IS NULL AND t.id = ANY(%s::text[])""",
                 (remembered,),
             )
             visible = {row["id"] for row in cursor.fetchall()}
@@ -505,11 +516,16 @@ class RelationalProjectView:
 
     def list_messages(self, space_id: str, conversation_id: str) -> list[Msg]:
         with self.store.transaction(readonly=True) as cursor:
+            # The conversation's messages that some Episode of this Space covers.
             cursor.execute(
-                """SELECT m.* FROM episode_turns et JOIN messages m USING (project_id, conversation_key, turn_id)
-                   WHERE et.space_id = %s AND et.conversation_key = %s
-                   ORDER BY m.turn_seq, m.msg_seq, m.message_id""",
-                (space_id, conversation_id),
+                """SELECT m.* FROM messages m
+                   WHERE m.conversation_key = %s AND EXISTS (
+                       SELECT 1 FROM episodes e JOIN add_jobs j ON j.episode_id = e.id
+                       WHERE e.space_id = %s AND e.conversation_key = m.conversation_key
+                         AND j.project_id = m.project_id
+                         AND m.msg_seq BETWEEN e.message_seq_start AND e.message_seq_end)
+                   ORDER BY m.msg_seq""",
+                (conversation_id, space_id),
             )
             rows = cursor.fetchall()
         calls = {call["id"]: call["function"] for row in rows for call in row["tool_calls"] or []}
@@ -528,7 +544,7 @@ class RelationalProjectView:
                     tool_args=tool.get("arguments", ""),
                     tool_call_id=row["tool_call_id"] or "",
                     notes=row["experience_notes"] or [],
-                    seq=row["turn_seq"],
+                    seq=row["msg_seq"],
                     node_id=row["message_id"],
                 )
             )
