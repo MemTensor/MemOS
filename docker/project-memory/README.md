@@ -57,6 +57,7 @@ python3 docker/project-memory/smoke.py \
 | --- | --- |
 | 项目身份 | 不通过环境变量配置：`create_space` 必须带 `project_id`（云端由网关鉴权后填入）；项目记忆的 `add` 可不带，按所写空间归属的项目写入，带了则须与空间一致。 |
 | 项目数据库 | `PROJECT_MEMORY_GRAPH_DB=postgres`，`PROJECT_MEMORY_POSTGRES_SCHEMA=project_memory`。连接使用存储层的 `PROJECT_DB_HOST`、`PROJECT_DB_PORT`、`PROJECT_DB_USER`、`PROJECT_DB_PASSWORD`、`PROJECT_DB_NAME`，缺少 `PROJECT_DB_HOST` 时服务无法启动。pgvector 镜像没有 zhparser，`PROJECT_DB_TEXT_SEARCH_PARSER=simple`。数据库通过 `127.0.0.1:5433` 从本机访问。 |
+| 长度上限 | 默认值在 `src/memos/configs/project_memory_limits.yaml`（主题名 30、摘要 160、描述 800 起每条当前条目加 80 至多 3000、决策与进展 200、经验 400 字）。部署时用 `PROJECT_MEMORY_LIMITS_FILE` 指向自己的 YAML/JSON，或用 `PROJECT_MEMORY_LIMIT_<KEY>` 逐项覆盖；不从请求读取。 |
 | Redis Streams | `MEMSCHEDULER_USE_REDIS_QUEUE=true`。`REDIS_*` 和 `MEMSCHEDULER_REDIS_*` 都指向 `redis:6379`。可通过 `docker compose -f docker/project-memory/docker-compose.yml exec redis redis-cli` 从容器内查看。 |
 | 模型 | `PROJECT_MEMORY_LLM_*`、`PROJECT_MEMORY_JUDGE_LLM_*` 和 `PROJECT_MEMORY_EMBEDDER_*`。 |
 | Episode | 空闲 900 秒，首轮最长等待 1800 秒，最多 8 轮，体量阈值按 12000 token 估算。 |
