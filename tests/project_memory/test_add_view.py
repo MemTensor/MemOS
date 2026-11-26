@@ -83,6 +83,28 @@ def test_delete_topics_by_id_across_spaces(add_store):
     assert view.get_space("s2").domain_names() == ["dev"]
 
 
+def test_service_delete_without_space_uses_relational_delete(add_store):
+    """service.delete with Topic IDs only goes to the relational delete (the production path)."""
+    from memos.project_memory.judge import ModelHub
+    from memos.project_memory.service import ProjectMemoryService
+
+    view = RelationalProjectView(add_store)
+    view.put_space(Space(space_id="s1", project_id="p", space_name="s1", domains=[Domain("dev")]))
+    with add_store.transaction() as cursor:
+        cursor.execute(
+            """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary,
+                                   topic_description, create_time, update_time)
+               SELECT 'topic_a', 's1', id, 'T', '', '', now(), now() FROM domains
+               WHERE space_id = 's1'"""
+        )
+    service = ProjectMemoryService(view, ModelHub(llm=None))
+
+    out = service.delete(SimpleNamespace(space_id=None, memory_ids=["topic_a", "topic_gone"]))
+
+    assert out == {"deleted_topic_ids": ["topic_a"]}
+    assert view.get_topic("topic_a") is None
+
+
 def test_clear_fences_open_episodes(add_store):
     view = RelationalProjectView(add_store)
     view.put_space(

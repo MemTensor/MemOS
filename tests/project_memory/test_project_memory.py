@@ -500,13 +500,26 @@ def test_delete_memory_routes_topic_ids_to_project_memory(app, monkeypatch):
     # Topic IDs mixed with other IDs or with a personal delete condition delete nothing
     for body in (
         {"memory_ids": ["topic_a", "mem-1"]},
+        {"memory_ids": ["topic_a", ""]},
         {"memory_ids": ["topic_a"], "filter": {"user_id": "u1"}},
+        {"memory_ids": ["topic_a"], "filter": {}},
         {"memory_ids": ["topic_a"], "user_id": "u1"},
         {"memory_ids": ["topic_a"], "writable_cube_ids": ["cube"]},
+        {"memory_ids": ["topic_a"], "file_ids": ["file-1"]},
+        {"memory_ids": ["topic_a"], "session_id": "conv-1"},
+        {"memory_ids": ["topic_a"], "conversation_id": "conv-1"},
     ):
         r = client.post("/product/delete_memory", json=body)
         assert r.status_code == 400, body
         assert r.json()["reason"] == "INVALID_PARAM"
+    assert personal == []
+
+    # With space_id the request deletes inside that space as before: no 400 for other fields
+    r = client.post(
+        "/product/delete_memory",
+        json={"space_id": "no-such-space", "memory_ids": ["topic_a"], "user_id": "u1"},
+    )
+    assert r.status_code == 404
     assert personal == []
 
     # Only an exact `topic_` prefix is a Topic ID; anything else stays personal memory
