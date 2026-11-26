@@ -45,7 +45,7 @@ from memos.project_dbs.item import (
     TopicCreate,
     TopicUpdate,
 )
-from memos.project_dbs.postgres_rows import _ENTRY_COLS, entries_from_rows
+from memos.project_dbs.postgres_rows import _ENTRY_COLS, TOPIC_ORDER, entries_from_rows
 from memos.project_dbs.postgres_writer import (
     _card_values,
     _entry_values,
@@ -262,8 +262,9 @@ def load_topics(cursor: Any, where: str, params: tuple) -> list[dict[str, Any]]:
     """Topics matching `where` (over `topics t`, `spaces s`, `domains d`) as Add dicts.
 
     Entries are the ACTIVE rows plus retired (ARCHIVED) experiences in chat-time order;
-    decisions carry their history and conflicts. Topics come newest update first."""
-    cursor.execute(f"{_TOPIC_SELECT} WHERE {where} ORDER BY t.update_time DESC, t.id", params)
+    decisions carry their history and conflicts. Topics come in get/memory order: the
+    importance key first (topics.extra.rank_time, see project_dbs.ranking), then update time."""
+    cursor.execute(f"{_TOPIC_SELECT} WHERE {where} ORDER BY {TOPIC_ORDER}", params)
     topics = cursor.fetchall()
     if not topics:
         return []
