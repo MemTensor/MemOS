@@ -1,5 +1,6 @@
 import os
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 from uuid import uuid4
@@ -9,6 +10,7 @@ import pytest
 from memos.project_memory.add_dispatch import label_for
 from memos.project_memory.add_runtime import EpisodeAddRuntime, RuntimeSettings
 from memos.project_memory.add_store import PostgresAddStore
+from memos.project_memory.judge import Answer, ModelError
 
 
 @pytest.fixture
@@ -187,6 +189,7 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
                         "action": "attach",
                         "topic_id": target["id"],
                         "relationship": "same_work",
+                        "same_deliverable": True,
                         "positive_basis": "same_goal",
                         "independently_deliverable": False,
                         "affects_existing_decisions": True,
@@ -266,3 +269,370 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
     moved = store.load_episode(old["id"])
     assert moved["staged_status"] == "moved"
     assert moved["moved_to_topic_id"] == topic_before["id"]
+
+
+def test_episode_lifecycle_events_carry_stage_usage(store):
+    from memos.llms.usage import CHAT, record_usage
+
+    queue = []
+    hub = Mock()
+
+    def write(scope, _prompt, _inputs):
+        record_usage(CHAT, "chat-m", {"prompt_tokens": 40, "completion_tokens": 2})
+        return {"episode_summary": "", "drafts": []}
+
+    hub.write.side_effect = write
+    runtime = EpisodeAddRuntime(store, hub, queue.extend, Mock(), RuntimeSettings())
+    runtime.accept(
+        SimpleNamespace(
+            user_id="member",
+            space_ids=["test"],
+            messages=[{"role": "user", "content": "We decided to keep weekly reviews."}],
+        )
+    )
+    runtime.handle([queue.pop()])
+
+    with store.transaction(readonly=True) as cur:
+        cur.execute("SELECT event, stage, detail FROM add_episode_events ORDER BY at, id")
+        events = cur.fetchall()
+    assert [row["event"] for row in events] == [
+        "opened",
+        "turn",
+        "closed",
+        "published",
+        "claimed",
+        "finished",
+        "stage_done",
+    ]
+    assert events[1]["detail"]["chars"] == len("We decided to keep weekly reviews.")
+    assert events[2]["detail"] == {"reason": "no_conversation"}
+    assert events[3]["detail"] == {"label": "project_add_process"}
+    done = events[-1]["detail"]
+    assert done["next_stage"] == "done" and done["outcome"] == "skipped"
+    assert done["usage"][0]["total_tokens"] == 42
+    assert events[-2]["detail"]["outcome"] == "skipped"
+
+
+def _staging_hub(formation_ids=None, *, cluster=True, formation_error=False):
+    """A hub that stages every Episode and clusters all of them when asked."""
+    hub = Mock()
+
+    def write(scope, _prompt, inputs):
+        if scope == "episode.extract":
+            (message,) = inputs["episode"]
+            return {
+                "episode_summary": "connection pool sizing " + message["content"],
+                "drafts": [
+                    {
+                        "kind": "decision",
+                        "message_id": message["id"],
+                        "quote": message["content"],
+                        "content": message["content"],
+                    }
+                ],
+            }
+        if scope in {"episode.assign", "episode.assign.batch"}:
+            rows = inputs.get("episodes")
+            if rows is None:
+                return {"action": "stage"}
+            return {
+                "assignments": [{"episode_id": r["episode_id"], "action": "stage"} for r in rows]
+            }
+        if scope == "episode.formation":
+            if formation_error:
+                raise ModelError("Formation down")
+            if not cluster:
+                return {"clusters": []}
+            ids = [ep["id"] for ep in inputs["episodes"]]
+            return {
+                "clusters": [
+                    {
+                        "episode_ids": ids,
+                        "domain": "product",
+                        "name": "Connection pool sizing",
+                        "independently_deliverable": True,
+                        "affects_existing_decisions": False,
+                    }
+                ]
+            }
+        if scope == "dec.update":
+            return {
+                "results": [
+                    {"n": row["n"], "decision_id": None, "same_as": None, "action": "add"}
+                    for row in inputs["new"]
+                ]
+            }
+        if scope == "episode.metadata":
+            return {"summary": "Connection pool", "description": "Connection pool sizing"}
+        raise AssertionError(f"Unexpected model operation {scope}")
+
+    hub.write.side_effect = write
+    return hub
+
+
+def _add(runtime, work, user, content):
+    runtime.accept(
+        SimpleNamespace(
+            user_id=user,
+            conversation_id=f"conv-{user}",
+            space_ids=["test"],
+            domains=["product"],
+            messages=[{"message_id": user, "role": "user", "content": content}],
+        )
+    )
+    while work:
+        runtime.handle([work.pop(0)])
+
+
+def test_flush_closes_open_episodes_and_forms_the_tail_batch(store):
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    work = []
+    runtime = EpisodeAddRuntime(
+        store, _staging_hub(), work.extend, Redis.from_url(redis_url), RuntimeSettings()
+    )
+    _add(runtime, work, "alice", "Pool size is 8 connections.")
+    _add(runtime, work, "bob", "Keep the pool at 8 connections per worker.")
+
+    first = runtime.flush("test")
+    assert len(first["closed_episode_ids"]) == 2
+    assert first["formation"]["reason"] == "EPISODES_IN_FLIGHT"
+    while work:
+        runtime.handle([work.pop(0)])
+    assert len(store.read_staged("test")) == 2
+
+    second = runtime.flush("test")
+    assert second["pending_episode_ids"] == []
+    formation = second["formation"]
+    assert formation["ran"] is True and formation["formation_version"] == 1
+    (topic,) = store.read_topics("test")
+    assert formation["created_topic_ids"] == [topic["id"]]
+    assert sorted(formation["moved"].values()) == [topic["id"], topic["id"]]
+    assert store.read_staged("test") == []
+    assert len(topic["decisions"]) >= 1
+    assert second["staged_remaining"] == 0
+    assert runtime.flush("test")["formation"]["reason"] == "NO_STAGED"
+
+
+def test_quiet_space_forms_staged_episodes_only_after_the_interval(store):
+    from datetime import timedelta
+
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    work = []
+    runtime = EpisodeAddRuntime(
+        store,
+        _staging_hub(),
+        work.extend,
+        Redis.from_url(redis_url),
+        RuntimeSettings(formation_interval=3600),
+    )
+    _add(runtime, work, "alice", "Pool size is 8 connections.")
+    _add(runtime, work, "bob", "Keep the pool at 8 connections per worker.")
+    runtime.acceptance.close_open("test")
+    for episode in runtime.dispatch.due(runtime.now(), stale_seconds=0):
+        runtime._publish(episode["id"])
+    while work:
+        runtime.handle([work.pop(0)])
+    assert len(store.read_staged("test")) == 2
+
+    assert runtime.form_due_spaces() == []
+    assert runtime.form_space("test")["reason"] == "NOT_DUE"
+    later = runtime.now() + timedelta(hours=2)
+    runtime.now = lambda: later
+    (formed,) = runtime.form_due_spaces()
+    assert formed["ran"] is True
+    assert store.read_staged("test") == []
+
+
+def _settled_runtime(store, hub, **settings):
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    client = Redis.from_url(redis_url)
+    client.delete(*client.keys("project_formation_*") or ["none"])
+    work = []
+    runtime = EpisodeAddRuntime(store, hub, work.extend, client, RuntimeSettings(**settings))
+    _add(runtime, work, "alice", "Pool size is 8 connections.")
+    _add(runtime, work, "bob", "Keep the pool at 8 connections per worker.")
+    runtime.flush("test")
+    while work:
+        runtime.handle([work.pop(0)])
+    return runtime, client
+
+
+def test_forced_flush_does_not_age_unclustered_episodes(store):
+    runtime, _ = _settled_runtime(store, _staging_hub(cluster=False))
+    for _ in range(4):
+        result = runtime.flush("test")
+        assert result["formation"]["ran"] is True
+    staged = store.read_staged("test")
+    assert len(staged) == 2 and {ep["staged_attempts"] for ep in staged} == {0}
+    assert result["staged_remaining"] == 2
+
+
+def test_failed_quiet_formation_backs_off_but_flush_still_runs(store):
+    from datetime import timedelta
+
+    runtime, client = _settled_runtime(
+        store, _staging_hub(formation_error=True), formation_interval=3600
+    )
+    later = runtime.now() + timedelta(hours=2)
+    runtime.now = lambda: later
+    assert runtime.form_due_spaces() == []
+    assert client.exists(runtime._formation_key("backoff", "test"))
+    assert runtime.form_space("test")["reason"] == "BACKING_OFF"
+    assert runtime.flush("test")["formation"]["reason"] == "FORMATION_MODEL_UNAVAILABLE"
+
+
+def test_concurrent_formation_planning_is_skipped(store):
+    runtime, client = _settled_runtime(store, _staging_hub())
+    client.set(runtime._formation_key("planning", "test"), "other", ex=60)
+    try:
+        assert runtime.flush("test")["formation"]["reason"] == "FORMATION_RUNNING"
+    finally:
+        client.delete(runtime._formation_key("planning", "test"))
+    assert runtime.flush("test")["formation"]["ran"] is True
+
+
+def _drain(runtime, work):
+    while work:
+        runtime.handle([work.pop(0)])
+
+
+def _conversation(runtime, task_id, *texts):
+    return runtime.accept(
+        SimpleNamespace(
+            task_id=task_id,
+            user_id="member",
+            conversation_id="chat",
+            space_ids=["test"],
+            messages=[
+                {"message_id": f"{task_id}:{i}", "role": "user", "content": text}
+                for i, text in enumerate(texts)
+            ],
+        )
+    )
+
+
+def _close_and_publish(runtime):
+    closed = runtime.acceptance.close_open("test")
+    for episode_id in closed:
+        runtime._publish(episode_id)
+    return closed
+
+
+def test_boundary_split_creates_sibling_episodes_before_extraction(store):
+    calls = []
+
+    def judge(scope, state, questions):
+        calls.append(scope)
+        assert [turn["member"] for turn in state["turns"]] == ["Fix the export.", "Now docs."]
+        return {q: Answer(q, "yes") for q in questions}
+
+    def write(scope, _prompt, inputs):
+        calls.append(scope)
+        return {"episode_summary": "", "drafts": []}
+
+    hub = Mock()
+    hub.write.side_effect = write
+    hub.judge.side_effect = judge
+    work = []
+    runtime = EpisodeAddRuntime(store, hub, work.extend, Mock(), RuntimeSettings())
+    task = _conversation(runtime, "task", "Fix the export.", "Now docs.")["task_id"]
+    (closed,) = _close_and_publish(runtime)
+    _drain(runtime, work)
+    assert calls == ["episode.boundary", "episode.extract", "episode.extract"]
+
+    first = store.load_episode(closed)
+    assert (first["message_seq_start"], first["message_seq_end"]) == (1, 1)
+    assert first["boundary"]["starts"] == [0, 1] and first["boundary"]["judged"]
+    with store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT id FROM episodes WHERE id <> %s", (closed,))
+        sibling = store.load_episode(cursor.fetchone()["id"])
+    assert (sibling["message_seq_start"], sibling["message_seq_end"]) == (2, 2)
+    assert sibling["previous_episode_id"] == closed
+    assert sibling["boundary"]["continues_previous"] is False
+    assert sibling["boundary"]["judged"] is False
+    assert sibling["task_ranges"] == {"task": [2, 2]}
+    assert first["task_ranges"] == {"task": [1, 1]}
+    assert sibling["close_reason"] == "split"
+    assert sibling["accept_time"] == first["accept_time"]
+    assert {first["outcome"], sibling["outcome"]} == {"skipped"}
+    assert runtime.status(task, "member")["status"] == "completed"
+
+
+def test_boundary_model_outage_falls_back_after_the_retries(store):
+    def write(scope, _prompt, _inputs):
+        return {"episode_summary": "", "drafts": []}
+
+    hub = Mock()
+    hub.write.side_effect = write
+    hub.judge.side_effect = ModelError("boundary down")
+    work = []
+    clock = [datetime.now(timezone.utc)]
+    runtime = EpisodeAddRuntime(
+        store, hub, work.extend, Mock(), RuntimeSettings(), clock=lambda: clock[0]
+    )
+    _conversation(runtime, "task", "First part.", "Second part.")
+    (closed,) = _close_and_publish(runtime)
+    for _ in range(4):
+        _drain(runtime, work)
+        clock[0] += timedelta(seconds=60)
+        runtime.recover()
+    episode = store.load_episode(closed)
+    assert episode["outcome"] == "skipped"
+    assert episode["warnings"] == ["BOUNDARY_MODEL_UNAVAILABLE"]
+    assert episode["boundary"] == {
+        "starts": [0],
+        "continues_previous": False,
+        "judged": False,
+        "reasons": [],
+    }
+
+
+def test_a_switch_drops_the_previous_topic_from_recall(store, monkeypatch):
+    from memos.project_memory import add_runtime
+
+    seen = []
+
+    def recall(episode, topics, ranked=None, **kwargs):
+        seen.append(episode.get("previous"))
+        return []
+
+    monkeypatch.setattr(add_runtime, "recall_candidates", recall)
+    switch = {"continues": "no"}
+
+    def judge(scope, state, questions):
+        return {q: Answer(q, switch.get(q, "no")) for q in questions}
+
+    def write(scope, _prompt, inputs):
+        (message,) = inputs["episode"]
+        quote = message["content"]
+        draft = {"kind": "decision", "message_id": message["id"], "quote": quote, "content": quote}
+        return {"episode_summary": quote, "drafts": [draft]}
+
+    hub = Mock()
+    hub.write.side_effect = write
+    hub.judge.side_effect = judge
+    work = []
+    runtime = EpisodeAddRuntime(store, hub, work.extend, Mock(), RuntimeSettings())
+    for task, text in (("one", "We use the old API."), ("two", "We ship on Friday.")):
+        _conversation(runtime, task, text)
+        _close_and_publish(runtime)
+        _drain(runtime, work)
+    switch["continues"] = "yes"
+    _conversation(runtime, "three", "We keep shipping on Friday.")
+    _close_and_publish(runtime)
+    _drain(runtime, work)
+    # First Episode: nothing before it; second: a switch; third: continues the second.
+    assert seen[0] is None and seen[1] is None
+    assert seen[2]["outcome"] == "staged"

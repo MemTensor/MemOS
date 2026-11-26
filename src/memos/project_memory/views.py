@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from memos.configs.project_memory_limits import LIMITS, cut_at_sentence
+
 
 ENTRY_FIELDS = {"decision": "decisions", "experience": "experiences", "timeline": "timeline"}
 ITEM_TYPES = ("topic", *ENTRY_FIELDS)
@@ -63,7 +65,7 @@ def experience_content(content: str, card: dict | None) -> str:
     parts = ("task_intent", "problem", "principle")
     if card and all(card.get(k) for k in parts):
         content = "｜".join(card[k] for k in parts)
-    return content[:200]
+    return cut_at_sentence(content, LIMITS.experience)[0]
 
 
 def entry_view(kind: str, payload: dict, full: bool) -> dict:

@@ -9,9 +9,11 @@ import time
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from memos.llms.usage import EMBEDDING, expect_usage, meter_usage
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
@@ -32,10 +34,15 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 
 from .add_acceptance import AddAcceptance
-from .add_algorithm import organize_episode, recall_candidates
-from .add_commit import DraftWitnessError, EpisodeFenceError, commit_changeset
+from .add_algorithm import formation_due, organize_episode, organize_staged, recall_candidates
+from .add_boundary import judge_boundary, unjudged
+from .add_commit import (
+    DraftWitnessError,
+    EpisodeFenceError,
+    commit_changeset,
+    commit_formation,
+)
 from .add_dispatch import EpisodeDispatch, StageLease, label_for
-from .add_evidence import anchor_keys, collect_anchors
 from .add_extraction import extract_episode, jsonable
 from .add_index import index_changeset, ranked_topics
 from .add_merge import VersionConflictError, prepare_merge, rebase_append_only, rewrite_metadata
@@ -108,15 +115,26 @@ class EpisodeAddRuntime:
         self.redis = redis
         self.settings = settings or RuntimeSettings.from_env()
         self.now = clock or (lambda: datetime.now(timezone.utc))
-        self.embedder = embedder
+        self.embedder = self._metered(embedder, embedding_model_id) if embedder else None
         self.legacy_status = legacy_status
         self.embedding_model_id = embedding_model_id
-        self.acceptance = AddAcceptance(
-            store, clock=self.now, anchor_collector=collect_anchors, anchor_keyer=anchor_keys
-        )
+        self.acceptance = AddAcceptance(store, clock=self.now)
         self.dispatch = EpisodeDispatch(store, lease_seconds=self.settings.stage_lease_seconds)
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
+        self._formation_thread: threading.Thread | None = None
+
+    @staticmethod
+    def _metered(
+        embedder: Callable[[list[str]], list[list[float]]], model: str | None
+    ) -> Callable[[list[str]], list[list[float]]]:
+        """Count embedding calls of backends that do not report usage as usage-less."""
+
+        def embed(texts: list[str]) -> list[list[float]]:
+            with expect_usage(EMBEDDING, model):
+                return embedder(texts)
+
+        return embed
 
     def accept(self, request: Any) -> dict[str, Any]:
         accepted = self.acceptance.accept(request)
@@ -202,7 +220,7 @@ class EpisodeAddRuntime:
                     )
                 ]
             )
-            self.dispatch.published(episode, now)
+            self.dispatch.published(episode, now, label=label)
         except Exception as exc:
             logger.warning(
                 "Project Add will recover publication for %s (%s)", episode_id, type(exc).__name__
@@ -228,6 +246,9 @@ class EpisodeAddRuntime:
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
+        if self._formation_thread:
+            self._formation_thread.join(timeout=5)
+            self._formation_thread = None
 
     def _run_timer(self) -> None:
         # One scanner per schema: the due scan covers every project stored in it.
@@ -244,11 +265,172 @@ class EpisodeAddRuntime:
                             self.acceptance.close_due()
                         finally:
                             self.redis.eval(_RELEASE_LOCK, 1, scan_key, token)
+                        self._start_formation_scan()
                     next_close = time.monotonic() + self.settings.scan_seconds
                 self.recover()
             except Exception as exc:
                 logger.warning("Project Add timer will retry (%s)", type(exc).__name__)
             self._stopped.wait(self.settings.recover_seconds)
+
+    def _start_formation_scan(self) -> None:
+        """Run quiet-Space Formation beside the timer so closing and recovery never wait on it."""
+        if self._formation_thread is not None and self._formation_thread.is_alive():
+            return
+        self._formation_thread = threading.Thread(
+            target=self._formation_scan, name="project-add-formation", daemon=True
+        )
+        self._formation_thread.start()
+
+    def _formation_scan(self) -> None:
+        try:
+            self.form_due_spaces()
+        except Exception as exc:
+            logger.warning("Project Add Formation scan will retry (%s)", type(exc).__name__)
+
+    def form_due_spaces(self) -> list[dict[str, Any]]:
+        """Run Formation for quiet Spaces whose staged Episodes waited past the interval."""
+        results = []
+        for space_id in self.store.staged_space_ids():
+            if self._stopped.is_set():
+                break
+            try:
+                result = self.form_space(space_id)
+            except Exception as exc:
+                # Store or Redis trouble is usually transient: retry after a few scans.
+                self._back_off(space_id, self.settings.scan_seconds * 5)
+                logger.warning(
+                    "Project Add Formation for a quiet Space backs off (%s)", type(exc).__name__
+                )
+                continue
+            if result["ran"]:
+                results.append(result)
+        return results
+
+    def _formation_key(self, kind: str, space_id: str) -> str:
+        return f"project_formation_{kind}:{self.store.schema_name}:{space_id}"
+
+    def _back_off(self, space_id: str, seconds: int | None = None) -> None:
+        # A Formation that cannot commit would fail the same way on the next scan.
+        self.redis.set(
+            self._formation_key("backoff", space_id),
+            "1",
+            ex=int(seconds or self.settings.formation_interval),
+        )
+
+    def form_space(self, space_id: str, *, force: bool = False) -> dict[str, Any]:
+        """Run one Formation over a Space's staged Episodes without a new Episode to carry it.
+
+        Planning runs under a per-Space planning lock only, so Episode commits keep going; the
+        Space lock is taken just around the commit, which rechecks every version it relies on.
+        A forced run (flush) ignores back-off and the interval, and does not age staged Episodes.
+        """
+        outcome: dict[str, Any] = {"space_id": space_id, "ran": False}
+        if not force and self.redis.exists(self._formation_key("backoff", space_id)):
+            return {**outcome, "reason": "BACKING_OFF"}
+        space = self.store.read_space(space_id)
+        staged = self.store.read_staged(space_id) if space else []
+        if not staged:
+            return {**outcome, "reason": "NO_STAGED"}
+        now = self.now()
+        due = formation_due(
+            space,
+            staged,
+            now,
+            formation_count=self.settings.formation_count,
+            formation_interval=self.settings.formation_interval,
+        )
+        if not force and not due:
+            return {**outcome, "reason": "NOT_DUE"}
+        planning = self._formation_key("planning", space_id)
+        token = f"formation:{uuid4().hex}"
+        if not self.redis.set(planning, token, nx=True, ex=self.settings.lock_wait_seconds):
+            return {**outcome, "reason": "FORMATION_RUNNING"}
+        try:
+            return self._form_and_commit(space_id, space, staged, now, force, outcome)
+        finally:
+            self.redis.eval(_RELEASE_LOCK, 1, planning, token)
+
+    def _form_and_commit(
+        self,
+        space_id: str,
+        space: dict,
+        staged: list[dict],
+        now: datetime,
+        force: bool,
+        outcome: dict[str, Any],
+    ) -> dict[str, Any]:
+        domains = sorted({domain for ep in staged for domain in ep["domains"]})
+        plan = organize_staged(
+            self.hub,
+            staged,
+            space,
+            self.store.read_topics(space_id, domains),
+            now=now,
+            count_attempt=not force,
+        )
+        if plan["formation"] is None:
+            self._back_off(space_id)
+            return {**outcome, "reason": "FORMATION_MODEL_UNAVAILABLE"}
+        changeset = index_changeset(
+            rewrite_metadata(self.hub, prepare_merge(self.hub, plan)),
+            self.embedder,
+            self.store.dim,
+            model_id=self.embedding_model_id,
+        )
+        key = self._space_key({"space_id": space_id})
+        token = f"formation:{uuid4().hex}"
+        deadline = time.monotonic() + 30
+        while not self.redis.set(key, token, nx=True, ex=30):
+            if time.monotonic() >= deadline:
+                self._back_off(space_id, self.settings.scan_seconds * 5)
+                return {**outcome, "reason": "SPACE_LOCKED"}
+            time.sleep(0.2)
+        try:
+            committed = commit_formation(self.store, changeset)
+        except VersionConflictError:
+            # An Episode ran Formation or changed a staged Episode first; plan again later.
+            self._back_off(space_id, self.settings.scan_seconds * 5)
+            return {**outcome, "reason": "FORMATION_CONFLICT"}
+        except (EpisodeFenceError, DraftWitnessError):
+            self._back_off(space_id)
+            return {**outcome, "reason": "FORMATION_REJECTED"}
+        finally:
+            self.redis.eval(_RELEASE_LOCK, 1, key, token)
+        return {
+            **outcome,
+            "ran": True,
+            **committed,
+            "staged": len(staged),
+            "rejected": plan["formation"].get("rejected", []),
+        }
+
+    def flush(
+        self, space_id: str, conversation_id: str | None = None, *, wait_seconds: float = 0.0
+    ) -> dict[str, Any]:
+        """Close open Episodes, wait for in-flight stages, then force Formation (dev and eval).
+
+        Episodes still in flight after ``wait_seconds`` are reported and Formation waits for them;
+        call again once they finish. Formation covers the whole Space's staged Episodes.
+        """
+        closed = self.acceptance.close_open(space_id, conversation_id)
+        for episode_id in closed:
+            self._publish(episode_id)
+        deadline = time.monotonic() + wait_seconds
+        while (pending := self.store.unfinished_episode_ids(space_id)) and (
+            time.monotonic() < deadline
+        ):
+            time.sleep(0.1)
+        if pending:
+            formation = {"space_id": space_id, "ran": False, "reason": "EPISODES_IN_FLIGHT"}
+        else:
+            formation = self.form_space(space_id, force=True)
+        return {
+            "space_id": space_id,
+            "closed_episode_ids": closed,
+            "pending_episode_ids": pending,
+            "formation": formation,
+            "staged_remaining": self.store.staged_count(space_id),
+        }
 
     def handle(self, batch: list[ScheduleMessageItem]) -> None:
         for message in batch:
@@ -267,9 +449,63 @@ class EpisodeAddRuntime:
                 )
 
     def _work(self, lease: StageLease, label: str) -> None:
-        episode = self.store.load_episode(lease.episode_id)
-        if episode is None:
-            return
+        started = time.perf_counter()
+        with meter_usage() as meter:
+            try:
+                episode = self.store.load_episode(lease.episode_id)
+                if episode is None:
+                    lease.transition["error"] = "EpisodeNotFound"
+                    return
+                self._run_stage(lease, label, episode)
+            finally:
+                self._stage_done(lease, label, started, meter.summary())
+
+    def _stage_done(
+        self, lease: StageLease, label: str, started: float, usage: list[dict[str, Any]]
+    ) -> None:
+        """Persist the stage's run time and model usage, whatever the stage ended in."""
+        run_ms = round((time.perf_counter() - started) * 1000)
+        transition = lease.transition
+        detail = {
+            "label": label,
+            "token": lease.token,
+            "run_ms": run_ms,
+            "next_stage": transition.get("stage"),
+            "outcome": transition.get("outcome"),
+            "reason": transition.get("reason"),
+            "error": transition.get("error"),
+            "applied": transition.get("applied"),
+            "usage": usage,
+        }
+        logger.info(
+            "Project Add stage episode=%s label=%s attempt=%s run_ms=%d next=%s outcome=%s "
+            "calls=%d total_tokens=%d",
+            lease.episode_id,
+            label,
+            lease.attempt,
+            run_ms,
+            detail["next_stage"],
+            detail["outcome"],
+            sum(row["calls"] for row in usage),
+            sum(row["total_tokens"] for row in usage),
+        )
+        try:
+            self.store.record_event(
+                lease.episode_id,
+                "stage_done",
+                self.now(),
+                stage=lease.stage,
+                attempt=lease.attempt,
+                detail=detail,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Project Add could not record stage metrics for %s (%s)",
+                lease.episode_id,
+                type(exc).__name__,
+            )
+
+    def _run_stage(self, lease: StageLease, label: str, episode: dict) -> None:
         try:
             if label == PROCESS:
                 self._extract(lease, episode)
@@ -288,7 +524,9 @@ class EpisodeAddRuntime:
         except VersionConflictError:
             self._conflict(lease, episode)
         except Exception as exc:
+            lease.transition["error"] = type(exc).__name__
             if label == MERGE_RESULT and self._committed(lease):
+                lease.transition.update(stage="done", applied=True)
                 self._release(episode, lease.data.get("lock_token"))
                 return
             reason = "MODEL_UNAVAILABLE" if isinstance(exc, ModelError) else "STORE_UNAVAILABLE"
@@ -304,6 +542,18 @@ class EpisodeAddRuntime:
         if previous and previous["state"] != "extracted" and previous["outcome"] == "pending":
             self._wait(lease, episode, "previous", self.settings.previous_wait_seconds, 5)
             return
+        warnings = list(episode.get("warnings") or [])
+        if episode.get("boundary") is None:
+            boundary = self._judge_boundary(lease, episode, warnings)
+            segments = _segments(episode["turns"], boundary["starts"])
+            siblings = self.dispatch.settle_boundary(lease, self.now(), episode, boundary, segments)
+            if siblings is None:
+                return  # Another worker owns the stage now.
+            for sibling in siblings:
+                self._publish(sibling)
+            if siblings:
+                episode = self.store.load_episode(lease.episode_id)
+                previous = episode.get("previous")
         result = extract_episode(
             self.hub,
             episode,
@@ -311,30 +561,62 @@ class EpisodeAddRuntime:
             (previous or {}).get("messages"),
             input_budget=self.settings.input_budget,
         )
-        fields = {
-            name: result[name]
-            for name in ("drafts", "anchors", "anchor_keys", "episode_summary", "extract_status")
+        persist = {
+            "extraction": {
+                "at": self.now().isoformat(),
+                "status": result["extract_status"],
+                "anchors": result["anchors"],
+                "anchor_keys": result["anchor_keys"],
+            },
+            "warnings": warnings,
         }
+        summary = {"episode_summary": result["episode_summary"] or None}
         if result["drafts"]:
             self._advance(
                 lease,
-                **fields,
-                state="extracted",
-                stage="organizing_queued",
-                extracted_at=self.now(),
-                organize_result={},
+                stage="organizing",
+                drafts=result["drafts"],
+                organize_result={"queued": True},
+                persist=persist,
+                episode=summary,
             )
         else:
             self._advance(
                 lease,
-                **fields,
-                state="extracted",
                 stage="done",
                 outcome="skipped",
-                extracted_at=self.now(),
-                result={"topic_ids": []},
+                drafts=result["drafts"],
                 organize_result={},
+                persist=persist,
+                episode=summary,
             )
+
+    def _judge_boundary(self, lease: StageLease, episode: dict, warnings: list[str]) -> dict:
+        """Where the member's tasks start in this Episode and whether it continues the previous
+        one. A model failure is retried by the stage; on the last try the Episode keeps one
+        segment and is flagged BOUNDARY_MODEL_UNAVAILABLE instead of failing."""
+        previous = episode.get("previous")
+        prior = (
+            {
+                "episode_summary": previous.get("episode_summary"),
+                "topic_name": previous.get("topic_name"),
+            }
+            if previous
+            else None
+        )
+        try:
+            judged = judge_boundary(self.hub, boundary_turns(episode), prior)
+        except ModelError:
+            if lease.data.get("retries", 0) < 3:
+                raise
+            judged = unjudged(prior)
+            warnings.append("BOUNDARY_MODEL_UNAVAILABLE")
+        return {
+            "starts": list(judged.starts),
+            "continues_previous": judged.continues_previous,
+            "judged": judged.judged,
+            "reasons": list(judged.reasons),
+        }
 
     def _organize(self, lease: StageLease, episode: dict) -> None:
         data = lease.data
@@ -353,6 +635,11 @@ class EpisodeAddRuntime:
         if space is None:
             self._terminal(lease, episode, "SPACE_CLEARED", "The Space was removed")
             return
+        boundary = episode.get("boundary") or {}
+        if boundary and not boundary.get("continues_previous"):
+            # The member moved to other work: the previous Topic is no must-consider candidate
+            # and no previous-Episode basis for attaching.
+            episode = {**episode, "previous": None}
         ranked, degraded = ranked_topics(self.store, episode, self.embedder)
         plan = organize_episode(
             self.hub,
@@ -410,8 +697,11 @@ class EpisodeAddRuntime:
                 self._wait(lease, episode, "lock", self.settings.lock_wait_seconds, 1)
                 return
         try:
-            commit_changeset(
+            receipt = commit_changeset(
                 self.store, lease.episode_id, lease.attempt, changeset, work_token=lease.token
+            )
+            lease.transition.update(
+                stage="done", applied=True, outcome=(receipt or {}).get("outcome")
             )
         finally:
             self._release(episode, token)
@@ -440,14 +730,14 @@ class EpisodeAddRuntime:
                     lease, stage="committing", attempt=lease.attempt + 1, organize_result=data
                 )
                 return
-        self._advance(lease, stage="organizing_queued", organize_result=data)
+        self._advance(lease, stage="organizing", organize_result={**data, "queued": True})
 
     def _restart(self, lease: StageLease, episode: dict) -> None:
         self._release(episode, lease.data.get("lock_token"))
         self._advance(
             lease,
-            stage="organizing_queued",
-            organize_result={"conflicts": lease.data.get("conflicts", 0)},
+            stage="organizing",
+            organize_result={"conflicts": lease.data.get("conflicts", 0), "queued": True},
         )
 
     def _wait(
@@ -461,12 +751,11 @@ class EpisodeAddRuntime:
             return
         tries = data.get(f"{kind}_retries", 0) + 1
         data[f"{kind}_retries"] = tries
-        data["resume_stage"] = lease.stage
+        # The Episode waits in its stage; the retry time keeps it from being delivered sooner.
         self.dispatch.advance(
             lease,
             now,
-            stage="retry_wait",
-            next_retry_at=now + timedelta(seconds=min(10, base_delay * 2 ** min(tries - 1, 4))),
+            next_retry_time=now + timedelta(seconds=min(10, base_delay * 2 ** min(tries - 1, 4))),
             organize_result=data,
         )
 
@@ -475,23 +764,25 @@ class EpisodeAddRuntime:
         if retries > 3:
             self._terminal(lease, episode, reason, "Stage retry budget exhausted", exhausted=True)
             return
-        data = {**lease.data, "retries": retries, "resume_stage": lease.stage}
+        data = {**lease.data, "retries": retries}
         token = data.pop("lock_token", None)
         self._release(episode, token)
+        stage = {}
         if token and label != PROCESS:
-            data = {
-                "retries": retries,
-                "conflicts": data.get("conflicts", 0),
-                "resume_stage": "organizing_queued",
-            }
+            # The Space lock is gone: organize again in a new round.
+            data = {"retries": retries, "conflicts": data.get("conflicts", 0), "queued": True}
+            stage = {"stage": "organizing"}
         now = self.now()
         self.dispatch.advance(
             lease,
             now,
-            stage="retry_wait",
-            next_retry_at=now + timedelta(seconds=2**retries),
-            last_error=episode.get("last_error") or self._error(lease, reason, "Stage will retry"),
+            next_retry_time=now + timedelta(seconds=2**retries),
             organize_result=data,
+            persist={
+                "last_error": episode.get("last_error")
+                or self._error(lease, reason, "Stage will retry")
+            },
+            **stage,
         )
 
     def _terminal(
@@ -528,7 +819,8 @@ class EpisodeAddRuntime:
         }
 
     def _space_key(self, episode: dict) -> str:
-        return f"project_space_lock:{episode['project_id']}:{episode['space_id']}"
+        # Space IDs are unique across projects; Space-level Formation has no Episode row to read.
+        return f"project_space_lock:{self.store.schema_name}:{episode['space_id']}"
 
     @staticmethod
     def _new_lock_token(lease: StageLease) -> str:
@@ -545,3 +837,28 @@ class EpisodeAddRuntime:
                 logger.warning(
                     "Project Add will let the Space lock expire (%s)", type(exc).__name__
                 )
+
+
+def boundary_turns(episode: dict) -> list[dict]:
+    """Turns for the boundary judgment: the member's words and the Agent's replies."""
+    turns: dict[str, dict] = {}
+    for message in episode["messages"]:
+        turn = turns.setdefault(message["turn_id"], {"member": [], "agent": []})
+        if message["role"] == "user":
+            turn["member"].append(message["content"] or "")
+        elif message["role"] == "assistant" and message["content"]:
+            turn["agent"].append(message["content"])
+    return [
+        {"member": "\n".join(turn["member"]), "agent": "\n".join(turn["agent"])}
+        for turn in turns.values()
+    ]
+
+
+def _segments(turns: list[dict], starts: list[int]) -> list[tuple[int, int]]:
+    """msg_seq ranges of the segments that begin at the given Turn indexes."""
+    bounds = [*starts, len(turns)]
+    return [
+        (turns[begin]["seq_start"], turns[end - 1]["seq_end"])
+        for begin, end in pairwise(bounds)
+        if begin < end
+    ]

@@ -10,8 +10,16 @@ from typing import TYPE_CHECKING, Any
 
 from memos.log import get_logger
 
-from .add_evidence import anchor_keys, collect_anchors, key_tokens, quote_ref, text_at
-from .judge import ModelError
+from .add_evidence import (
+    anchor_keys,
+    collect_anchors,
+    quote_ref,
+    strip_tokens,
+    text_at,
+    unwitnessed_tokens,
+)
+from .add_limits import LIMITS, cut_at_sentence
+from .judge import ModelError, fill
 from .types import stable_uuid, time_key
 
 
@@ -21,17 +29,23 @@ if TYPE_CHECKING:
 
 _EXTRACT = """[系统]
 你为项目整理一段完整 Episode。仅输出一个 JSON 对象，包含 episode_summary 和 drafts 数组。
-episode_summary 依据这一段写具体处理的对象、成员的结论和相关资源，不写推测，200 字以内。
+episode_summary 开头先写成员本段要交付的具体对象（功能、接口、配置项、规则或产出物），保留原文标识符；
+成员一段里提出多项独立要求时逐项点名，不能只写其中一项。之后写成员的结论和相关资源，不写推测，{summary_limit} 字以内。
 不要补“仅为规则说明”“未见后续进展”这类对状态的套话，摘要只陈述这一段实际出现的内容。
 闲聊或没可保留的事实输出空数组。prior 只帮助理解，不能为新结论授权。
 drafts 每项给出 kind、content、message_id、quote、origin，可附 source_path（默认 /content）。
+content 字数上限：decision {decision_limit} 字，timeline {timeline_limit} 字，experience {experience_limit} 字（一个汉字或一个英文单词计一字），
+超出时自行精简，保留对象、取值与原因。
 kind 是 decision（成员确定的团队做法）、experience（有场景与证据的经验）、timeline（可验证的进展）。
 decision 只记范围内的规则、对外约定和共同约定。对 Agent 回复格式或表达方式的要求、一次性的局部实现、
 执行步骤、未采纳的方案和未决事项都不是 decision，不要输出。成员对某个具体对象（配置、数值、时点、阈值）
 给出明确结论时才是 decision。
+成员一句话里给出几条能各自改动的规则或取值（不同对象或条件，如顺序和例外处理、温度和保存时长），
+每条单独输出一个 decision，content 只写这一条；“先到为准”这类连接条件随相关的那条保留。
+content 改用 Agent 回复里的规范写法时（如把“东八区”写成 UTC+8），在 context 里引用 Agent 那句原话。
 成员的原话带有原因（因为、由于、考虑到某个具体问题）时，把原因随结论写进 content，只取原话里的原因。
 timeline 记 Agent 在这一段里明确报告的可验证结果：已新增、已修改、已撤回、已修复、已完成的具体产出，
-一件事一条，quote 取 Agent 的原话。尚未发生的计划不是 timeline。
+一件事一条，quote 取 Agent 的原话。尚未发生的计划不是 timeline：“会先…”“将…”“准备…”都不记。
 experience 记排查或试错后得到的、可复用的做法：先查什么、哪种做法行不通及原因，必须有这一段的证据。
 quote 是这次 Episode 的消息中逐字原话。成员授权优先引用本段用户确立或确认做法的原话。
 origin 取 member、adopted（成员明确采纳）、delegated（Agent 执行）；Agent 自述绝非成员决策。
@@ -160,6 +174,7 @@ def _draft(
     member: dict,
     previous: dict[str, dict],
     anchors: list[dict],
+    support: dict[str, dict] | None = None,
 ) -> dict | None:
     kind = raw.get("kind")
     content = raw.get("content")
@@ -194,14 +209,22 @@ def _draft(
             proposals.append({"ref": context, "quote": quote, "kind": "assistant_proposal"})
     if origin == "adopted" and not (member_statement and proposals):
         return None
-    witness = [raw["quote"], *contextual_text, raw.get("_support_quote") or ""]
-    if not key_tokens(content).issubset(key_tokens("\n".join(witness))):
+    # Later Agent replies of the same Turn may support a value the member said in other words
+    # ("东八区" → "UTC+8"); they never authorize the draft.
+    supporting = []
+    for item in raw.get("context") or []:
+        later = (support or {}).get(item.get("message_id")) if isinstance(item, dict) else None
+        support_ref = quote_ref(later, item.get("quote")) if later is not None else None
+        if support_ref is not None:
+            text = text_at(later, support_ref["source_path"]) or ""
+            supporting.append(text[support_ref["start"] : support_ref["end"]])
+    witness = [raw["quote"], *contextual_text, *supporting, raw.get("_support_quote") or ""]
+    if unwitnessed_tokens(content, "\n".join(witness)):
         return None
     origin = "adopted" if origin == "adopted" else "member" if member_statement else "delegated"
     author = member.get("role_id") or member.get("origin_user_id") or member.get("user_id")
     if not author:
         return None
-    reason = quote_ref(row, raw.get("reason_quote"))
     source = {
         "task_id": owner,
         "episode_id": episode["id"],
@@ -216,12 +239,17 @@ def _draft(
     clues = [
         x for x in raw.get("current_state_clues") or [] if isinstance(x, str) and x and x in text
     ]
-    content = content.strip()[: 200 if kind == "experience" else 100]
-    evidence = [{"ref": ref, "quote": raw["quote"]}]
+    content = cut_at_sentence(content, LIMITS.entry(kind))[0]
+    # A reference may match normalized whitespace, but commit checks the original slice.
+    source_quote = text[ref["start"] : ref["end"]]
+    evidence = [{"ref": ref, "quote": source_quote}]
     if origin == "adopted":
         evidence.extend(proposals)
-    if reason:
-        evidence.append({"ref": reason, "quote": raw["reason_quote"], "kind": "reason"})
+    reason_quote = None
+    if reason := quote_ref(row, raw.get("reason_quote")):
+        reason_text = text_at(row, reason["source_path"]) or ""
+        reason_quote = reason_text[reason["start"] : reason["end"]]
+        evidence.append({"ref": reason, "quote": reason_quote, "kind": "reason"})
     approved = [
         name for name in raw.get("approved_by") or [] if isinstance(name, str) and name in text
     ]
@@ -246,8 +274,8 @@ def _draft(
         "source_refs": [ref],
         "authorizing_evidence_refs": [ref] if member_statement else [],
         "context_refs": contexts,
-        "quote": raw["quote"],
-        "reason_quote": raw["reason_quote"] if reason else None,
+        "quote": source_quote,
+        "reason_quote": reason_quote,
         "authors": [str(author)],
         "author_name": member.get("role_name") or str(author),
         "chat_time": jsonable(row.get("chat_time")),
@@ -261,6 +289,24 @@ def _draft(
         "listed": listed,
         "card": raw.get("card") if isinstance(raw.get("card"), dict) else {},
     }
+
+
+def _witness_validations(drafts: Any, messages: list[dict]) -> None:
+    """Mark each experience whose stated validation occurs anywhere in this Episode.
+
+    Test, build and review results usually arrive in tool output or a later Agent reply,
+    not in the one message an experience quotes, so the whole Episode is the witness.
+    """
+    raw = "\n".join(
+        f"{message.get('content') or ''}\n{json.dumps(message.get('tool_calls') or '')}"
+        for message in messages
+    )
+    episode_text = " ".join(raw.split())
+    for draft in drafts:
+        card = draft.get("card") or {}
+        validation = card.get("validation")
+        if draft["kind"] == "experience" and isinstance(validation, str) and validation.strip():
+            card["validation_witnessed"] = " ".join(validation.split()) in episode_text
 
 
 def _member_anchored(item: dict, row: dict, member: dict) -> tuple[dict, dict]:
@@ -326,9 +372,21 @@ def extract_episode(
     model_inputs = {
         "prior": prior,
         "episode": current,
-        "previous_summary": str((episode.get("previous") or {}).get("episode_summary") or "")[:200],
+        "previous_summary": cut_at_sentence(
+            str((episode.get("previous") or {}).get("episode_summary") or ""),
+            LIMITS.episode_summary,
+        )[0],
     }
-    output = hub.write("episode.extract", _EXTRACT, model_inputs)
+    prompt = fill(
+        _EXTRACT,
+        {
+            "{summary_limit}": str(LIMITS.episode_summary),
+            "{decision_limit}": str(LIMITS.decision),
+            "{timeline_limit}": str(LIMITS.timeline),
+            "{experience_limit}": str(LIMITS.experience),
+        },
+    )
+    output = hub.write("episode.extract", prompt, model_inputs)
     summary = output.get("episode_summary")
     raw_drafts = output.get("drafts")
     if not isinstance(summary, str) or not isinstance(raw_drafts, list):
@@ -358,9 +416,20 @@ def extract_episode(
         if member is None:
             continue
         item, row = _member_anchored(item, row, member)
-        draft = _draft(episode, item, row, member, prior_to[str(row["message_id"])], anchors)
+        turn = str(member.get("turn_id") or member["message_id"])
+        support = {
+            mid: later
+            for mid, later in by_id.items()
+            if later["role"] in _ROLE_AGENT
+            and str(later.get("turn_id") or "") == turn
+            and mid not in prior_to[str(row["message_id"])]
+        }
+        draft = _draft(
+            episode, item, row, member, prior_to[str(row["message_id"])], anchors, support
+        )
         if draft:
             valid[draft["draft_id"]] = draft
+    _witness_validations(valid.values(), messages)
     dropped = len(raw_drafts) - len(valid)
     if dropped:
         # Drafts whose evidence does not hold are dropped, never the whole Episode: retrying
@@ -374,9 +443,12 @@ def extract_episode(
     if valid and not summary.strip():
         raise ModelError("An Episode with accepted drafts requires a summary")
     corpus = "\n".join(row.get("content") or "" for row in messages + previous_messages)
-    if not key_tokens(summary).issubset(key_tokens(corpus)):
+    # Drop only the unsupported values: the rest of the summary still names the work.
+    summary = strip_tokens(summary, unwitnessed_tokens(summary, corpus))
+    if valid and not summary.strip():
         summary = "。".join(draft["content"] for draft in valid.values())
-    result.update(episode_summary=summary.strip()[:200], drafts=list(valid.values()))
+    summary = cut_at_sentence(summary, LIMITS.episode_summary)[0]
+    result.update(episode_summary=summary, drafts=list(valid.values()))
     if valid:
         result["extract_status"] = "drafted"
     return result

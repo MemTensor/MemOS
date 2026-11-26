@@ -18,16 +18,6 @@ _INJECTION_TAG = re.compile(
     r"<(memos_context|project_index)\b[^>]*>|</(memos_context|project_index)>", re.IGNORECASE
 )
 _TIMEZONE_OFFSET = re.compile(r"([+-])(\d{2}):(\d{2})")
-_TASK_SWITCH = re.compile(
-    r"^\s*(换个任务|换个话题|另一个任务|另外一件事|先放下这个|"
-    r"new task\b|switch(?:ing)? (?:tasks|topics)\b|(?:a )?separate question\b)",
-    re.IGNORECASE,
-)
-_TASK_END = re.compile(
-    r"^\s*(结束|到此为止|先到这里|就到这里|任务结束|that's all|that's it|stop here)"
-    r"[\s.!。！]*$",
-    re.IGNORECASE,
-)
 
 
 class AddRequestError(MemOSError):
@@ -205,13 +195,3 @@ def normalize_turns(
 def turn_source(turn: list[dict[str, Any]]) -> dict[str, Any]:
     """Ignore raw system context when determining the Turn identity and boundary."""
     return next(message for message in turn if message["role"] != "system")
-
-
-def task_boundary(turn: list[dict[str, Any]]) -> str | None:
-    first = turn_source(turn)
-    if first["role"] == "user":
-        if _TASK_SWITCH.match(first["content"]):
-            return "switch"
-        if _TASK_END.match(first["content"]):
-            return "end"
-    return None

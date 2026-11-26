@@ -57,16 +57,17 @@ DECISION_UPDATE = """[系统]
 输入是一个 JSON：
 - new：这一段会话里新抽出的决策。每条有 n（序号）、name（说这句话的成员）、time、content（决策内容）、final（成员是不是在下最终结论）、approved_by（成员说已经和谁确认过）、listed（他说这句话之前，Agent 说给他听的已有结论，是 Agent 的原话）。
 - decisions：项目里已有的、可能相关的决策。每条有 id、topic、items。items 里 item 为 "current" 的一项是当前结论，它的 members 是负责人；item 为 "c1"、"c2"…… 的是还没有解决的不一致结论，members 是提出或同意它的成员。
+- new 和 items 里的 quote 是这条结论的原话。content、text 是概括；判断是不是同一件事、结论是否相同时，遇到冲突、修订、否定或一句话里有多个要求，以 quote 原话为准。
 
 【对 new 里的每一条，依次做三件事】
-1. 找同一件事（decision_id）。在 decisions 里找和这条新决策定的是同一件事的那一条：同一个对象上的同一个选择，例如都在定「本机整理结果存在哪」。判断办法：这条新决策写进去以后，那条已有的结论还要不要单独留着。新结论和它相同、把它改了、把它包含进去或者细化了，照新的做就不用再看旧的，是同一件事。只是话题相关、各管各的、两条都得留着照做的，不是同一件事，例如一条定存储方式、一条定表的命名。找到了填那条的 id；没有填 null。
-2. 找相同的结论（same_as）。decision_id 不为 null 时，把新决策的 content 和那条决策 items 里的每一项逐项比。照着做出来的结果完全一样才算相同；对象、取值、数字、条件、范围有一处不同就算不同，哪怕只差一个词。和某一项相同，填那一项的 item（"current"、"c1"……）；和哪一项都不同，填 null。
+1. 找同一件事（decision_id）。在 decisions 里找和这条新决策定的是同一件事的那一条：同一个对象上的同一个选择，例如都在定「本机整理结果存在哪」。判断办法：这条新决策写进去以后，那条已有的结论还要不要单独留着。新结论和它相同、把它改了、把它包含进去或者细化了，照新的做就不用再看旧的，是同一件事。只是话题相关、各管各的、两条都得留着照做的，不是同一件事，例如一条定存储方式、一条定表的命名。在已有的方法、选项或规则之外再加一个并列的变体（另一个方法、另一个参数形态），旧结论照样有效，也不是同一件事。找到了填那条的 id；没有填 null。
+2. 找相同的结论（same_as）。decision_id 不为 null 时，把新决策的 content 和那条决策 items 里的每一项逐项比。照着做出来的结果完全一样才算相同；对象、取值、数字、条件、范围、接口名或参数名有一处不同就算不同，哪怕只差一个词。和某一项相同，填那一项的 item（"current"、"c1"……）；和哪一项都不同，填 null。
 3. 定动作（action），五选一，从上往下先符合哪条用哪条：
    - "add" 新增：decision_id 为 null，这是一件新的事。
    - "resolve" 解决冲突：下面四条都满足。那条决策有不一致结论；final 为 true；same_as 不为 null；listed 里说到了那条决策的每一项。少一条都不算。
-   - "rewrite" 更新：same_as 为 null，并且 name 在 "current" 的 members 里，或者 approved_by 里有 "current" 的 members 里的人。
+   - "rewrite" 更新：same_as 为 null，并且 name 在 "current" 的 members 里。只有负责人本人能改自己的结论；approved_by 是说话人转述别人的同意，不能授权改写。
    - "join" 加入：same_as 不为 null。成员采用或同意了已有的某一项结论。
-   - "conflict" 记成冲突：same_as 为 null，name 不在 "current" 的 members 里，approved_by 里也没有负责人。
+   - "conflict" 记成冲突：same_as 为 null，name 不在 "current" 的 members 里，即使 approved_by 里有负责人。
 
 【每条新决策输出一项，7 个字段】
 1. n：照抄 new 里的序号。

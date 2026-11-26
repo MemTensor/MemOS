@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from memos.llms.usage import CHAT, expect_usage
+
 from .prompts import JUDGE_LLM
 
 
@@ -144,9 +146,12 @@ class LLMBackend:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user})
         last: Exception | None = None
+        model = getattr(getattr(self.llm, "config", None), "model_name_or_path", None)
         for _ in range(self.retries + 1):
             try:
-                raw = self.llm.generate(messages)
+                # Backends that do not meter provider usage still count as a usage-less call.
+                with expect_usage(CHAT, model if isinstance(model, str) else None):
+                    raw = self.llm.generate(messages)
                 return parse_json(raw)
             except Exception as e:
                 last = e
@@ -238,7 +243,7 @@ class ModelHub:
         self,
         scope: str,
         prompt: str,
-        inputs: Any = None,
+        inputs: Any | None = None,
         placeholders: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self._require(self.llm_backend).generate(scope, prompt, inputs, placeholders)

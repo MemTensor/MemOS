@@ -18,6 +18,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .add_limits import LIMITS, cut_at_sentence
 from .judge import ModelError
 from .prompts import DECISION_EXTRACT, DECISION_UPDATE
 from .types import (
@@ -41,7 +42,6 @@ if TYPE_CHECKING:
     from .judge import ModelHub
 
 
-MAX_CONTENT_CHARS = 100
 MAX_TOPIC_DECISIONS = 50
 CATEGORIES = ("范围", "对外约定", "共同约定")
 
@@ -139,7 +139,7 @@ def verify(
         if not d.content:
             drop(d, "content 为空：找不到所指的内容，暂缓")
             continue
-        d.content = d.content.strip()[:MAX_CONTENT_CHARS]
+        d.content = cut_at_sentence(d.content, LIMITS.decision)[0]
         if d.category not in CATEGORIES:
             d.category = "共同约定"
         # 代码从消息元数据补说话人与时间：说话人就是这项结论的负责人
@@ -175,6 +175,7 @@ def update_inputs(
             "name": d.name,
             "time": d.time,
             "content": d.content,
+            "quote": cut_at_sentence(d.quote, LIMITS.quote)[0],
             "final": d.final,
             "approved_by": d.approved_by,
             "listed": d.listed,
@@ -191,6 +192,7 @@ def update_inputs(
                     "members": [dec.user_labels.get(u, u) for u in it.user_ids],
                     "time": it.time,
                     "text": it.content,
+                    "quote": cut_at_sentence(it.source.quote or "", LIMITS.quote)[0],
                 }
             )
         olds.append({"id": dec.id, "topic": topic_name, "items": items})
@@ -282,9 +284,16 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
         same_as = None
     plan.same_as = same_as
 
-    own = draft.user_id in dec.user_ids or bool(
-        set(draft.approved_by) & {dec.user_labels.get(u, u) for u in dec.user_ids}
-    )
+    if same_as is None and dec.source.message_id and dec.source.message_id == draft.message_id:
+        # One message stating several rules yields sibling decisions; a member does not revise
+        # a rule with the next clause of the same sentence.
+        plan.decision_id = None
+        plan.guarded.append("同一条消息里拆出的另一条规则，按新增")
+        return _finish(plan, OP_ADD)
+
+    # Only the owner changes their own decision. A member relaying that the owner agreed
+    # ("B 同意改成…") is not the owner's statement, so it stays a conflict for people to settle.
+    own = draft.user_id in dec.user_ids
     late = not (draft.time and dec.time and draft.time < dec.time)
     informed = row.get("informed")
     evidence = {
@@ -308,7 +317,7 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
     if model_action and model_action != action:
         why = {
             OP_RESOLVE: "满足拍板的全部条件",
-            OP_REWRITE: "说话人是负责人或已和负责人确认，且不早于当前结论",
+            OP_REWRITE: "说话人是负责人，且不早于当前结论",
             OP_JOIN: "与已有的一项结论相同",
             OP_CONFLICT: "结论不同，说话人不是负责人",
         }[action]
@@ -317,7 +326,7 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
         elif model_action == OP_RESOLVE and not inf:
             why = "Agent 没把各项都说给他听（informed 没覆盖全部项或对不上 listed）"
         elif model_action == OP_REWRITE and not own:
-            why = "说话人不是负责人，也没和负责人确认过"
+            why = "说话人不是负责人；转述负责人同意不算授权"
         elif model_action == OP_REWRITE and not late:
             why = "这句话早于当前结论，不能改写"
         plan.guarded.append(f"模型给 {model_action}，代码改为 {action}：{why}")

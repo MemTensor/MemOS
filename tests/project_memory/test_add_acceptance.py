@@ -54,8 +54,10 @@ def test_multispace_acceptance_dedup_status_and_reopen(add_store):
     with add_store.transaction(readonly=True) as cursor:
         cursor.execute("SELECT COUNT(*) AS count FROM messages")
         assert cursor.fetchone()["count"] == 1
-        cursor.execute("SELECT COUNT(*) AS count FROM episode_turns")
+        cursor.execute("SELECT COUNT(*) AS count FROM episodes")
         assert cursor.fetchone()["count"] == 2
+        cursor.execute("SELECT msg_seq FROM messages")
+        assert cursor.fetchone()["msg_seq"] == 1
 
     clock[0] += timedelta(minutes=15)
     due = accept.close_due()
@@ -65,14 +67,17 @@ def test_multispace_acceptance_dedup_status_and_reopen(add_store):
 
     accept.accept(_request("task-b", "message-b"))
     with add_store.transaction(readonly=True) as cursor:
-        cursor.execute("SELECT id FROM episodes WHERE space_id = 'space-a' AND state = 'open'")
-        episode_id = cursor.fetchone()["id"]
+        cursor.execute(
+            "SELECT episode_id FROM add_jobs WHERE space_id = 'space-a' AND stage = 'episode_open'"
+        )
+        episode_id = cursor.fetchone()["episode_id"]
     reopened = add_store.load_episode(episode_id)
     assert reopened["owner_task_id"] == "task-b"
     assert reopened["previous"]["space_id"] == "space-a"
     assert reopened["previous"]["id"] in due
     assert [m["origin_task_id"] for m in reopened["messages"]] == ["task-b"]
     assert [m["origin_task_id"] for m in reopened["previous"]["messages"]] == ["task-a"]
+    assert (reopened["message_seq_start"], reopened["previous"]["message_seq_end"]) == (2, 1)
 
 
 def test_conflict_rolls_back_and_no_conversation_closes(add_store):
@@ -129,6 +134,8 @@ def test_closed_at_turn_count_and_mixed_task_replay_rejected(add_store):
     episode = add_store.load_episode(closed[0])
     assert episode["close_reason"] == "turn_count"
     assert [turn["task_id"] for turn in episode["turns"]] == ["task-a", "task-b"]
+    assert episode["task_ranges"] == {"task-a": [1, 1], "task-b": [2, 2]}
+    assert episode["task_ids"] == ["task-a", "task-b"]
     replay = _request("task-c", "unused")
     replay.messages = first.messages + second.messages
     with pytest.raises(AddRequestError) as error:
@@ -171,14 +178,10 @@ def test_preserves_assistant_tool_link_and_full_original_output(add_store):
 
 
 def test_keeps_system_source_without_turn_or_anchor_authority(add_store):
+    from memos.project_memory.add_extraction import extract_episode
+
     _spaces(add_store, "space-a")
-    observed_roles = []
-
-    def collect(messages, _bindings):
-        observed_roles.extend(message["role"] for message in messages)
-        return []
-
-    accept = AddAcceptance(add_store, anchor_collector=collect)
+    accept = AddAcceptance(add_store)
     request = _request("task-a", "message-a", conversation_id=None)
     system = {
         "role": "system",
@@ -191,7 +194,10 @@ def test_keeps_system_source_without_turn_or_anchor_authority(add_store):
     assert [row["turn_id"] for row in episode["messages"]] == ["message-a", "message-a"]
     assert episode["turns"][0]["turn_id"] == "message-a"
     assert episode["messages"][0]["role_id"] is None
-    assert observed_roles == ["user"]
+    # Anchors come from extraction, which never reads the system context.
+    writer = SimpleNamespace(write=lambda *_args: {"episode_summary": "", "drafts": []})
+    result = extract_episode(writer, episode, episode["messages"])
+    assert result["anchors"] == []
     request.task_id = "system-only"
     request.messages = [system]
     with pytest.raises(AddRequestError) as error:
@@ -228,10 +234,71 @@ def test_project_comes_from_the_spaces(add_store):
     accept.accept(unnamed)
     accept.accept(_request("task-a", "message-a"))
     with add_store.transaction(readonly=True) as cursor:
-        cursor.execute("SELECT project_id, space_id FROM episodes ORDER BY space_id")
+        cursor.execute("SELECT project_id, space_id FROM add_jobs ORDER BY space_id")
         assert [(row["project_id"], row["space_id"]) for row in cursor.fetchall()] == [
             ("project-a", "space-a"),
             ("project-x", "space-x"),
         ]
         cursor.execute("SELECT project_id FROM messages ORDER BY project_id")
         assert [row["project_id"] for row in cursor.fetchall()] == ["project-a", "project-x"]
+
+
+def test_closes_on_budgets_not_on_phrases(add_store):
+    """A task-switch phrase no longer closes the Episode; budgets and the domain set do."""
+    _spaces(add_store, "space-a")
+    with add_store.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO domains (id, space_id, domain) VALUES ('ops', 'space-a', 'operations')"
+        )
+    accept = AddAcceptance(add_store, AcceptanceSettings(max_turns=3))
+    assert accept.accept(_request("t1", "m1")).closed_episode_ids == []
+    assert accept.accept(_request("t2", "m2", text="换个任务，看看发布")).closed_episode_ids == []
+    request = _request("t3", "m3")
+    request.domains = ["operations"]
+    (closed,) = accept.accept(request).closed_episode_ids
+    episode = add_store.load_episode(closed)
+    assert episode["close_reason"] == "domain_change"
+    assert [m["message_id"] for m in episode["messages"]] == ["m1", "m2"]
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT domains FROM add_jobs WHERE stage = 'episode_open'")
+        assert cursor.fetchone()["domains"] == ["operations"]
+
+
+def test_interleaved_messages_of_another_space_split_the_range(add_store):
+    _spaces(add_store, "space-a", "space-b")
+    accept = AddAcceptance(add_store)
+    accept.accept(_request("t1", "m1", spaces=["space-a"]))
+    accept.accept(_request("t2", "m2", spaces=["space-b"]))
+    (closed,) = accept.accept(_request("t3", "m3", spaces=["space-a"])).closed_episode_ids
+    first = add_store.load_episode(closed)
+    assert first["close_reason"] == "interleaved"
+    assert (first["message_seq_start"], first["message_seq_end"]) == (1, 1)
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute(
+            """SELECT e.message_seq_start, e.message_seq_end, e.previous_episode_id
+               FROM add_jobs j JOIN episodes e ON e.id = j.episode_id
+               WHERE j.space_id = 'space-a' AND j.stage = 'episode_open'"""
+        )
+        assert cursor.fetchone() == {
+            "message_seq_start": 3,
+            "message_seq_end": 3,
+            "previous_episode_id": closed,
+        }
+
+
+def test_replayed_message_keeps_its_seq_and_agent_is_text(add_store):
+    _spaces(add_store, "space-a")
+    accept = AddAcceptance(add_store)
+    request = _request("t1", "m1")
+    request.agent_id = ["codex", "helper"]
+    accept.accept(request)
+    accept.accept(_request("t2", "m2"))
+    replay = _request("t3", "m1")
+    replay.agent_id = ["codex", "helper"]
+    assert accept.accept(replay).duplicate
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT message_id, msg_seq, agent_id FROM messages ORDER BY msg_seq")
+        assert cursor.fetchall() == [
+            {"message_id": "m1", "msg_seq": 1, "agent_id": "codex"},
+            {"message_id": "m2", "msg_seq": 2, "agent_id": None},
+        ]
