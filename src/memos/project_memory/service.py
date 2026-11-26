@@ -1154,40 +1154,27 @@ class ProjectMemoryService:
         ids = list(getattr(req, "memory_ids", None) or [])
         if not getattr(req, "space_id", None):
             # Topic IDs only: the topics may be in different spaces; unknown IDs are ignored.
-            return {"deleted_topic_ids": self._delete_topics_by_id(ids)}
+            if not isinstance(self.store, RelationalProjectView):
+                raise ValueError("Deleting topics by ID needs the relational project store")
+            return {"deleted_topic_ids": self.store.delete_topics_by_id(ids)}
+        # space_id: clear all topics of the space; the space and its domains stay.
         if isinstance(self.store, RelationalProjectView):
             return {
                 "space_id": req.space_id,
-                "deleted_topic_ids": self.store.delete_topics(req.space_id, ids),
+                "deleted_topic_ids": self.store.clear_space_topics(req.space_id),
             }
         space = self.get_space(req.space_id)
         topics = self.store.list_topics(space.space_id)
-        targets = [t for t in topics if t.id in ids] if ids else topics
-        missing = set(ids) - {t.id for t in targets}
-        if missing:
-            raise LookupError(f"主题不在这个 Space 里：{sorted(missing)}")
-        if not ids:
-            # 清空：epoch 加 1，清空前受理、还没整理或正在整理的内容都不再写回（PRD）
-            space.epoch += 1
-            self.store.put_space(space)
-            for state in ("open", "pending", "deferred"):
-                for e in self.store.episodes(space.space_id, state):
-                    e.state = "discarded"
-                    self.store.put_episode(e)
-        for t in targets:
+        # 清空：epoch 加 1，清空前受理、还没整理或正在整理的内容都不再写回（PRD）
+        space.epoch += 1
+        self.store.put_space(space)
+        for state in ("open", "pending", "deferred"):
+            for e in self.store.episodes(space.space_id, state):
+                e.state = "discarded"
+                self.store.put_episode(e)
+        for t in topics:
             self.store.delete_topic(t)
-        return {"space_id": space.space_id, "deleted_topic_ids": [t.id for t in targets]}
-
-    def _delete_topics_by_id(self, topic_ids: list[str]) -> list[str]:
-        if isinstance(self.store, RelationalProjectView):
-            return self.store.delete_topics_by_id(topic_ids)
-        removed = []
-        for topic_id in dict.fromkeys(topic_ids):
-            topic = self.store.get_topic(topic_id)
-            if topic is not None:
-                self.store.delete_topic(topic)
-                removed.append(topic.id)
-        return sorted(removed)
+        return {"space_id": space.space_id, "deleted_topic_ids": [t.id for t in topics]}
 
     def task_status(self, task_id: str, user_id: str) -> dict[str, Any] | None:
         task = self.store.get_task(task_id)

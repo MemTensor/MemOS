@@ -357,25 +357,6 @@ class RelationalProjectView:
             if self.store.retrieval_index and cursor.rowcount:
                 self._retract(cursor, topic.space_id, [topic.id])
 
-    def delete_topics(self, space_id: str, topic_ids: list[str]) -> list[str]:
-        if not topic_ids:
-            return self.clear_space_topics(space_id)
-        with self.store.transaction() as cursor:
-            cursor.execute("SELECT id FROM spaces WHERE id = %s FOR UPDATE", (space_id,))
-            if cursor.fetchone() is None:
-                raise LookupError("Space 不存在")
-            cursor.execute(
-                "DELETE FROM topics WHERE space_id = %s AND id = ANY(%s::text[]) RETURNING id",
-                (space_id, topic_ids),
-            )
-            removed = {row["id"] for row in cursor.fetchall()}
-            missing = set(topic_ids) - removed
-            if missing:
-                raise LookupError(f"主题不在这个 Space 里：{sorted(missing)}")
-            if self.store.retrieval_index:
-                self._retract(cursor, space_id, sorted(removed))
-            return sorted(removed)
-
     def delete_topics_by_id(self, topic_ids: list[str]) -> list[str]:
         """Delete topics by ID in whichever space they are; entries cascade. Unknown IDs are
         ignored. Returns the deleted IDs. The retrieval mirror is left as is: it is being

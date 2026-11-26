@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -461,70 +460,53 @@ def test_search_get_and_delete(app):
     )
 
 
-def test_delete_topics_by_id_without_space(app):
-    """memory_ids of Topics alone delete those Topics; unknown IDs are ignored."""
-    client, sched, plugin = app
-    sid = _space(client)
-    _run_all(client, sched, sid, DECISION_ROUNDS)
-    topics = plugin.service.store.list_topics(sid)
-    assert topics
-    target = topics[0]
-
-    out = plugin.service.delete(
-        SimpleNamespace(space_id=None, memory_ids=[target.id, "topic_gone"])
-    )
-    assert out == {"deleted_topic_ids": [target.id]}
-    assert plugin.service.store.get_topic(target.id) is None
-    assert plugin.service.store.list_decisions(sid, target.id) == []
-    assert {t.id for t in plugin.service.store.list_topics(sid)} == {t.id for t in topics[1:]}
-
-
-def test_delete_memory_routes_topic_ids_to_project_memory(app, monkeypatch):
+def test_delete_memory_routes_by_space_id_or_topic_ids(app, monkeypatch):
     import memos.api.routers.server_router as server_router
 
     client, _, _ = app
-    personal = []
+    personal, project = [], []
     monkeypatch.setattr(
         server_router.handlers.memory_handler,
         "handle_delete_memories",
         lambda delete_mem_req, naive_mem_cube: personal.append(delete_mem_req.memory_ids)
         or {"code": 200, "message": "ok", "data": {}},
     )
-
-    # Topic IDs without space_id go to project memory, never to personal memory
-    r = client.post("/product/delete_memory", json={"memory_ids": ["topic_a", "topic_b"]})
-    assert r.status_code == 200, r.text
-    assert r.json()["data"] == {"deleted_topic_ids": []}
-    assert personal == []
-
-    # Topic IDs mixed with other IDs or with a personal delete condition delete nothing
-    for body in (
-        {"memory_ids": ["topic_a", "mem-1"]},
-        {"memory_ids": ["topic_a", ""]},
-        {"memory_ids": ["topic_a"], "filter": {"user_id": "u1"}},
-        {"memory_ids": ["topic_a"], "user_id": "u1"},
-        {"memory_ids": ["topic_a"], "writable_cube_ids": ["cube"]},
-        {"memory_ids": ["topic_a"], "file_ids": ["file-1"]},
-        {"memory_ids": ["topic_a"], "session_id": "conv-1"},
-        {"memory_ids": ["topic_a"], "conversation_id": "conv-1"},
-    ):
-        r = client.post("/product/delete_memory", json=body)
-        assert r.status_code == 400, body
-        assert r.json()["reason"] == "INVALID_PARAM"
-    assert personal == []
-
-    # With space_id the request deletes inside that space as before: no 400 for other fields
-    r = client.post(
-        "/product/delete_memory",
-        json={"space_id": "no-such-space", "memory_ids": ["topic_a"], "user_id": "u1"},
+    monkeypatch.setattr(
+        server_router.project_view,
+        "delete_topics",
+        lambda request: project.append((request.space_id, request.memory_ids)) or {},
     )
-    assert r.status_code == 404
+
+    # memory_ids alone that are all Topic IDs: project memory
+    assert (
+        client.post(
+            "/product/delete_memory", json={"memory_ids": ["topic_a", "topic_b"]}
+        ).status_code
+        == 200
+    )
+    # space_id alone: clear the space
+    assert client.post("/product/delete_memory", json={"space_id": "s1"}).status_code == 200
+    assert project == [(None, ["topic_a", "topic_b"]), ("s1", None)]
     assert personal == []
 
-    # Only an exact `topic_` prefix is a Topic ID; anything else stays personal memory
-    r = client.post("/product/delete_memory", json={"memory_ids": ["mem-1", "Topic_a", " topic_b"]})
-    assert r.status_code == 200
-    assert personal == [["mem-1", "Topic_a", " topic_b"]]
+    # space_id is one delete mode: it cannot come with memory_ids or a personal delete condition
+    for other in (
+        {"memory_ids": ["topic_a"]},
+        {"file_ids": ["file-1"]},
+        {"filter": {"user_id": "u1"}},
+        {"user_id": "u1"},
+        {"session_id": "conv-1"},
+        {"conversation_id": "conv-1"},
+    ):
+        r = client.post("/product/delete_memory", json={"space_id": "s1", **other})
+        assert r.status_code == 400 and r.json()["reason"] == "INVALID_PARAM", other
+    assert len(project) == 2
+
+    # Everything else is the existing personal memory delete
+    for ids in (["mem-1", "topic_a"], ["mem-1", "Topic_a", " topic_b"]):
+        assert client.post("/product/delete_memory", json={"memory_ids": ids}).status_code == 200
+    assert personal == [["mem-1", "topic_a"], ["mem-1", "Topic_a", " topic_b"]]
+    assert len(project) == 2
 
 
 def test_delete_space(app):
