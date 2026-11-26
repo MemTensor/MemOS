@@ -2,7 +2,7 @@ import type { Message, TraceInput } from '../types.ts';
 import { object } from './transcript.ts';
 
 const callTypes = ['tool_use', 'tool-call', 'tool_call', 'toolCall', 'function_call', 'custom_tool_call'];
-const resultTypes = ['tool_result', 'tool-result', 'function_call_output'];
+const resultTypes = ['tool_result', 'tool-result', 'toolResult', 'function_call_output', 'custom_tool_call_output'];
 const scope = (record: TraceInput) => {
   const source = record as TraceInput & { originSessionId?: string; nativeSessionId?: string; sessionId?: string };
   return JSON.stringify([source.originSessionId ?? source.nativeSessionId ?? source.sessionId ?? '', record.nativeTurnId ?? '']);
@@ -78,31 +78,45 @@ function call(value: unknown) {
 }
 const resultId = (value: unknown) => { const row = object(value); return row.tool_call_id ?? row.tool_use_id ?? row.toolCallId ?? row.call_id; };
 export function isBindControl(record: TraceInput): boolean { return object(record.raw).type === 'memos-bind-operation' && record.message?.role === 'system'; }
+export function isTraceControl(record: TraceInput): boolean {
+  return record.message?.role === 'system' && ['memos-bind-operation', 'memos-skill-read'].includes(String(object(record.raw).type));
+}
 
 /** Keep only durable call identities for late results. Control rows contain no command,
  * destination, or result body and are not task messages in the Viewer or upload. */
 export function filterBindRecords<T extends TraceInput>(records: T[]): T[] {
+  return filterToolRecords(records, bindingCall, 'memos-bind-operation');
+}
+
+/** A control row occupies the original record's position, so incremental readers
+ * can correlate late results without retaining excluded commands or bodies. */
+export function filterToolRecords<T extends TraceInput>(records: T[], identify: (tool: string, args: unknown, value?: unknown) => boolean, kind: 'memos-bind-operation' | 'memos-skill-read'): T[] {
   const decisions = new Map<string, boolean>();
+  const field = kind === 'memos-bind-operation' ? 'bindCallIds' : 'skillCallIds';
   const key = (record: TraceInput, id: string) => scope(record) + '\0' + id;
-  const remember = (record: TraceInput, id: string, binding: boolean) => {
+  const remember = (record: TraceInput, id: string, excluded: boolean) => {
     const idKey = key(record, id);
-    decisions.set(idKey, decisions.has(idKey) ? decisions.get(idKey)! && binding : binding);
+    if (kind === 'memos-skill-read' && decisions.has(idKey) && decisions.get(idKey) !== excluded)
+      throw new Error(`Conflicting tool call identity: ${id}`);
+    decisions.set(idKey, decisions.has(idKey) ? decisions.get(idKey)! && excluded : excluded);
   };
   for (const record of records) {
-    for (const field of ['callIds', 'bindCallIds']) for (const id of Array.isArray(object(record.raw)[field]) ? object(record.raw)[field] as unknown[] : []) if (typeof id === 'string') remember(record, id, true);
+    const raw = object(record.raw);
+    for (const id of ids(raw[field])) remember(record, id, true);
+    if (raw.type === kind) for (const id of ids(raw.callIds)) remember(record, id, true);
     const message = record.message;
-    if (!message || isBindControl(record)) continue;
+    if (!message || isTraceControl(record)) continue;
     const calls = [...Array.isArray(message.tool_calls) ? message.tool_calls : [], ...Array.isArray(message.content) ? message.content.filter(value => callTypes.includes(String(object(value).type))) : []];
-    for (const value of calls) { const valueCall = call(value); if (typeof valueCall.id === 'string' && typeof valueCall.tool === 'string') remember(record, valueCall.id, bindingCall(valueCall.tool, valueCall.args)); }
+    for (const value of calls) { const valueCall = call(value); if (typeof valueCall.id === 'string' && typeof valueCall.tool === 'string') remember(record, valueCall.id, identify(valueCall.tool, valueCall.args, value)); }
     const id = resultId(message);
-    if (typeof id === 'string' && typeof message.name === 'string' && message.tool_input !== undefined && bindingCall(message.name, message.tool_input)) remember(record, id, true);
+    if (typeof id === 'string' && typeof message.name === 'string' && message.tool_input !== undefined && identify(message.name, message.tool_input, message)) remember(record, id, true);
   }
   return records.map(record => {
     const message = record.message;
-    if (!message || isBindControl(record)) return record;
+    if (!message || isTraceControl(record)) return record;
     const omitted: string[] = [];
     const remove = (id: unknown) => { if (typeof id !== 'string' || decisions.get(key(record, id)) !== true) return false; omitted.push(id); return true; };
-    if (['tool', 'toolResult'].includes(message.role) && remove(resultId(message))) return control(record, omitted);
+    if (['tool', 'toolResult'].includes(message.role) && remove(resultId(message))) return control(record, omitted, kind);
     const tool_calls = Array.isArray(message.tool_calls) ? message.tool_calls.filter(value => !remove(call(value).id)) : message.tool_calls;
     const content = Array.isArray(message.content) ? message.content.filter(value => {
       const type = String(object(value).type);
@@ -110,14 +124,18 @@ export function filterBindRecords<T extends TraceInput>(records: T[]): T[] {
     }) : message.content;
     if (!omitted.length) return record;
     const filtered = { ...message, content, ...(tool_calls ? { tool_calls } : {}) };
-    if ((content === '' || Array.isArray(content) && !content.length) && !tool_calls?.length && !message.thinking && !message.reasoning && !message.reasoning_content) return control(record, omitted);
-    return { ...record, message: filtered, raw: { ...metadata(record.raw), bindCallIds: [...new Set(omitted)], message: filtered } };
+    if ((content === '' || Array.isArray(content) && !content.length) && !tool_calls?.length && !message.thinking && !message.reasoning && !message.reasoning_content) return control(record, omitted, kind);
+    return { ...record, message: filtered, raw: { ...metadata(record.raw), [field]: [...new Set([...ids(object(record.raw)[field]), ...omitted])], message: filtered } };
   });
 }
+function ids(value: unknown): string[] { return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []; }
 function metadata(raw: unknown): Record<string, unknown> {
   const row = object(raw);
-  return Object.fromEntries(['timestamp', 'occurredAt', 'createdAt', 'time', 'type', 'id', 'sourceOrdinal', 'sourcePart'].filter(key => ['string', 'number'].includes(typeof row[key])).map(key => [key, row[key]]));
+  return {
+    ...Object.fromEntries(['timestamp', 'occurredAt', 'createdAt', 'time', 'type', 'id', 'sourceOrdinal', 'sourcePart'].filter(key => ['string', 'number'].includes(typeof row[key])).map(key => [key, row[key]])),
+    ...Object.fromEntries(['bindCallIds', 'skillCallIds'].filter(key => Array.isArray(row[key])).map(key => [key, ids(row[key])])),
+  };
 }
-function control<T extends TraceInput>(record: T, ids: string[]): T {
-  return { ...record, raw: { ...metadata(record.raw), type: 'memos-bind-operation', callIds: [...new Set(ids)] }, message: { role: 'system', content: '' } };
+function control<T extends TraceInput>(record: T, callIds: string[], kind: 'memos-bind-operation' | 'memos-skill-read'): T {
+  return { ...record, raw: { ...metadata(record.raw), type: kind, callIds: [...new Set(callIds)] }, message: { role: 'system', content: '' } };
 }

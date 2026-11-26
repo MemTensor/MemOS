@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -29,6 +30,30 @@ function targetPath(profile:AdapterProfile,relative:string,options:Options):stri
  return join(home,relative);
 }
 function manifestPath(profile:AdapterProfile,home:string):string{return join(home,'.memos-project-memory','adapters',`${profile.id}.json`);}
+/** Only verified installer files establish tool names; package files establish exact paths. */
+export function installedSkills(agentType:string,home=homedir()):ReadonlySet<string>{
+ const owned=new Set<string>();const profile=profiles.find(profile=>profile.id===agentType);
+ if(!profile)return owned;
+ let manifest:Record<string,unknown>={};
+ try{manifest=object(JSON.parse(readFileSync(manifestPath(profile,home),'utf8')));}catch(error){if(object(error).code!=='ENOENT')throw error;}
+ const files=[...(Array.isArray(manifest.skillFiles)?manifest.skillFiles:[]),...(Array.isArray(manifest.files)?manifest.files:[])];
+ if(typeof manifest.skillFile==='string')files.push({path:manifest.skillFile,hash:manifest.skillHash});
+ if(manifest.installed!==false)for(const value of files){
+  const file=object(value);
+  if(typeof file.path!=='string'||!isAbsolute(file.path)||basename(file.path)!=='SKILL.md'||typeof file.hash!=='string')continue;
+  try{
+   if(digest(readFileSync(file.path,'utf8'))!==file.hash)continue;
+   owned.add(resolve(file.path));owned.add(realpathSync(file.path));owned.add(basename(dirname(file.path)));
+  }catch(error){if(object(error).code!=='ENOENT')throw error;}
+ }
+ const root=fileURLToPath(new URL('../../skills/',import.meta.url));
+ for(const entry of readdirSync(root,{withFileTypes:true})){
+  if(!entry.isDirectory())continue;
+  const path=join(root,entry.name,'SKILL.md');
+  try{owned.add(realpathSync(path));owned.add(resolve(path));}catch(error){if(object(error).code!=='ENOENT')throw error;}
+ }
+ return owned;
+}
 function eventMap(config:Record<string,unknown>,id:string,create:boolean):Record<string,unknown>{
  if(id==='factory-droid')return config;
  if(id==='antigravity-cli'){if(create)config[marker]??={};return object(config[marker]);}

@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { PluginService } from '../../src/server/service.ts';
+import { Store } from '../../src/storage/store.ts';
 import { normalizeHook } from '../../src/adapters/_shared/hooks.ts';
 
 const row = (type: string, payload: object, ordinal: number, day = 1) => ({ type, payload, ordinal, timestamp: `2026-01-${String(day).padStart(2,'0')}T00:00:${String(ordinal).padStart(2,'0')}.000Z` });
@@ -53,4 +55,170 @@ test('late child source completes its parent round and cannot create another vis
     assert.equal(service.store.rows('SELECT captureStatus FROM codex_rounds')[0]!.captureStatus, 'complete');
     assert.equal(service.store.sessionDetail(String(sessions[0]!.id),1,10,'turn').groups![0]!.traces.length,6);
     assert.equal(service.store.rows('SELECT * FROM codex_sources WHERE path IN (?,?)',parent,child).length,0);
+});
+
+const turnRows = (project: string) => [
+    meta('session', project), start('turn'), message('user', 'user', 'question', 2),
+    message('answer', 'assistant', 'answer', 3), end('turn', 4),
+];
+
+test('a readable replacement with missing history cannot retire its original source', async t => {
+    const { service, sources, project } = await fixture(t);
+    const original = join(sources, 'rollout-live.jsonl'), archive = join(sources, 'rollout-archive.jsonl');
+    const rows = turnRows(project);
+    await writeFile(original, jsonl(rows));
+    await service.codex.flush(true);
+    await rm(original);
+    await writeFile(archive, jsonl([rows[0], rows[1], rows[2], rows[4]]));
+    await service.codex.flush(true);
+    assert.ok(service.store.row('SELECT error FROM codex_sources WHERE path=?', original)?.error);
+    assert.ok(service.store.row('SELECT 1 FROM codex_sources WHERE path=?', archive));
+    assert.equal(service.store.rows('SELECT * FROM codex_event_sources WHERE sourcePath=?', original).length, 2);
+});
+
+test('unparsed trailing bytes prevent retirement even when a replacement has all parsed records', async t => {
+    const { service, sources, project } = await fixture(t);
+    const original = join(sources, 'rollout-live.jsonl'), archive = join(sources, 'rollout-archive.jsonl');
+    const content = jsonl(turnRows(project));
+    await writeFile(original, content + '{"type":');
+    await service.codex.flush(true);
+    await rm(original);
+    await writeFile(archive, content);
+    await service.codex.flush(true);
+    assert.ok(service.store.row('SELECT error FROM codex_sources WHERE path=?', original)?.error);
+    assert.ok(service.store.row('SELECT 1 FROM codex_sources WHERE path=?', archive));
+    assert.equal(service.store.rows('SELECT * FROM codex_event_sources WHERE sourcePath=?', original).length, 2);
+});
+
+test('a receipt can resolve against an unchanged source without writing its checkpoint', async t => {
+    const { service, sources, project } = await fixture(t);
+    const path = join(sources, 'rollout-live.jsonl');
+    await writeFile(path, jsonl(turnRows(project)));
+    await service.codex.flush(true);
+    const event = await normalizeHook('codex-cli', { session_id: 'session', turn_id: 'turn', cwd: project, transcript_path: path, hook_event_name: 'Stop' });
+    const id = service.codex.enqueue(event);
+    const getStatus = () => service.store.row('SELECT status FROM codex_receipts WHERE id=?', id)?.status;
+    assert.equal(getStatus(), 'pending');
+    service.store.db.exec("CREATE TEMP TRIGGER reject_checkpoint_rewrite BEFORE UPDATE ON codex_sources BEGIN SELECT RAISE(ABORT, 'unexpected checkpoint update'); END");
+    await service.codex.flush(true);
+    assert.equal(getStatus(), 'processed');
+});
+
+test('closing after the last rollout is read preserves its traces even if the file disappears before restart', async t => {
+    const { service, sources, project, dir } = await fixture(t);
+    const path = join(sources, 'rollout-final.jsonl');
+    await writeFile(path, jsonl(turnRows(project)));
+
+    // The filter runs after the file read. Close at the next microtask, the
+    // earliest an independent caller can interrupt the rest of this flush.
+    const allows = service.store.memory.allows.bind(service.store.memory);
+    t.mock.method(service.store.memory, 'allows', (...args: Parameters<typeof allows>) => {
+        queueMicrotask(() => service.close());
+        return allows(...args);
+    }, { times: 1 });
+    await service.codex.flush(true);
+    assert.equal(service.store.db.isOpen, false);
+
+    const checkpoint = new DatabaseSync(join(dir, 'data', 'memory.sqlite'), { readOnly: true });
+    try {
+        const row = checkpoint.prepare('SELECT state FROM codex_sources WHERE path=?').get(path);
+        assert.ok(row?.state, 'close must preserve the completed checkpoint');
+    } finally { checkpoint.close(); }
+
+    await rm(path);
+    const reopened = new PluginService(join(dir, 'data'), { codexRoots: [sources] });
+    try {
+        await reopened.codex.flush(true);
+        const messages = reopened.store.rows('SELECT message FROM traces ORDER BY id')
+            .map(trace => JSON.parse(String(trace.message)).content);
+        assert.deepEqual(messages, ['question', 'answer']);
+    } finally { reopened.close(); }
+});
+
+test('closing while a rollout read is in flight leaves the incomplete batch uncommitted', async t => {
+    const { service, sources, project, dir } = await fixture(t);
+    const path = join(sources, 'rollout-in-flight.jsonl');
+    await writeFile(path, jsonl(turnRows(project)));
+
+    // Recovery looks up the last checkpoint immediately before starting the I/O.
+    const row = service.store.row.bind(service.store);
+    t.mock.method(service.store, 'row', (query: string, ...args: (string | number | null)[]) => {
+        if (query === 'SELECT * FROM codex_source_meta WHERE sourcePath=?') queueMicrotask(() => service.close());
+        return row(query, ...args);
+    });
+    await service.codex.flush(true);
+    assert.equal(service.store.db.isOpen, false);
+
+    const reopened = new PluginService(join(dir, 'data'), { codexRoots: [sources] });
+    try {
+        assert.equal(reopened.store.row('SELECT 1 FROM codex_sources WHERE path=?', path), undefined);
+        assert.equal(reopened.store.rows('SELECT id FROM traces').length, 0);
+        await reopened.codex.flush(true);
+        assert.equal(reopened.store.rows('SELECT id FROM traces').length, 2);
+    } finally { reopened.close(); }
+});
+
+test('a source unbound by another connection during recovery is quarantined before its next read', async t => {
+    const { service, dir, sources, project } = await fixture(t);
+    const path = join(sources, 'rollout-live.jsonl');
+    await writeFile(path, jsonl(turnRows(project)));
+    const scopeId = service.store.memory.resolve('codex-cli', project)!.id;
+    const writer = new Store(join(dir, 'data', 'memory.sqlite'), service.config);
+    try {
+        await service.codex.flush(true);
+        const row = service.store.row.bind(service.store);
+        let unbound = false;
+        t.mock.method(service.store, 'row', (sql: string, ...args: (string | number | null)[]) => {
+            const result = row(sql, ...args);
+            if (!unbound && sql.includes('FROM capture_windows WHERE scopeId=? AND endedAt>=?')) {
+                unbound = true;
+                writer.unbind(scopeId, 'space');
+            }
+            return result;
+        });
+        await service.codex.flush(true);
+        assert.equal(unbound, true);
+        assert.match(String(row('SELECT error FROM codex_sources WHERE path=?', path)?.error), /已隔离/);
+    } finally { writer.close(); }
+});
+
+for (const validHeader of [true, false]) {
+    test(`closing while the last ${validHeader ? 'valid' : 'malformed'} Codex header is read preserves the pending receipt`, async t => {
+        const { service, sources, project, dir } = await fixture(t);
+        const path = join(sources, 'rollout-close.jsonl'), data = join(dir, 'data');
+        const transcript = jsonl(turnRows(project));
+        await writeFile(path, transcript);
+        const event = await normalizeHook('codex-cli', { session_id: 'session', turn_id: 'turn', cwd: project, transcript_path: path, hook_event_name: 'Stop' });
+        assert.ok(await service.codex.activation(event));
+        const receipt = service.codex.enqueue(event);
+        assert.ok(receipt);
+        service.close();
+
+        if (!validHeader) await writeFile(path, 'malformed header\n');
+        // With no discovery roots, the explicit receipt path is already being
+        // opened when captureCodex returns its pending promise.
+        const reader = new PluginService(data, { codexRoots: [] });
+        const reading = reader.captureCodex(true);
+        reader.close();
+        await reading;
+
+        await writeFile(path, transcript);
+        const reopened = new PluginService(data, { codexRoots: [] });
+        try {
+            const status = () => reopened.store.row('SELECT status FROM codex_receipts WHERE id=?', receipt)?.status;
+            assert.equal(status(), 'pending');
+            assert.equal(reopened.store.row('SELECT 1 FROM codex_sources WHERE path=?', path), undefined);
+            await reopened.captureCodex(true);
+            assert.equal(status(), 'processed');
+            assert.equal(reopened.store.rows('SELECT id FROM traces').length, 2);
+        } finally { reopened.close(); }
+    });
+}
+
+test('Codex activation stops if the service closes during header discovery', async t => {
+    const { service, sources, project } = await fixture(t);
+    await writeFile(join(sources, 'rollout-activation.jsonl'), jsonl(turnRows(project)));
+    const active = service.activation({ agentType: 'codex-cli', cwd: project, nativeSessionId: 'session' });
+    service.close();
+    assert.equal(await active, false);
 });

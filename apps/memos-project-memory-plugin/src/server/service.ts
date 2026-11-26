@@ -9,6 +9,7 @@ import { workbuddyConfigDir } from '../adapters/workbuddy/paths.ts';
 import { profile as workbuddyProfile } from '../adapters/workbuddy/profile.ts';
 import { readSessionTitles } from '../adapters/session-titles.ts';
 import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
+import { isTraceControl } from '../adapters/_shared/bind-records.ts';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { Configuration, connectionError, connectionIdentity } from '../config/config.ts';
 import { Store, type Session } from '../storage/store.ts';
@@ -77,7 +78,7 @@ export class PluginService {
     private creations = new Map<string, Promise<CreateResult>>();
     constructor(dataDir: string, options: CodexCaptureOptions & { home?: string } = {}) {
         this.home = options.home;
-        this.config = new Configuration(dataDir); this.store = new Store(join(dataDir, 'memory.sqlite'), this.config); this.cloud = new CloudClient(this.config, failure => this.store.cloudDiagnostics.record(failure));
+        this.config = new Configuration(dataDir); this.store = new Store(join(dataDir, 'memory.sqlite'), this.config, options.home); this.cloud = new CloudClient(this.config, failure => this.store.cloudDiagnostics.record(failure));
         this.claude = new ClaudeCapture(this.store);
         this.cursor = new CursorCapture(this.store, options.home);
         this.copilot = new CopilotCapture(this.store);
@@ -101,7 +102,7 @@ export class PluginService {
     close() { this.closed = true; this.doubao.close(); this.history.close(); this.claude.close(); this.cursor.close(); this.copilot.close(); this.prime.close(); this.codex.close(); this.store.close(); }
     async captureCodex(forceDiscovery = false) {
         await this.codex.flush(forceDiscovery);
-        await this.refreshSessionTitles();
+        if (!this.closed) await this.refreshSessionTitles();
     }
     async refreshSessionTitles() {
         this.doubao.refreshSessionTitles();
@@ -170,6 +171,22 @@ export class PluginService {
             return { ...scope, active: !!scope.enabledAt && scope.spaceIds.length > 0 && scope.connectionId === connectionIdentity(this.config.value), history: { ...scan, pending, uploadError, historyUploadConfirmCount: this.config.value.historyUploadConfirmCount,
                 uploading, canUpload: !!scope.spaceIds.length && scan.status === 'ready' && pending > 0 && !busy && !unavailable } };
         });
+    }
+    sessionPage(projectId: string | null, page: number, size: number) {
+        if (projectId && !this.store.row('SELECT id FROM projects WHERE id=?', projectId)) return undefined;
+        const sessions = this.store.orderedSessions().filter(session =>
+            (projectId ? session.projectId === projectId : !session.projectId) && this.visibleSession(String(session.id)));
+        return { projectId, sessions: sessions.slice((page - 1) * size, page * size), total: sessions.length, page, size };
+    }
+    markContextDelivered(input: { sessionId?: unknown; agentType?: unknown; nativeSessionId?: unknown }) {
+        const session = this.store.session(String(input.sessionId ?? ''));
+        if (session && this.store.memory.forSession(session)) {
+            this.store.markContextDelivered(session.id);
+        } else if (typeof input.agentType === 'string' && typeof input.nativeSessionId === 'string') {
+            const host = this.store.row('SELECT cwd FROM create_hosts WHERE agentType=? AND nativeSessionId=?', input.agentType, input.nativeSessionId);
+            if (host && this.store.memory.resolve(input.agentType, String(host.cwd)))
+                this.store.markHostContextDelivered(input.agentType, input.nativeSessionId);
+        }
     }
     visibleSession(id: string) {
         const session = this.store.session(id);
@@ -467,7 +484,7 @@ export class PluginService {
         const scope = known ? this.store.memory.forSession(this.store.session(String(known.id))!)
             : parent ? this.store.memory.forSession(this.store.session(String(parent.id))!) : this.store.memory.resolve(event.agentType, event.cwd);
         if (!scope) return { sessionId: '', conversationId: null, context: '', overview: '', identifiers: '' };
-        const records = event.records?.filter(record => this.store.memory.allows(scope.id, this.store.memory.recordTime(record.raw)) && normalizeTaskTrace(event.agentType, record)?.message);
+        const records = event.records?.filter(record => this.store.memory.allows(scope.id, this.store.memory.recordTime(record.raw)) && (isTraceControl(record) || normalizeTaskTrace(event.agentType, record)?.message));
         // Lifecycle and naming notifications do not establish a task. A submitted
         // input may reserve its context before the transcript body is flushed.
         if (!known
@@ -648,12 +665,12 @@ export class PluginService {
         return this.syncing;
     }
     private async runSync() {
-        await this.claude.flush();
-        await this.cursor.flush();
-        await this.copilot.flush();
-        await this.prime.flush();
+        for (const capture of [this.claude, this.cursor, this.copilot, this.prime]) {
+            if (this.closed) return;
+            await capture.flush();
+        }
         await this.captureCodex();
-        while (true) {
+        while (!this.closed) {
             let advanced = false;
             for (const [scopeId, job] of this.historyUploads) {
                 const scope = this.store.memory.get(scopeId);

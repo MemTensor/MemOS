@@ -1,7 +1,9 @@
 import type { Message, TraceInput } from '../types.ts';
 import { object } from './transcript.ts';
+import { isAbsolute, resolve } from 'node:path';
+import { filterToolRecords } from './bind-records.ts';
 
-export interface SkillRead { name: string; mixed?: boolean }
+export interface SkillRead { name: string; mixed?: boolean; owned?: boolean }
 export type SkillMatcher = (tool: string, args: unknown) => SkillRead | undefined;
 
 export function parseSkillArgs(value: unknown): Record<string, unknown> {
@@ -18,14 +20,81 @@ export function skillFileName(value: unknown): string | undefined {
   return name && !['.', '..', '~'].includes(name) ? name : 'unknown';
 }
 
-export function skillCommand(value: unknown): SkillRead | undefined {
+/** Quoted examples remain single words. Unsupported scripts cannot prove a read. */
+function skillWords(command: string): string[] | undefined {
+  const tokens = command.match(/"(?:\\.|[^"\\])*"|'[^']*'|#[^\r\n]*|&&|\|\||[;|&<>\r\n]|[^\s;|&<>]+/g) ?? [];
+  if (tokens.some((word, index) => word === '<' && tokens[index + 1] === '<'
+    || !word.startsWith("'") && !word.startsWith('"') && !word.startsWith('#') && /[()`{}]/.test(word))) return;
+  return tokens;
+}
+
+function readerName(executable: string): string | undefined {
+  return /^(?:(?:\/usr)?\/bin\/)?(cat|head|tail|sed|bat|more|get-content)$/i.exec(executable)?.[1]?.toLowerCase();
+}
+
+/** Locate a literal file operand of a read, without assigning output spans or
+ * interpreting conditions. A compound command is excluded as one tool call. */
+function ownedCommand(value: unknown, skills: ReadonlySet<string>): string | undefined {
+  if (Array.isArray(value) && value.every(word => typeof word === 'string')) {
+    if (/(?:^|\/)(?:ba|z|fi)?sh$/.test(value[0] ?? '') && /^-[a-z]*c$/.test(value[1] ?? '') && value.length === 3) return ownedCommand(value[2], skills);
+    value = value.map(word => JSON.stringify(word)).join(' ');
+  }
+  if (typeof value !== 'string') return;
+  const tokens = skillWords(value);
+  if (!tokens) return;
+  let executable = true, reading = '', redirect = false, sedProgram = false, sedExpression = false;
+  for (const token of tokens) {
+    if (token.startsWith('#')) continue;
+    if (/^(?:&&|\|\||[;|&\r\n])$/.test(token)) { executable = true; reading = ''; sedProgram = false; sedExpression = false; redirect = false; continue; }
+    if (token === '<' || token === '>') { redirect = true; continue; }
+    let word = token;
+    if (token.startsWith('"')) {
+      if (/[$`]/.test(token)) continue;
+      try { word = JSON.parse(token); } catch { continue; }
+    } else if (token.startsWith("'")) word = token.slice(1, -1);
+    if (redirect) { redirect = false; continue; }
+    if (executable) {
+      reading = readerName(word) ?? '';
+      executable = false;
+    } else if (reading) {
+      if (reading === 'sed') {
+        if (sedExpression) { sedExpression = false; continue; }
+        if (/^-[nErzu]*e$/.test(word) || word === '--expression') { sedProgram = true; sedExpression = true; continue; }
+        if (word === '-f' || word === '--file' || word.startsWith('--expression=') || /^-[nErzu]*e.+/.test(word)) { sedProgram = true; continue; }
+        if (word.startsWith('-')) continue;
+        if (!sedProgram) { sedProgram = true; continue; }
+      }
+      if (isAbsolute(word) && skills.has(resolve(word))) return skillFileName(word);
+    }
+  }
+}
+
+function ownedRead(tool: string, value: unknown, skills: ReadonlySet<string>): boolean {
+  const name = tool.split(/[.:/]/).at(-1)?.toLowerCase(), args = parseSkillArgs(value);
+  if (['skill', 'get_skill', 'use_skill'].includes(name ?? '')) {
+    const skill = args.skill_name ?? args.skill ?? args.name;
+    return typeof skill === 'string' && skills.has(skill);
+  }
+  if (['read', 'read_file'].includes(name ?? '') || name === 'str_replace_editor' && args.command === 'view') {
+    const path = args.file_path ?? args.filePath ?? args.path;
+    return typeof path === 'string' && isAbsolute(path) && skills.has(resolve(path));
+  }
+  if (['exec_command', 'shell', 'local_shell', 'bash', 'pwsh', 'powershell', 'bash_persistent', 'pwsh_persistent', 'run_terminal_command', 'run_command', 'execute_command', 'terminal'].includes(name ?? ''))
+    return !!ownedCommand(args.cmd ?? args.command ?? value, skills);
+  return false;
+}
+
+export function skillCommand(value: unknown, skills?: ReadonlySet<string>): SkillRead | undefined {
+  const owned = skills && ownedCommand(value, skills);
+  if (owned) return { name: owned, owned: true };
   if (Array.isArray(value) && value.every(word => typeof word === 'string')) {
     if (/(?:^|\/)(?:ba|z|fi)?sh$/.test(value[0] ?? '') && /^-[a-z]*c/.test(value[1] ?? '')) return skillCommand(value.at(-1));
     value = value.map(word => JSON.stringify(word)).join(' ');
   }
   if (typeof value !== 'string') return;
   // No evaluation, substitutions, aliases or general shell interpretation.
-  const tokens = value.match(/"(?:\\.|[^"\\])*"|'[^']*'|#[^\r\n]*|\r?\n|&&|\|\||[;|&<>]|[^\s;|&<>]+/g) ?? [];
+  const tokens = skillWords(value);
+  if (!tokens) return;
   const segments: string[][] = [[]];
   for (const token of tokens) {
     if (token.startsWith('#')) continue;
@@ -39,8 +108,8 @@ export function skillCommand(value: unknown): SkillRead | undefined {
   }
   for (const segment of segments) {
     const [executable, ...args] = segment;
-    const tool = executable?.replace(/^.*[\\/]/, '').toLowerCase();
-    if (!tool || !['cat', 'head', 'tail', 'sed', 'bat', 'more', 'get-content', 'type'].includes(tool)) continue;
+    const tool = executable && readerName(executable);
+    if (!tool) continue;
     const files = args.filter(token => skillFileName(token));
     if (!files.length) continue;
     const name = skillFileName(files[0])!;
@@ -98,7 +167,13 @@ const scope = (record: TraceInput) => {
 };
 
 /** Mechanical correlation only; no host is opted in and no tool is classified here. */
-export function filterSkillRecords<T extends TraceInput>(records: T[], identify: SkillMatcher): T[] {
+export function filterSkillRecords<T extends TraceInput>(records: T[], identify: SkillMatcher, skills?: ReadonlySet<string>): T[] {
+  if (skills) records = filterToolRecords(records, (tool, args, value) => {
+    // Our legacy projection is already a body-free Skill summary, not proof
+    // that an arbitrary same-named file belonged to this installation.
+    if (tool === 'skill' && typeof parseSkillArgs(args).skill_name === 'string' && ['started', 'incomplete'].includes(String(object(value).status))) return false;
+    return ownedRead(tool, args, skills) || identify(tool, args)?.owned === true;
+  }, 'memos-skill-read');
   const reads = new Map<string, SkillRead>();
   const seen = new Map<string, SkillRead | undefined>();
   const classify = (call: NonNullable<ReturnType<typeof identity>>, value: unknown): SkillRead | undefined => {
@@ -173,6 +248,9 @@ export function filterSkillRecords<T extends TraceInput>(records: T[], identify:
     if (!changed) return record;
     // Rebuild evidence instead of copying a second unfiltered tool envelope.
     const raw = object(record.raw), retained: Record<string, unknown> = {};
+    for (const field of ['bindCallIds', 'skillCallIds']) {
+      if (Array.isArray(raw[field])) retained[field] = raw[field];
+    }
     for (const key of ['type', 'id', 'uuid', 'seq', 'ordinal', 'status', 'timestamp', 'occurredAt', 'createdAt', 'time', 'turn_id', 'turnId', 'generation_id', 'root_turn_id', 'parent_turn_id', 'hook_event_name', 'sourceOrdinal', 'sourcePart', 'parentId']) {
       if (['string', 'number'].includes(typeof raw[key])) retained[key] = raw[key];
     }

@@ -3,7 +3,6 @@ import { open } from 'node:fs/promises';
 import type { Message } from '../types.ts';
 import { stripImages } from '../_shared/image-content.ts';
 import { normalizeCodexContent, codexRecordRaw } from './content-normalizer.ts';
-import { filterCodexSkills } from './skill-filter.ts';
 import { filterBindRecords } from '../_shared/bind-records.ts';
 import { messageMetadata } from '../_shared/transcript.ts';
 import type { CodexExpectedChild, CodexParserState, CodexReaderState, CodexRecord, CodexSnapshot, CodexSourceKind, CodexTurn } from './types.ts';
@@ -317,7 +316,7 @@ function consumeLines(state: CodexParserState, content: string): void {
         }
         consume(state, stripImages(raw), ordinal);
     }
-    for (const turn of state.snapshot.turns) turn.records = filterBindRecords(filterCodexSkills(turn.records));
+    for (const turn of state.snapshot.turns) turn.records = filterBindRecords(turn.records);
 }
 function snapshotOf(state: CodexParserState, partial = false): CodexSnapshot {
     // Only the containers normalized below need copying. Task bodies remain
@@ -360,16 +359,16 @@ export async function readCodexRollout(path: string, previous?: CodexReaderState
     try {
         const stat = await handle.stat();
         const fileIdentity = `${stat.dev}:${stat.ino}`;
-        let reusable = previous !== undefined && [2, 3].includes(previous.version) && previous.fileIdentity === fileIdentity && previous.byteOffset <= stat.size && !(stat.size === previous.observedSize && stat.mtimeMs !== previous.modifiedAt);
+        let reusable = previous !== undefined && [2, 3, 4].includes(previous.version) && previous.fileIdentity === fileIdentity && previous.byteOffset <= stat.size && !(stat.size === previous.observedSize && stat.mtimeMs !== previous.modifiedAt);
         if (reusable && previous) {
             const prefix = await bytes(handle, 0, previous.prefixLength);
             const tail = await bytes(handle, previous.byteOffset - previous.tailLength, previous.tailLength);
             reusable = digest(prefix) === previous.prefixDigest && digest(tail) === previous.tailDigest;
         }
-        // v2 cached turn cwd. Replay it, but retain verified source continuity
-        // so the collector can distinguish this upgrade from file replacement.
-        const directoryUpgrade = reusable && previous?.version === 2;
-        reusable = reusable && previous?.version === 3 && !previous.parser.snapshot.gaps.includes('pending_tool_replay');
+        // Older caches projected Skill reads before capture. Replay their native
+        // source while retaining continuity and already-confirmed upload receipts.
+        const directoryUpgrade = reusable && previous?.version !== 4;
+        reusable = reusable && previous?.version === 4;
         if (reusable && previous && stat.size === previous.observedSize) {
             return { snapshot: snapshotOf(previous.parser, previous.byteOffset < stat.size), state: previous, changed: false, directoryUpgrade: false };
         }
@@ -382,17 +381,7 @@ export async function readCodexRollout(path: string, previous?: CodexReaderState
             byteOffset += newline + 1;
         }
         const prefixLength = Math.min(byteOffset, 4096), tailLength = Math.min(byteOffset, 4096);
-        // A tool without an execution identity cannot yet be associated with its
-        // Skill call. Keep metadata only in persistent pending state; replay the
-        // native file once its context arrives instead of caching an opaque body.
-        for (const pending of parser.pending) {
-            const raw = object(pending.raw), payload = object(raw.payload);
-            if (payload.type === 'message' && ['user', 'assistant'].includes(String(payload.role))) continue;
-            pending.raw = { type: raw.type, timestamp: raw.timestamp, ordinal: raw.ordinal,
-                payload: { type: payload.type, id: payload.id, call_id: payload.call_id } };
-            addGap(parser, 'pending_tool_replay');
-        }
-        const state: CodexReaderState = { version: 3, fileIdentity, observedSize: stat.size, modifiedAt: stat.mtimeMs, byteOffset, prefixLength, tailLength,
+        const state: CodexReaderState = { version: 4, fileIdentity, observedSize: stat.size, modifiedAt: stat.mtimeMs, byteOffset, prefixLength, tailLength,
             prefixDigest: digest(await bytes(handle, 0, prefixLength)), tailDigest: digest(await bytes(handle, byteOffset - tailLength, tailLength)), parser };
         return { snapshot: snapshotOf(parser, byteOffset < stat.size), state, changed: !reusable || byteOffset !== previous?.byteOffset || stat.size !== previous?.observedSize, directoryUpgrade };
     } finally { await handle.close(); }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { filterBindRecords, isBindControl } from '../adapters/_shared/bind-records.ts';
+import { filterBindRecords, isTraceControl } from '../adapters/_shared/bind-records.ts';
 import { hasTaskContent } from '../adapters/_shared/message-content.ts';
 import { createReadStream } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
@@ -9,7 +9,6 @@ import { DatabaseSync } from 'node:sqlite';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
 import { object, readTranscript, textField } from '../adapters/_shared/transcript.ts';
 import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
-import { filterAdapterSkills } from '../adapters/skill-filters.ts';
 import { stripImages } from '../adapters/_shared/image-content.ts';
 import { readCodexRollout } from '../adapters/codex-cli/rollout.ts';
 import type { CodexSnapshot } from '../adapters/codex-cli/types.ts';
@@ -61,7 +60,7 @@ export class HistoryService {
     }
     private mergeLocalRecords(scopeId: string, scan: Scan) {
         const local = this.store.rows(`SELECT s.nativeSessionId,t.sourceId FROM traces t JOIN sessions s ON s.id=t.sessionId JOIN turns u ON u.id=t.conversationId
-WHERE s.objectId=? AND (s.agentType<>'doubao-work' OR s.cwd=?) AND COALESCE(json_extract(t.raw,'$.type'),'')<>'memos-bind-operation' AND u.completedAt IS NOT NULL AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=u.id AND r.captureStatus!='complete')`, scopeId, this.store.memory.get(scopeId)?.root ?? '')
+WHERE s.objectId=? AND (s.agentType<>'doubao-work' OR s.cwd=?) AND COALESCE(json_extract(t.raw,'$.type'),'') NOT IN ('memos-bind-operation','memos-skill-read') AND u.completedAt IS NOT NULL AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=u.id AND r.captureStatus!='complete')`, scopeId, this.store.memory.get(scopeId)?.root ?? '')
             .map(row => ({ nativeSessionId: String(row.nativeSessionId), sourceId: String(row.sourceId) }));
         scan.records = [...new Map([...scan.records, ...local].map(record => [record.sourceId.startsWith('codex:v2:') ? record.sourceId : JSON.stringify(record), record])).values()];
         scan.recordCount = scan.records.length;
@@ -121,8 +120,8 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
             const snapshots = await this.codex(selected, scope);
             for (const snapshot of snapshots) {
                 snapshot.sourcePath = `history:${snapshot.sourcePath}`;
-                for (const turn of snapshot.turns) turn.records = turn.records.filter(record => isBindControl(record) || allowed.has(JSON.stringify({ nativeSessionId: record.originSessionId || snapshot.nativeSessionId, sourceId: `codex:v2:${JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId])}` })));
-                snapshot.turns = snapshot.turns.filter(turn => turn.records.some(record => !isBindControl(record)));
+                for (const turn of snapshot.turns) turn.records = turn.records.filter(record => isTraceControl(record) || allowed.has(JSON.stringify({ nativeSessionId: record.originSessionId || snapshot.nativeSessionId, sourceId: `codex:v2:${JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId])}` })));
+                snapshot.turns = snapshot.turns.filter(turn => turn.records.some(record => !isTraceControl(record)));
             }
             await this.validateSources(scope, scan.sources);
             this.store.applyCodexSnapshots(snapshots, { prepareUploads: false, requireBinding: true });
@@ -148,17 +147,17 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         const session = this.store.registerSession({ agentType: scope.agentType, nativeSessionId: source.nativeSessionId, cwd: source.cwd });
         if (source.doubao && (session.cwd !== scope.root || session.objectId !== scope.id)) throw new Error('豆包工作会话已关联其他项目，请重新扫描');
         for (const item of turns) {
-            const existing = item.records.map(record => this.store.row('SELECT id,conversationId FROM traces WHERE sessionId=? AND sourceId=?', session.id, record.sourceId));
+            const existing = item.records.map(record => this.store.row('SELECT id,conversationId,raw,message FROM traces WHERE sessionId=? AND sourceId=?', session.id, record.sourceId));
             if (source.doubao) this.checkStoredDoubao(session.id, item);
-            if (existing.every(Boolean) && scope.agentType !== 'workbuddy' && !source.doubao) continue;
             const conversations = new Set(existing.flatMap(record => record?.conversationId ? [String(record.conversationId)] : []));
             const knownTurn = conversations.size === 1 ? this.store.row('SELECT id FROM turns WHERE id=?', [...conversations][0]!) : undefined;
             const turn = knownTurn ?? this.store.startTurn(session.id, item.key, false);
-            for (const input of item.records) {
-                if (!isBindControl(input) && !allowed.has(JSON.stringify({ nativeSessionId: source.nativeSessionId, sourceId: input.sourceId }))) continue;
-                const record = isBindControl(input) ? input : stripImages(normalizeTaskTrace(scope.agentType, input));
-                if (!record?.message || !isBindControl(record) && !hasTaskContent(record.message)) continue;
+            for (const [index, input] of item.records.entries()) {
+                if (!isTraceControl(input) && !allowed.has(JSON.stringify({ nativeSessionId: source.nativeSessionId, sourceId: input.sourceId }))) continue;
+                const record = isTraceControl(input) ? input : stripImages(normalizeTaskTrace(scope.agentType, input));
+                if (!record?.message || !isTraceControl(record) && !hasTaskContent(record.message)) continue;
                 if (Array.isArray(object(input.raw).bindCallIds)) record.raw = { ...object(record.raw), bindCallIds: object(input.raw).bindCallIds };
+                if (existing[index] && this.store.restoreSkillTrace(Number(existing[index]!.id), record)) continue;
                 if (scope.agentType === 'workbuddy' && this.store.mergeWorkBuddyTrace(session, record)) continue;
                 this.store.db.prepare('INSERT OR IGNORE INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(?,?,?,?,?,?)')
                     .run(session.id, String(turn.id), record.sourceId, JSON.stringify(record.raw), JSON.stringify(record.message), this.store.memory.recordTime(record.raw) ?? item.completedAt);
@@ -173,7 +172,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
     private checkStoredDoubao(sessionId: string, turn: HistoricalTurn) {
         const stored = this.store.rows('SELECT t.sourceId,t.message FROM traces t JOIN turns u ON u.id=t.conversationId WHERE t.sessionId=? AND u.nativeKey=?', sessionId, turn.key);
         const rows = new Map(turn.records.map(input => {
-            const record = isBindControl(input) ? input : stripImages(normalizeTaskTrace('doubao-work', input));
+            const record = isTraceControl(input) ? input : stripImages(normalizeTaskTrace('doubao-work', input));
             return [input.sourceId, JSON.stringify(record?.message)];
         }));
         if (stored.some(row => rows.get(String(row.sourceId)) !== row.message)
@@ -393,8 +392,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
             if (['turn/end', 'turn.end', 'turn.completed', 'turn.finished'].includes(String(raw.type)) || ['end_turn', 'stop', 'error', 'aborted'].includes(String(stop)) || scope.agentType === 'workbuddy' && record?.message?.role === 'assistant' && raw.status === 'completed') completedAt = time ?? cutoff;
         }
         finish();
-        return turns.map(turn => ({ ...turn, records: filterAdapterSkills(scope.agentType,
-            turn.records.map(record => ({ ...record, nativeTurnId: record.nativeTurnId ?? turn.key }))) }));
+        return turns.map(turn => ({ ...turn, records: turn.records.map(record => ({ ...record, nativeTurnId: record.nativeTurnId ?? turn.key })) }));
     }
     private openCodeTurns(scope: MemoryScope, source: Source, cutoff: string): HistoricalTurn[] {
         const db = new DatabaseSync(source.path, { readOnly: true });

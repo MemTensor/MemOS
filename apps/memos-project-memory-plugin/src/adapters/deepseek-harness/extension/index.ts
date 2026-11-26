@@ -1,6 +1,5 @@
-import { observed, object } from '../../_shared/transcript.ts';
-import type { AgentEvent, TraceInput } from '../../types.ts';
-import { filterDshSkills } from '../skill-filter.ts';
+import { observed } from '../../_shared/transcript.ts';
+import type { AgentEvent } from '../../types.ts';
 import { randomUUID } from 'node:crypto';
 import { normalizeTaskTrace } from '../../_shared/task-trace.ts';
 import { Bridge, message, sendEvent, type Data, type Send } from '../../opencode-v1/extension/bridge.ts';
@@ -33,7 +32,6 @@ interface SessionState {
   pending: Promise<void>;
   text: string;
   overview?: Overview;
-  skillCalls: TraceInput[];
 }
 
 const unavailable = '项目记忆检索调用上下文（memos-project-memory）\n本轮项目记忆暂不可用，请勿复用历史调用标识。';
@@ -48,7 +46,7 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
     let state = sessions.get(session.id);
     if (!state) {
       if (!session.id || !session.header?.cwd) throw new Error('DeepSeek session identity or cwd missing');
-      state = { session, pending: Promise.resolve(), text: '', skillCalls: [] };
+      state = { session, pending: Promise.resolve(), text: '' };
       sessions.set(session.id, state);
     }
     return state;
@@ -74,7 +72,7 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
     state.text = unavailable;
     warn();
   };
-  const clear = (state: SessionState) => { state.text = ''; state.overview = undefined; state.turnKey = undefined; state.skillCalls = []; };
+  const clear = (state: SessionState) => { state.text = ''; state.overview = undefined; state.turnKey = undefined; };
   const queue = (state: SessionState, operation: () => Promise<unknown>) => {
     state.pending = state.pending.then(operation).then(result => { if (result && typeof result === 'object' && 'sessionId' in result && !result.sessionId) clear(state); }, () => { failed(state); });
   };
@@ -128,21 +126,8 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
         if (!record) { await bridgeFor(state).dispatch(session.id, 'turn-end'); state.text = bridgeFor(state).creationContext(session.id); }
         return;
       }
-      if (!record) { await bridgeFor(state).dispatch(session.id, 'turn-end'); state.skillCalls = []; return; }
-      // Native turn numbers scope the invocation; a resumed extension can recover
-      // calls from the session itself without persisting a second body cache.
-      const nativeTurnId = String(event.data?.turn ?? state.turnKey ?? '');
-      const explicitTurn = Number.isSafeInteger(event.data?.turn) && event.data.turn >= 0;
-      const prior: TraceInput[] = (explicitTurn ? state.session.snapshotEvents?.() ?? [] : []).filter((item: Data) => item.type === 'tool/call' && item.data?.turn === event.data?.turn)
-        .flatMap((item: Data) => {
-          const call = normalizeTaskTrace('deepseek-harness', { sourceId: `event:${item.seq}`, raw: item, nativeTurnId });
-          return call ? [call] : [];
-        });
-      const projected = filterDshSkills([...state.skillCalls, ...prior, { ...record, nativeTurnId }]);
-      state.skillCalls = [...new Map(projected.filter(item => item.nativeTurnId === nativeTurnId && item.message?.tool_calls?.some(call => object(object(call).function).name === 'skill'))
-        .map(item => [item.sourceId, item])).values()];
-      const clean = projected.at(-1)!;
-      await bridgeFor(state).trace(session.id, clean.raw, clean.sourceId, clean.message);
+      if (!record) { await bridgeFor(state).dispatch(session.id, 'turn-end'); return; }
+      await bridgeFor(state).trace(session.id, record.raw, record.sourceId, record.message);
     });
   });
   ctx.on('agent/pre-step', async (payload: Data, next: () => Promise<Data>) => {

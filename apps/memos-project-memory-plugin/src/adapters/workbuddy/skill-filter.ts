@@ -16,8 +16,8 @@ function identify(tool: string, input: unknown): SkillRead | undefined {
   return undefined;
 }
 
-export function filterWorkBuddySkills<T extends TraceInput>(records: T[]): T[] {
-  return filterSkillRecords(records, identify).map((record, index) => {
+export function filterWorkBuddySkills<T extends TraceInput>(records: T[], skills?: ReadonlySet<string>): T[] {
+  return filterSkillRecords(records, identify, skills).map((record, index) => {
     if (record === records[index] || record.message?.role !== 'tool'
       || String(parseSkillArgs(record.raw).hook_event_name).toLowerCase() !== 'posttooluse') return record;
     const summary = parseSkillArgs(record.message.content);

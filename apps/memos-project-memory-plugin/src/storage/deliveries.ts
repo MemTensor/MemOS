@@ -7,8 +7,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { object } from '../adapters/_shared/transcript.ts';
 import type { Message } from '../adapters/types.ts';
 import type { Store, Batch } from './store.ts';
-import { filterUploadTraces } from './upload-filter.ts';
 import { hasIncompleteSkill } from '../adapters/_shared/skill-records.ts';
+import { isTraceControl } from '../adapters/_shared/bind-records.ts';
 import { hasSkillFilter } from '../adapters/skill-filters.ts';
 import { orderCursorTraces } from '../adapters/cursor-cli/source.ts';
 
@@ -56,12 +56,13 @@ CREATE INDEX IF NOT EXISTS delivery_trace ON batch_traces(traceId,batchId);`);
     }
     private sourceRows(batch: Batch): Row[] {
         return this.store.rows(`SELECT t.*,s.nativeSessionId,m.sourceId AS canonicalSourceId,m.originSessionId,m.nativeTurnId,m.occurredAt,m.sourceOrdinal FROM traces t JOIN sessions s ON s.id=t.sessionId
-LEFT JOIN codex_event_meta m ON m.traceId=t.id WHERE t.sessionId=? AND (t.batchId=? OR t.conversationId=? OR EXISTS(SELECT 1 FROM batch_traces bt WHERE bt.batchId=? AND bt.traceId=t.id))
-ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, batch.sessionId, batch.id, batch.conversationId, batch.id) as Row[];
+LEFT JOIN codex_event_meta m ON m.traceId=t.id WHERE t.sessionId=? AND (t.batchId=? OR t.conversationId=? OR EXISTS(SELECT 1 FROM batch_traces bt WHERE bt.batchId=? AND bt.traceId=t.id)
+OR t.conversationId IN (SELECT related.conversationId FROM traces related WHERE related.batchId=? OR EXISTS(SELECT 1 FROM batch_traces bt WHERE bt.batchId=? AND bt.traceId=related.id)))
+ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, batch.sessionId, batch.id, batch.conversationId, batch.id, batch.id, batch.id) as Row[];
     }
     private rowsForBatch(batch: Batch): Row[] {
-        const rows = this.sourceRows(batch);
-        const filtered = filterUploadTraces(rows.map((row): Row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })));
+        const rows = this.sourceRows(batch).filter(row => !isTraceControl({ sourceId: String(row.sourceId), raw: JSON.parse(String(row.raw)), message: JSON.parse(String(row.message)) }));
+        const filtered = this.store.uploadTraces(batch.sessionId, rows.map((row): Row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })));
         const used = this.matchMessages(filtered, batch.messages);
         const indices = new Map<number, number[]>();
         filtered.forEach((row, index) => { const id = Number(row.id); indices.set(id, [...indices.get(id) ?? [], index]); });
@@ -112,7 +113,7 @@ ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, batch.session
                 if (batch.conversationId && !this.store.row('SELECT id FROM turns WHERE id=? AND completedAt IS NOT NULL', batch.conversationId)) continue;
                 const linked = new Set(this.store.rows('SELECT traceId FROM batch_traces WHERE batchId=?', batch.id).map(row => Number(row.traceId)));
                 const rows = this.sourceRows(batch).filter(row => !linked.size || linked.has(Number(row.id)));
-                const projected = filterUploadTraces(rows.map(row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })));
+                const projected = this.store.uploadTraces(batch.sessionId, rows.map(row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })));
                 const frozen = batch.messages.flatMap(uploadMessages);
                 // Missing source evidence must never shrink an unsent snapshot.
                 const messages = projected.length && this.matchMessages(projected, frozen).size === frozen.length
@@ -139,7 +140,7 @@ ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, batch.session
             if (!trace) return false;
             const rows = this.store.rows(`SELECT t.*,s.nativeSessionId,m.sourceId AS canonicalSourceId,m.originSessionId,m.nativeTurnId FROM traces t JOIN sessions s ON s.id=t.sessionId
     LEFT JOIN codex_event_meta m ON m.traceId=t.id WHERE t.sessionId=? AND t.conversationId IS ? ORDER BY t.id`, String(trace.sessionId), trace.conversationId ? String(trace.conversationId) : null);
-            projected = filterUploadTraces(rows.map((row): Row => ({ ...row, message: JSON.parse(String(row.message)), sourceId: row.canonicalSourceId ?? row.sourceId })))
+            projected = this.store.uploadTraces(String(trace.sessionId), rows.map((row): Row => ({ ...row, message: JSON.parse(String(row.message)), sourceId: row.canonicalSourceId ?? row.sourceId })))
                 .filter(row => Number(row.id) === traceId);
         }
         if (!projected.length) return true;
@@ -149,7 +150,7 @@ ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, batch.session
         const rows = this.store.rows(`SELECT t.*,s.nativeSessionId,m.sourceId AS canonicalSourceId,m.originSessionId,m.nativeTurnId FROM traces t JOIN sessions s ON s.id=t.sessionId
 LEFT JOIN codex_event_meta m ON m.traceId=t.id WHERE s.objectId=? ORDER BY t.id`, scopeId);
         const grouped = new Map<number, Row[]>();
-        for (const row of filterUploadTraces(rows.map((row): Row => ({...row,message:JSON.parse(String(row.message)),sourceId:row.canonicalSourceId ?? row.sourceId})))) {
+        for (const row of this.store.uploadTraces(String(rows[0]?.sessionId ?? ''), rows.map((row): Row => ({...row,message:JSON.parse(String(row.message)),sourceId:row.canonicalSourceId ?? row.sourceId})))) {
             const id = Number(row.id), group = grouped.get(id) ?? []; group.push(row); grouped.set(id, group);
         }
         return grouped;
@@ -213,19 +214,20 @@ WHERE t.traceId=? AND d.baseUrl=? AND d.connectionId=(SELECT connectionId FROM b
                 continue;
             }
             this.indexBatch(batch, rows);
+            const projected = this.store.uploadTraces(batch.sessionId, rows.map((row): Row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })));
             for (const spaceId of scope.spaceIds) {
                 if (!this.store.creation.liveRowsAllowed(batch.sessionId, spaceId, scope.baseUrl, rows)) continue;
                 // A newly attached Space receives old content only after the user asks.
                 const binding = this.store.row('SELECT boundAt FROM bindings WHERE objectId=? AND spaceId=?', scope.id, spaceId);
-                const eligible = rows.filter(row => this.store.memory.allows(scope.id, this.time(row)) && this.time(row) >= String(binding?.boundAt ?? scope.enabledAt));
-                const missing = eligible.filter(row => !this.covered(Number(row.id), scope.baseUrl, spaceId, true));
+                const eligible = projected.filter(row => this.store.memory.allows(scope.id, this.time(row)) && this.time(row) >= String(binding?.boundAt ?? scope.enabledAt));
+                const missing = eligible.filter(row => !this.matchMessages([row], this.receiptMessages(Number(row.id), scope.baseUrl, spaceId, true)).size);
                 if (!missing.length || this.store.row('SELECT 1 FROM batch_deliveries WHERE batchId=? AND connectionId=? AND spaceId=?', batch.id, scope.connectionId, spaceId)) continue;
-                this.queue(scope.id, batch.sessionId, scope.baseUrl, spaceId, missing, 'live', missing.length === rows.length ? batch : undefined);
+                this.queue(scope.id, batch.sessionId, scope.baseUrl, spaceId, missing, 'live', isDeepStrictEqual(missing.map(row => row.message), batch.messages) ? batch : undefined);
             }
         }
     }
     private queue(scopeId: string, sessionId: string, baseUrl: string, spaceId: string, rows: Row[], kind: string, original?: Batch) {
-        const messages = filterUploadTraces(orderCursorTraces(rows.map(row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })))).map(row => row.message), payload = JSON.stringify(messages);
+        const messages = rows.map(row => row.message), payload = JSON.stringify(messages);
         if (!messages.length) return undefined;
         const oversized = !this.fits(sessionId, spaceId, messages);
         const error = uploadValidationError(messages) ?? (hasSkillFilter(this.store.session(sessionId)?.agentType ?? '') && messages.some(message => hasIncompleteSkill(message as import('../adapters/types.ts').Message)) ? 'Skill 调用身份或输出边界不完整；正文未采集' : oversized ? '整轮轨迹超出保守上传容量；完整内容已保留' : null);
@@ -248,12 +250,13 @@ WHERE t.traceId=? AND d.baseUrl=? AND d.connectionId=(SELECT connectionId FROM b
         const rows = this.store.rows(`SELECT t.*,s.nativeSessionId,m.sourceId AS canonicalSourceId,m.originSessionId,m.nativeTurnId,m.occurredAt,m.sourceOrdinal FROM traces t JOIN sessions s ON s.id=t.sessionId
 LEFT JOIN codex_event_meta m ON m.traceId=t.id WHERE s.objectId=? ORDER BY COALESCE(m.occurredAt,t.createdAt),m.sourceOrdinal,t.id`, scopeId) as Row[];
         const groups = new Map<string, Row[]>();
+        const selected = new Set<number>();
         for (const row of rows) {
-            if (!wanted.has(keyFor(String(row.nativeSessionId), String(row.sourceId)))) continue;
             if (row.conversationId && this.store.creation.turnExcluded(String(row.sessionId), String(row.conversationId))) continue;
+            if (wanted.has(keyFor(String(row.nativeSessionId), String(row.sourceId)))) selected.add(Number(row.id));
             const group = groups.get(String(row.sessionId)) ?? []; group.push(row); groups.set(String(row.sessionId), group);
         }
-        const ordered = [...groups.values()].sort((a, b) => this.time(a[0]!).localeCompare(this.time(b[0]!)) || String(a[0]!.sessionId).localeCompare(String(b[0]!.sessionId)));
+        const ordered = [...groups.values()].filter(group => group.some(row => selected.has(Number(row.id)))).sort((a, b) => this.time(a[0]!).localeCompare(this.time(b[0]!)) || String(a[0]!.sessionId).localeCompare(String(b[0]!.sessionId)));
         for (const group of ordered) {
             const sessionId = String(group[0]!.sessionId);
             // Retire only never-sent capacity failures. Their full local messages remain available.
@@ -261,7 +264,7 @@ LEFT JOIN codex_event_meta m ON m.traceId=t.id WHERE s.objectId=? ORDER BY COALE
                 this.store.db.prepare("UPDATE batch_deliveries SET status='cancelled',error=NULL WHERE batchId=? AND attempts=0 AND status='blocked'").run(String(old.id));
                 this.store.updateBatch(String(old.id), {status:'cancelled',error:null});
             }
-            const projected = filterUploadTraces(orderCursorTraces(group.map((row): Row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId }))));
+            const projected = this.store.uploadTraces(sessionId, orderCursorTraces(group.map((row): Row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })))).filter(row => selected.has(Number(row.id)));
             for (const spaceId of targets) {
                 if (this.store.memory.get(scopeId)?.connectionId !== scope.connectionId || !this.store.matchesConnection(scope.connectionId) || !this.store.memory.get(scopeId)?.spaceIds.includes(spaceId) || this.store.row('SELECT boundAt FROM bindings WHERE objectId=? AND spaceId=? AND baseUrl=?', scopeId, spaceId, scope.baseUrl)?.boundAt !== bindings.get(spaceId)) continue;
                 const pending = projected.filter(row => !this.matchMessages([row], this.receiptMessages(Number(row.id), scope.baseUrl, spaceId, true)).size);
@@ -389,8 +392,9 @@ WHERE d.batchId=? AND d.connectionId=? AND d.spaceId=? AND d.status='pending'`, 
             // A different request may have appended content while an earlier upload awaited.
             // Claim the latest body only at the first attempt; retries keep that body frozen.
             const binding = this.store.row('SELECT boundAt FROM bindings WHERE objectId=? AND spaceId=? AND baseUrl=?', current.objectId, current.spaceId, current.baseUrl);
-            const eligible = rows.filter(row => binding && this.store.memory.allows(String(current.objectId), this.time(row)) && this.time(row) >= String(binding.boundAt));
-            if (eligible.length !== rows.length || !eligible.length) {
+            const projected = this.store.uploadTraces(batch.sessionId, rows.map((row): Row => ({ ...row, message: JSON.parse(row.message), sourceId: row.canonicalSourceId ?? row.sourceId })));
+            const eligible = projected.filter(row => binding && this.store.memory.allows(String(current.objectId), this.time(row)) && this.time(row) >= String(binding.boundAt));
+            if (eligible.length !== projected.length || !eligible.length) {
                 this.update(current, { status: 'cancelled' });
                 if (!eligible.length) return undefined;
                 const batchId = this.queue(String(current.objectId), String(current.sessionId), String(current.baseUrl), String(current.spaceId), eligible, 'live');

@@ -17,8 +17,8 @@ function identify(tool: string, input: unknown): SkillRead | undefined {
   return undefined;
 }
 
-export function filterCursorSkills<T extends TraceInput>(records: T[]): T[] {
-  return filterSkillRecords(records, identify).map((record, index) => {
+export function filterCursorSkills<T extends TraceInput>(records: T[], skills?: ReadonlySet<string>): T[] {
+  return filterSkillRecords(records, identify, skills).map((record, index) => {
     const source = records[index]!;
     if (record.message?.role === 'assistant' && source.sourceId.startsWith('hook:')) {
       const fn = parseSkillArgs(parseSkillArgs(source.message?.tool_calls?.[0]).function);

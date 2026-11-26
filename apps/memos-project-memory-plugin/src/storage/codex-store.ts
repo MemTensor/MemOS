@@ -1,4 +1,4 @@
-import { filterBindRecords, isBindControl } from '../adapters/_shared/bind-records.ts';
+import { filterBindRecords, isTraceControl } from '../adapters/_shared/bind-records.ts';
 import { hasTaskContent } from '../adapters/_shared/message-content.ts';
 import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,9 +9,7 @@ import type { Message } from '../adapters/types.ts';
 import type { Store, Session } from './store.ts';
 import { hasCodexActivity } from '../adapters/codex-cli/rollout.ts';
 import { orderTraceRecords } from './trace-order.ts';
-import { filterUploadTraces } from './upload-filter.ts';
 import { uploadValidationError } from '../adapters/_shared/message-content.ts';
-import { filterCodexSkills } from '../adapters/codex-cli/skill-filter.ts';
 import { hasIncompleteSkill } from '../adapters/_shared/skill-records.ts';
 
 type Row = Record<string, unknown>;
@@ -106,18 +104,18 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                 for (const turn of snapshot.turns) {
                     if (turn.sourceKind === 'background' || turn.sourceKind === 'unknown') continue;
                     this.store.db.prepare('INSERT INTO codex_execution_sources VALUES(?,?,?,?,?,?,?,?,?,?)').run(snapshot.sourcePath, snapshot.nativeSessionId, turn.nativeTurnId, turn.rootTurnId, turn.parentTurnId ?? null, turn.startedAt ?? null, turn.completedAt ?? null, turn.status, JSON.stringify(turn.expectedChildren), JSON.stringify(turn.gaps));
-                    for (const record of filterBindRecords(filterCodexSkills(turn.records))) {
+                    for (const record of filterBindRecords(turn.records)) {
                         const sourceId = JSON.stringify([record.originSessionId || snapshot.nativeSessionId, record.sourceId]);
                         if (!sourceId || !record.message) continue;
-                        const normalized = isBindControl(record) ? record : normalizeTaskTrace('codex-cli', record);
-                        if (!normalized?.message || !isBindControl(normalized) && !hasTaskContent(normalized.message)) continue;
+                        const normalized = isTraceControl(record) ? record : normalizeTaskTrace('codex-cli', record);
+                        if (!normalized?.message || !isTraceControl(normalized) && !hasTaskContent(normalized.message)) continue;
                         if (Array.isArray((record.raw as Record<string, unknown>).bindCallIds)) normalized.raw = { ...(normalized.raw as Record<string, unknown>), bindCallIds: (record.raw as Record<string, unknown>).bindCallIds };
                         let meta = this.store.row('SELECT traceId FROM codex_event_meta WHERE sourceId=?', sourceId);
                         if (!meta) {
                             const inserted = this.store.db.prepare('INSERT INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(NULL,NULL,?,?,?,?)').run(`codex:v2:${sourceId}`, JSON.stringify(normalized.raw), JSON.stringify(normalized.message), now());
                             meta = { traceId: Number(inserted.lastInsertRowid) };
-                        } else if ((isBindControl(record) || hasTaskContent(record.message))
-                            && (!(isBindControl(record) || Array.isArray((record.raw as Record<string, unknown>).bindCallIds)) || !this.bindingAuditFrozen(Number(meta.traceId)))) {
+                        } else if ((isTraceControl(record) || hasTaskContent(record.message))
+                            && (!(isTraceControl(record) || Array.isArray((record.raw as Record<string, unknown>).bindCallIds)) || !this.bindingAuditFrozen(Number(meta.traceId)))) {
                             this.store.db.prepare('UPDATE traces SET raw=?,message=? WHERE id=?').run(JSON.stringify(normalized.raw), JSON.stringify(normalized.message), Number(meta.traceId));
                         }
                         this.store.db.prepare(`INSERT INTO codex_event_meta VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(sourceId) DO UPDATE SET originSessionId=excluded.originSessionId,nativeTurnId=excluded.nativeTurnId,rootTurnId=excluded.rootTurnId,occurredAt=excluded.occurredAt,sourceOrdinal=excluded.sourceOrdinal,agentPath=excluded.agentPath`).run(sourceId, Number(meta.traceId), record.originSessionId || snapshot.nativeSessionId, record.nativeTurnId ?? turn.nativeTurnId, turn.rootTurnId, record.occurredAt ?? null, record.sourceOrdinal, record.agentPath ?? snapshot.agentPath ?? null);
@@ -340,7 +338,7 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                 if (this.store.creation?.turnExcluded(String(round.ownerSessionId), id)) continue;
                 if (existing?.attempts || existing?.uploaded) {
                     if (!round.snapshotHash) {
-                        const messages = filterUploadTraces(this.orderedRoundRecords(id)).map(row => row.message);
+                        const messages = this.store.uploadTraces(String(round.ownerSessionId), this.orderedRoundRecords(id)).map(row => row.message);
                         const originalHash = JSON.stringify(existing.messages) === JSON.stringify(messages) ? String(round.eventSetHash) : `legacy:${hash(existing.messages)}`;
                         this.store.db.prepare('UPDATE codex_rounds SET snapshotHash=? WHERE conversationId=?').run(originalHash, id);
                     }
@@ -351,7 +349,7 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                     continue;
                 }
                 if (existing && round.snapshotHash === round.eventSetHash && (['pending', 'manual', 'cancelled'].includes(existing.status) || existing.error === '整轮轨迹超出保守上传容量；完整内容已保留')) continue;
-                const messages = filterUploadTraces(this.orderedRoundRecords(id)).map(row => row.message), payload = JSON.stringify(messages);
+                const messages = this.store.uploadTraces(String(round.ownerSessionId), this.orderedRoundRecords(id)).map(row => row.message), payload = JSON.stringify(messages);
                 if (!messages.length) continue;
                 const oversized = Buffer.byteLength(payload, 'utf8') > this.store.uploadMaxBytes;
                 const error = uploadValidationError(messages as import('../adapters/types.ts').Message[]) ?? (messages.some(message => hasIncompleteSkill(message as import('../adapters/types.ts').Message)) ? 'Skill 与业务输出无法可靠拆分；正文未采集，轨迹不完整' : oversized ? '整轮轨迹超出保守上传容量；完整内容已保留' : null);
@@ -409,7 +407,7 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
     }
     detail(id: string, page: number, size: number, unit: 'trace' | 'turn') {
         const all = this.rounds(id), selected = unit === 'turn' ? all.slice((page - 1) * size, page * size) : all;
-        const groups = selected.map(round => ({ ...round, captureStatus: String(round.captureStatus), executionStatus: String(round.executionStatus), id: String(round.conversationId), roundNumber: all.findIndex(item => item.conversationId === round.conversationId) + 1, gaps: JSON.parse(String(round.gaps)), uploadOutOfDate: !!round.snapshotHash && round.snapshotHash !== round.eventSetHash, traces: this.orderedRoundRecords(String(round.conversationId)).filter(row => !isBindControl({ sourceId: String(row.sourceId), raw: row.raw, message: row.message as Message })) }));
+        const groups = selected.map(round => ({ ...round, captureStatus: String(round.captureStatus), executionStatus: String(round.executionStatus), id: String(round.conversationId), roundNumber: all.findIndex(item => item.conversationId === round.conversationId) + 1, gaps: JSON.parse(String(round.gaps)), uploadOutOfDate: !!round.snapshotHash && round.snapshotHash !== round.eventSetHash, traces: this.orderedRoundRecords(String(round.conversationId)).filter(row => !isTraceControl({ sourceId: String(row.sourceId), raw: row.raw, message: row.message as Message })) }));
         const completeTraces = groups.flatMap(group => group.traces);
         const traces = unit === 'turn' ? completeTraces : completeTraces.slice((page - 1) * size, page * size);
         const session = this.decorateSessions([this.store.session(id)! as unknown as Row])[0] ?? this.store.session(id);

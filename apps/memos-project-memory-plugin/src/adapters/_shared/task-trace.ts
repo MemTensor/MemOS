@@ -66,6 +66,7 @@ export function normalizeTaskTrace(agentType: string, record: TraceInput): Trace
     if (Object.keys(metadata).length) retainedRaw[key] = metadata;
   }
   if (agentType === 'cursor-cli' && typeof raw.cursorReadKey === 'string' && /^[a-f0-9]{64}$/.test(raw.cursorReadKey)) retainedRaw.cursorReadKey = raw.cursorReadKey;
+  if (Array.isArray(raw.bindCallIds)) retainedRaw.bindCallIds = raw.bindCallIds.filter((id: unknown) => typeof id === 'string');
   retainedRaw.message = message;
   if (agentType === 'workbuddy' && typeof raw.parentId === 'string') retainedRaw.parentId = raw.parentId;
   if (agentType === 'workbuddy' && typeof raw.status === 'string') retainedRaw.status = raw.status;

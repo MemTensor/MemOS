@@ -16,9 +16,10 @@ import { CreateContexts } from './create-contexts.ts';
 import { filterUploadTraces } from './upload-filter.ts';
 import { orderCursorTraces } from '../adapters/cursor-cli/source.ts';
 import { object } from '../adapters/_shared/transcript.ts';
-import { filterAdapterSkills, hasSkillFilter } from '../adapters/skill-filters.ts';
-import { filterBindRecords, isBindControl } from '../adapters/_shared/bind-records.ts';
+import { hasSkillFilter } from '../adapters/skill-filters.ts';
+import { filterBindRecords, isTraceControl } from '../adapters/_shared/bind-records.ts';
 import { hasIncompleteSkill } from '../adapters/_shared/skill-records.ts';
+import { installedSkills } from '../adapters/installer.ts';
 import type { CodexSnapshot } from '../adapters/codex-cli/types.ts';
 export interface Session {
     id: string;
@@ -68,10 +69,12 @@ export class Store {
     cloudDiagnostics: CloudDiagnostics;
     creation: CreateContexts;
     config?: Configuration;
+    readonly home?: string;
     private lastBoundAt = 0;
     get uploadMaxBytes() { return this.config?.value.uploadMaxBytes ?? defaultUploadMaxBytes; }
-    constructor(path: string, config?: Configuration) {
+    constructor(path: string, config?: Configuration, home?: string) {
         this.config = config;
+        this.home = home;
         this.db = new DatabaseSync(path);
         this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,root TEXT NOT NULL,createdAt TEXT NOT NULL);
@@ -488,21 +491,23 @@ AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceI
         const own = !this.db.isTransaction;
         if (own) this.db.exec('BEGIN');
         try {
-            records = this.filterSkills(sessionId, scope ? records.filter(record => this.memory.allows(scope.id, this.memory.recordTime(record.raw))) : records);
+            records = this.filterBindings(sessionId, scope ? records.filter(record => this.memory.allows(scope.id, this.memory.recordTime(record.raw))) : records);
             for (const input of records) {
                 if (this.creation.recordExcluded(sessionId, input.nativeTurnId, this.memory.recordTime(input.raw))) continue;
                 if (scope) {
                     // A replay-created turn is not evidence that its source records are new.
                     if (!this.memory.allows(scope.id, this.memory.recordTime(input.raw))) continue;
                 }
-                const record = isBindControl(input) ? input : stripImages(normalizeTaskTrace(session.agentType, input));
-                if (!record?.message || !isBindControl(record) && !hasTaskContent(record.message)) continue;
+                const record = isTraceControl(input) ? input : stripImages(normalizeTaskTrace(session.agentType, input));
+                if (!record?.message || !isTraceControl(record) && !hasTaskContent(record.message)) continue;
                 if (!record.sourceId)
                     throw new Error('原始记录缺少稳定来源标识');
                 if (session.agentType === 'workbuddy' && this.mergeWorkBuddyTrace(session, record)) continue;
                 if (Array.isArray(object(input.raw).bindCallIds)) record.raw = { ...object(record.raw), bindCallIds: object(input.raw).bindCallIds };
                 const message = record.message;
-                if (this.row('SELECT id FROM traces WHERE sessionId=? AND sourceId=?', sessionId, record.sourceId)) {
+                const existing = this.row('SELECT id FROM traces WHERE sessionId=? AND sourceId=?', sessionId, record.sourceId);
+                if (existing) {
+                    if (this.restoreSkillTrace(Number(existing.id), record)) continue;
                     if (session.agentType === 'cursor-cli' && replaceCursorHooks?.has(record.sourceId)) {
                         const changed = this.db.prepare(`UPDATE traces SET message=?,raw=? WHERE sessionId=? AND sourceId=? AND batchId IS NULL
                             AND conversationId=(SELECT id FROM turns WHERE sessionId=? AND nativeKey=? AND completedAt IS NULL)
@@ -516,7 +521,7 @@ AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceI
                 const result = this.db.prepare('INSERT OR IGNORE INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(?,?,?,?,?,?)').run(sessionId, turn ? String(turn) : null, record.sourceId, JSON.stringify(record.raw), JSON.stringify(message), now());
                 added += Number(result.changes);
             }
-            if (hasSkillFilter(session.agentType) || records.some(record => isBindControl(record) || Array.isArray(object(record.raw).bindCallIds))) this.refreshUnsentBatches(session.id);
+            if (hasSkillFilter(session.agentType) || records.some(record => isTraceControl(record) || Array.isArray(object(record.raw).bindCallIds))) this.refreshUnsentBatches(session.id);
             if (own) this.db.exec('COMMIT');
         }
         catch (error) {
@@ -527,7 +532,7 @@ AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceI
     }
     /** Rehydrate only this session's matching turns, so a later result or restart
      * can use already-redacted call identities without a process-global cache. */
-    filterSkills(sessionId: string, records: TraceInput[]): TraceInput[] {
+    private filterBindings(sessionId: string, records: TraceInput[]): TraceInput[] {
         const session = this.session(sessionId);
         if (!session) return records;
         const current = session.currentTurnId ? this.row('SELECT nativeKey FROM turns WHERE id=?', session.currentTurnId)?.nativeKey : undefined;
@@ -541,18 +546,51 @@ AND EXISTS(SELECT 1 FROM bindings WHERE objectId=? AND connectionId=? AND spaceI
                 stored.push(row);
             }
         }
-        const filtered = filterBindRecords(filterAdapterSkills(session.agentType, [...prior, ...incoming]));
+        const filtered = filterBindRecords([...prior, ...incoming]);
         const indexedDeliveries = !!this.row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='batch_traces'");
         // A delayed call can identify a formerly unknown result. Repair only
         // unsent rows in this active capture; never rewrite an accepted audit.
         for (let index = 0; index < prior.length; index++) {
-            const row = stored[index]!, clean = isBindControl(filtered[index]!) ? filtered[index]! : stripImages(normalizeTaskTrace(session.agentType, filtered[index]!));
+            const row = stored[index]!, clean = isTraceControl(filtered[index]!) ? filtered[index]! : stripImages(normalizeTaskTrace(session.agentType, filtered[index]!));
             if (clean && Array.isArray(object(filtered[index]!.raw).bindCallIds)) clean.raw = { ...object(clean.raw), bindCallIds: object(filtered[index]!.raw).bindCallIds };
+            // Keep old partial-exclusion evidence until native replay restores the body.
+            if (clean && Array.isArray(object(filtered[index]!.raw).skillCallIds)) clean.raw = { ...object(clean.raw), skillCallIds: object(filtered[index]!.raw).skillCallIds };
             if (row.attempts || row.uploaded || !clean?.message || JSON.stringify(clean.message) === row.message && JSON.stringify(clean.raw) === row.raw) continue;
             if (indexedDeliveries && this.row('SELECT 1 FROM batch_traces bt JOIN batches b ON b.id=bt.batchId WHERE bt.traceId=? AND (b.attempts>0 OR b.uploaded=1) LIMIT 1', Number(row.id))) continue;
             this.db.prepare('UPDATE traces SET raw=?,message=? WHERE id=?').run(JSON.stringify(clean.raw), JSON.stringify(clean.message), Number(row.id));
         }
         return filtered.slice(prior.length);
+    }
+    /** Project a copy for upload; captured messages and Viewer details stay complete. */
+    uploadTraces<T extends { message?: unknown }>(sessionId: string, records: T[]): T[] {
+        const agent = this.session(sessionId)?.agentType ?? '';
+        return filterUploadTraces(records, agent, installedSkills(agent, this.home));
+    }
+    /** Recover only legacy Skill projections from a verified native source.
+     * Frozen upload requests and receipts remain separate and unchanged. */
+    restoreSkillTrace(traceId: number, record: TraceInput): boolean {
+        const stored = this.row('SELECT raw,message FROM traces WHERE id=?', traceId);
+        if (!stored || !record.message) return false;
+        const raw = object(JSON.parse(String(stored.raw))), message = object(JSON.parse(String(stored.message)));
+        const projectedCall = (value: unknown) => {
+            const call = object(value), fn = object(call.function);
+            return (fn.name ?? call.name) === 'skill' && ['started', 'incomplete'].includes(String(call.status));
+        };
+        const projectedResult = (value: unknown) => {
+            const result = object(value);
+            if (result.name !== 'skill') return false;
+            try {
+                const summary = object(JSON.parse(String(result.content)));
+                return typeof summary.skill_name === 'string' && 'call_id' in summary && 'status' in summary;
+            } catch { return false; }
+        };
+        const legacy = raw.type === 'memos-skill-read' || Array.isArray(raw.skillCallIds) && raw.skillCallIds.length > 0
+            || Array.isArray(message.tool_calls) && message.tool_calls.some(projectedCall)
+            || Array.isArray(message.content) && message.content.some(value => projectedCall(value) || projectedResult(value))
+            || projectedResult(message);
+        if (!legacy || JSON.stringify(record.message) === stored.message && JSON.stringify(record.raw) === stored.raw) return false;
+        this.db.prepare('UPDATE traces SET raw=?,message=? WHERE id=?').run(JSON.stringify(record.raw), JSON.stringify(record.message), traceId);
+        return true;
     }
     /** Native WorkBuddy evidence may replace an unsent Hook fallback, never a sent body. */
     mergeWorkBuddyTrace(session: Session, record: TraceInput): boolean {
@@ -600,7 +638,7 @@ AND json_extract(t.raw,'$.status')='completed' AND json_extract(t.message,'$.rol
     private refreshWorkBuddyBatch(batch: Row) {
         const traces = batch.conversationId ? this.turnTraces(String(batch.sessionId), String(batch.conversationId))
             : this.rows('SELECT t.* FROM traces t JOIN batch_traces bt ON bt.traceId=t.id WHERE bt.batchId=? ORDER BY t.id', String(batch.id)).map(row => ({ ...row, message: JSON.parse(String(row.message)) }));
-        const messages = filterUploadTraces(traces).map(row => row.message);
+        const messages = this.uploadTraces(String(batch.sessionId), traces).map(row => row.message);
         const payload = JSON.stringify(messages);
         const oversized = Buffer.byteLength(payload, 'utf8') > this.uploadMaxBytes;
         const error = uploadValidationError(messages) ?? (hasSkillFilter(this.session(String(batch.sessionId))?.agentType ?? '') && messages.some(hasIncompleteSkill) ? 'Skill 调用身份或输出边界不完整；正文未采集' : oversized ? '整轮轨迹超出保守上传容量；完整内容已保留' : null);
@@ -625,7 +663,7 @@ AND json_extract(t.raw,'$.status')='completed' AND json_extract(t.message,'$.rol
         const own = !this.db.isTransaction;
         if (own) this.db.exec('BEGIN');
         try {
-            const traces = filterUploadTraces(this.turnTraces(sessionId, String(turn.id)));
+            const traces = this.uploadTraces(sessionId, this.turnTraces(sessionId, String(turn.id)));
             if (traces.length && !this.creation.turnExcluded(sessionId, String(turn.id))) {
                 // Assemble once at completion; the upload worker reuses this exact snapshot.
                 const messages = traces.map(trace => trace.message);
@@ -661,14 +699,17 @@ AND json_extract(t.raw,'$.status')='completed' AND json_extract(t.message,'$.rol
             .run(randomUUID(), sessionId, conversationId, kind, query, content, status, now());
     }
     diagnostic(message: string) { this.db.prepare('INSERT INTO diagnostics(message,createdAt) VALUES(?,?)').run(message, now()); }
+    orderedSessions() {
+        return this.codex.decorateSessions(this.rows(`SELECT s.*,
+            max(s.createdAt,COALESCE((SELECT max(t.createdAt) FROM traces t WHERE t.sessionId=s.id),s.createdAt)) AS updatedAt
+            FROM sessions s`)).sort((left, right) => String(left.sourceStartedAt ?? left.createdAt).localeCompare(String(right.sourceStartedAt ?? right.createdAt)) || String(left.id).localeCompare(String(right.id)));
+    }
     state() {
         const scope = (objectId: string) => {
             const binding = this.binding(objectId);
             return { spaceIds: binding?.spaceIds ?? [], bindingStatus: binding?.status ?? null };
         };
-        const sessions = this.codex.decorateSessions(this.rows(`SELECT s.*,
-            max(s.createdAt,COALESCE((SELECT max(t.createdAt) FROM traces t WHERE t.sessionId=s.id),s.createdAt)) AS updatedAt
-            FROM sessions s`)).sort((left, right) => String(left.sourceStartedAt ?? left.createdAt).localeCompare(String(right.sourceStartedAt ?? right.createdAt)) || String(left.id).localeCompare(String(right.id)));
+        const sessions = this.orderedSessions();
         const projects = this.rows('SELECT * FROM projects').map((project): Row => {
             const members = sessions.filter(session => session.projectId === project.id);
             const times = members.map(session => String(session.sourceStartedAt ?? session.createdAt)).sort();
@@ -684,7 +725,7 @@ AND json_extract(t.raw,'$.status')='completed' AND json_extract(t.message,'$.rol
         if (this.codex.hasSession(id)) return this.codex.detail(id, page, size, unit);
         // Missing turn IDs stay separate rather than merging unrelated tasks.
         const groupKey = "COALESCE(conversationId, 'trace:' || id)";
-        const task = "COALESCE(json_extract(raw,'$.type'),'')<>'memos-bind-operation'";
+        const task = "COALESCE(json_extract(raw,'$.type'),'') NOT IN ('memos-bind-operation','memos-skill-read')";
         const byTurn = unit === 'turn';
         const selected = byTurn
             ? this.rows(`SELECT * FROM traces WHERE sessionId=? AND ${task} AND ${groupKey} IN (SELECT ${groupKey} FROM traces WHERE sessionId=? AND ${task} GROUP BY ${groupKey} ORDER BY MIN(id) LIMIT ? OFFSET ?) ORDER BY id`, id, id, size, (page - 1) * size)

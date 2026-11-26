@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginService } from '../../src/server/service.ts';
+import { copilotEvent } from '../../src/adapters/copilot-cli/capture.ts';
 import { processHook } from '../../src/adapters/_shared/hooks.ts';
 import { captureUploads } from '../helpers/capture-uploads.ts';
 
@@ -43,7 +44,10 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     add('hook.end', { hookType: 'agentStop', hookInvocationId: invocation, success: true });
     await save(); return input;
   }
-  return { get service() { return service; }, restart() { service.close(); service = new PluginService(join(dir, 'data'), { home: dir, codexRoots: [] }); service.cloud.call = call; }, rows, add, save, path, hook, prompt, answer, stop, uploads };
+  const replay = (raw: Awaited<ReturnType<typeof stop>>) => copilotEvent({
+    agentType: 'copilot-cli', nativeSessionId: 'native', cwd: dir, event: 'trace-available', raw,
+  }, 'agentStop', {});
+  return { replay, get service() { return service; }, restart() { service.close(); service = new PluginService(join(dir, 'data'), { home: dir, codexRoots: [] }); service.cloud.call = call; }, rows, add, save, path, hook, prompt, answer, stop, uploads };
 }
 
 test('Copilot tool cycles remain in one user round with complete tool results and readable reasoning', async t => {
@@ -66,4 +70,55 @@ test('Copilot tool cycles remain in one user round with complete tool results an
   f.restart(); await f.service.sync();
   assert.equal(JSON.stringify(f.service.store.batches()[0]!.messages), frozen);
   assert.equal(f.service.store.rows('SELECT * FROM turns').length, 1);
+});
+
+test('a delayed Copilot stop reads only its own submitted turn and ignores later malformed lines', async t => {
+  const f = await fixture(t);
+  await f.prompt('one', 'first');
+  f.answer('one', 'old answer');
+  const firstStop = await f.stop();
+  await f.prompt('two', 'second');
+  f.answer('two', 'new answer');
+  await f.stop();
+  await appendFile(f.path, '{unfinished');
+
+  const event = await f.replay(firstStop);
+  assert.equal(event.event, 'turn-end');
+  assert.deepEqual(event.records?.map(record => record.message?.content), ['first', 'old answer']);
+});
+
+test('Copilot waits for the matching stop acknowledgement and all tool results', async t => {
+  const f = await fixture(t);
+  await f.prompt('one');
+  f.add('tool.execution_start', { toolCallId: 'call', toolName: 'inspect' });
+  f.answer('one');
+  const stop = await f.stop();
+  const acknowledgement = f.rows.pop()!;
+  await f.save();
+  await assert.rejects(f.replay(stop), /等待结束 Hook 完成记录落盘/);
+  f.rows.push(acknowledgement);
+  await f.save();
+  await assert.rejects(f.replay(stop), /轮次正文或执行完成证据不完整/);
+
+  // A late tool result belongs before the stop callback in the native stream.
+  const stopEvents = f.rows.splice(-2);
+  f.add('tool.execution_complete', { toolCallId: 'call', success: true, result: 'ok' });
+  f.rows.push(...stopEvents);
+  await f.save();
+  assert.equal((await f.replay(stop)).event, 'turn-end');
+});
+
+test('Copilot ignores identical event IDs on replay and rejects conflicting content', async t => {
+  const f = await fixture(t);
+  await f.prompt('one');
+  f.answer('one', 'answer');
+  const answer = f.rows.find(row => row.type === 'assistant.message')!;
+  const duplicate = { ...answer };
+  f.rows.push(duplicate);
+  const stop = await f.stop();
+  assert.deepEqual((await f.replay(stop)).records?.map(record => record.message?.content), ['hello', 'answer']);
+
+  duplicate.data = { ...(answer.data as object), content: 'conflict' };
+  await f.save();
+  await assert.rejects(f.replay(stop), /原生事件 ID 内容冲突/);
 });
