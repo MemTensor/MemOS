@@ -367,9 +367,9 @@ class PostgresProjectDB(BaseProjectDB):
                             SET domain = COALESCE(%s, domain),
                                 description = COALESCE(%s, description),
                                 update_time = now()
-                            WHERE space_id = %s AND domain = %s
+                            WHERE space_id = %s AND id = %s
                             RETURNING {self._DOMAIN_COLS}""",
-                        (item.new_domain, item.description, space_id, item.domain),
+                        (item.new_domain, item.description, space_id, item.domain_id),
                     )
                 except errors.UniqueViolation as e:
                     raise DomainAlreadyExistsError(
@@ -378,24 +378,24 @@ class PostgresProjectDB(BaseProjectDB):
                 row = cur.fetchone()
                 if row is None:
                     raise DomainNotFoundError(
-                        f"Domain not found in space {space_id}: {item.domain}"
+                        f"Domain not found in space {space_id}: {item.domain_id}"
                     )
                 updated[row[0]] = self._domain(row)
         return list(updated.values())
 
-    def delete_domains(self, space_id: str, names: list[str]) -> list[Domain]:
+    def delete_domains(self, space_id: str, domain_ids: list[str]) -> list[Domain]:
         from psycopg2 import errors
 
         try:
             with self._tx() as cur:
                 cur.execute(
-                    f"""DELETE FROM {SCHEMA}.domains WHERE space_id = %s AND domain = ANY(%s)
+                    f"""DELETE FROM {SCHEMA}.domains WHERE space_id = %s AND id = ANY(%s)
                         RETURNING {self._DOMAIN_COLS}""",
-                    (space_id, list(names)),
+                    (space_id, list(domain_ids)),
                 )
                 return [self._domain(row) for row in cur.fetchall()]
         except errors.ForeignKeyViolation as e:
-            # topics.domain_id references domains: any referenced name rejects the batch.
+            # topics.domain_id references domains: any referenced domain rejects the batch.
             raise DomainInUseError(f"Domain still referenced by topics in space {space_id}") from e
 
     def list_domains(self, space_id: str) -> list[Domain]:
