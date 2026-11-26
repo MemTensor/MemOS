@@ -9,12 +9,34 @@ import pytest
 from pydantic import ValidationError
 
 from memos.memories.textual.item import (
+    ArchivedTextualMemory,
     PreferenceTextualMemoryMetadata,
     SearchedTreeNodeTextualMemoryMetadata,
     TextualMemoryItem,
     TextualMemoryMetadata,
     TreeNodeTextualMemoryMetadata,
 )
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+def test_history_accepts_existing_objects_and_json_entries(encoded):
+    entry = {"memory": "old", "version": 3, "update_type": "feedback"}
+    history = [json.dumps(entry) if encoded else entry]
+    item = TextualMemoryItem(memory="new", metadata={"history": history, "version": 4})
+    assert item.metadata.history == [ArchivedTextualMemory(**entry, created_at=None)]
+    assert history == [json.dumps(entry) if encoded else entry]
+
+
+@pytest.mark.parametrize("entry", ["not json", "[]", "null", "42"])
+def test_history_quarantines_invalid_entries_without_losing_memory(entry, caplog):
+    item = TextualMemoryItem(memory="new", metadata={"history": [entry, {"memory": "valid"}]})
+    assert item.memory == "new"
+    assert [snapshot.memory for snapshot in item.metadata.history] == ["valid"]
+    assert item.metadata.history_quarantine == [entry]
+    assert "history" in caplog.text
+    restored = TextualMemoryItem.model_validate(item.model_dump())
+    assert restored.metadata.history_quarantine == [entry]
+    assert restored.metadata.history[0].created_at is None
 
 
 @pytest.mark.parametrize(
