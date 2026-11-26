@@ -33,7 +33,7 @@ from memos.project_dbs.item import (
     TopicCreate,
     TopicUpdate,
 )
-from memos.project_dbs.postgres_rows import SCHEMA
+from memos.project_dbs.postgres_rows import SCHEMA, qualify
 from memos.project_dbs.ranking import RankSignals, rank_time
 
 
@@ -154,12 +154,12 @@ def _card_values(card: DecisionCard | ConflictCard) -> tuple:
     return card.content, card.chat_time, list(card.user_ids), json.dumps(extra), card.embedding
 
 
-def _insert_rows(cur: Any, rows: list[tuple]) -> None:
+def _insert_rows(cur: Any, rows: list[tuple], schema: str = SCHEMA) -> None:
     if rows:
         from psycopg2.extras import execute_values
 
         # Parents precede their children, and each page finishes before the next starts.
-        execute_values(cur, _INSERT_ENTRY, rows, template=_ENTRY_TEMPLATE)
+        execute_values(cur, qualify(_INSERT_ENTRY, schema), rows, template=_ENTRY_TEMPLATE)
 
 
 def _new_rows(
@@ -200,12 +200,15 @@ def _child_row(
 
 
 def _replace_children(
-    cur: Any, space_id: str, topic_id: str, decision: AnyEntry, stamp: datetime
+    cur: Any, space_id: str, topic_id: str, decision: AnyEntry, stamp: datetime, schema: str
 ) -> None:
     """history: append-only (items with an id must exist and stay untouched);
     conflicts: replace wholesale, items with an existing id keep it."""
     cur.execute(
-        f"SELECT id, status FROM {SCHEMA}.project_entries WHERE parent_decision_id = %s",
+        qualify(
+            f"SELECT id, status FROM {SCHEMA}.project_entries WHERE parent_decision_id = %s",
+            schema,
+        ),
         (decision.id,),
     )
     existing = dict(cur.fetchall())
@@ -222,16 +225,22 @@ def _replace_children(
         if existing.get(card.id) != EntryStatus.CONFLICT:
             raise EntryNotFoundError(f"Conflict row not found in decision {decision.id}: {card.id}")
     cur.execute(
-        f"""DELETE FROM {SCHEMA}.project_entries
+        qualify(
+            f"""DELETE FROM {SCHEMA}.project_entries
             WHERE parent_decision_id = %s AND status = %s AND NOT (id = ANY(%s))""",
+            schema,
+        ),
         (decision.id, int(EntryStatus.CONFLICT), [c.id for c in kept]),
     )
     for card in kept:
         cur.execute(
-            f"""UPDATE {SCHEMA}.project_entries SET content = %s, chat_time = %s, user_ids = %s,
-                    extra = %s::jsonb, embedding = %s::vector, version = version + 1,
-                    update_time = %s
+            qualify(
+                f"""UPDATE {SCHEMA}.project_entries SET content = %s, chat_time = %s,
+                    user_ids = %s, extra = %s::jsonb, embedding = %s::vector,
+                    version = version + 1, update_time = %s
                 WHERE id = %s""",
+                schema,
+            ),
             (*_card_values(card), stamp, card.id),
         )
     for card in decision.conflicts:
@@ -239,42 +248,48 @@ def _replace_children(
             new_rows.append(
                 _child_row(space_id, topic_id, decision.id, EntryStatus.CONFLICT, card, stamp)
             )
-    _insert_rows(cur, new_rows)
+    _insert_rows(cur, new_rows, schema)
 
 
 def _overwrite_entry(
-    cur: Any, space_id: str, topic_id: str, entry: AnyEntry, stamp: datetime
+    cur: Any, space_id: str, topic_id: str, entry: AnyEntry, stamp: datetime, schema: str
 ) -> None:
     """Replace an entry whole (a missing embedding clears the vector); the type cannot
     change. Experiences may be retired or re-activated through status."""
     entry_type, content, chat_time, user_ids, extra, embedding = _entry_values(entry)
     cur.execute(
-        f"""UPDATE {SCHEMA}.project_entries SET content = %s, chat_time = %s, user_ids = %s,
+        qualify(
+            f"""UPDATE {SCHEMA}.project_entries SET content = %s, chat_time = %s, user_ids = %s,
                 extra = %s::jsonb, embedding = %s::vector, status = %s, version = version + 1,
                 update_time = %s
             WHERE id = %s AND topic_id = %s AND status = ANY(%s) AND entry_type = %s
               AND parent_decision_id IS NULL""",
+            schema,
+        ),
         (content, chat_time, user_ids, extra, embedding, entry_status(entry), stamp, entry.id,
          topic_id, _overwritable(entry), entry_type),
     )  # fmt: skip
     if cur.rowcount == 0:
         raise EntryNotFoundError(f"{entry_type} entry not found in topic {topic_id}: {entry.id}")
     if entry_type == "decision":
-        _replace_children(cur, space_id, topic_id, entry, stamp)
+        _replace_children(cur, space_id, topic_id, entry, stamp, schema)
 
 
 # ---------- topics ----------
 def _create_topic(
-    cur: Any, space_id: str, domain_id: str, item: TopicCreate, stamp: datetime
+    cur: Any, space_id: str, domain_id: str, item: TopicCreate, stamp: datetime, schema: str
 ) -> str:
     topic_id = f"topic_{uuid.uuid4().hex}"
     sources = merge_sources([], item.sources)
     cur.execute(
-        f"""INSERT INTO {SCHEMA}.topics (id, space_id, domain_id, topic_name, topic_summary,
+        qualify(
+            f"""INSERT INTO {SCHEMA}.topics (id, space_id, domain_id, topic_name, topic_summary,
                 topic_description, sources, conversation_ids, embedding, anchors, anchor_keys,
                 create_time, update_time, commit_time)
             VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::text[], %s::vector, %s::jsonb,
                     %s::text[], %s, %s, %s)""",
+            schema,
+        ),
         (
             topic_id,
             space_id,
@@ -292,7 +307,7 @@ def _create_topic(
             stamp,
         ),
     )
-    _insert_rows(cur, _new_rows(space_id, topic_id, item.entries, stamp))
+    _insert_rows(cur, _new_rows(space_id, topic_id, item.entries, stamp), schema)
     return topic_id
 
 
@@ -303,12 +318,14 @@ def _update_topic(
     item: TopicUpdate,
     current_sources: list[dict],
     stamp: datetime,
+    schema: str,
 ) -> list[dict]:
     """Returns the merged sources now stored."""
     sources = merge_sources(current_sources, item.add_sources)
     anchors = None if item.anchors is None else [a.model_dump(mode="json") for a in item.anchors]
     cur.execute(
-        f"""UPDATE {SCHEMA}.topics SET
+        qualify(
+            f"""UPDATE {SCHEMA}.topics SET
                 domain_id = COALESCE(%s, domain_id),
                 topic_summary = COALESCE(%s, topic_summary),
                 topic_description = COALESCE(%s, topic_description),
@@ -321,6 +338,8 @@ def _update_topic(
                 commit_time = %s,
                 version = version + 1
             WHERE id = %s AND space_id = %s AND version = %s""",
+            schema,
+        ),
         (
             domain_id,
             item.topic_summary,
@@ -344,31 +363,36 @@ def _update_topic(
         )
     if item.delete_entry_ids:  # ACTIVE rows only; child rows cascade
         cur.execute(
-            f"""DELETE FROM {SCHEMA}.project_entries
+            qualify(
+                f"""DELETE FROM {SCHEMA}.project_entries
                 WHERE topic_id = %s AND id = ANY(%s) AND status = %s""",
+                schema,
+            ),
             (item.topic_id, list(item.delete_entry_ids), int(EntryStatus.ACTIVE)),
         )
     new = [e for e in item.upsert_entries if e.id is None]
     for entry in item.upsert_entries:
         if entry.id is not None:
-            _overwrite_entry(cur, space_id, item.topic_id, entry, stamp)
-    _insert_rows(cur, _new_rows(space_id, item.topic_id, new, stamp))
+            _overwrite_entry(cur, space_id, item.topic_id, entry, stamp, schema)
+    _insert_rows(cur, _new_rows(space_id, item.topic_id, new, stamp), schema)
     return sources
 
 
 def write_change_set(
-    cursor: Any, change_set: TopicChangeSet, *, now: datetime | None = None
+    cursor: Any, change_set: TopicChangeSet, *, now: datetime | None = None, schema: str = SCHEMA
 ) -> list[TopicChangeResult]:
     """Write one change set inside the caller's transaction; raising leaves the rollback to
     the caller. Locks the space row (FOR KEY SHARE: waits for clear_space, not for domain
     writers) and the updated topics in id order. `now` stamps commit_time and entry
     create/update_time; default clock_timestamp() after the locks. Results list creates (ADD)
     then updates (UPDATE). Errors: SpaceNotFoundError, SpaceClearedError, DomainNotFoundError,
-    TopicNotFoundError, VersionConflictError, EntryNotFoundError."""
+    TopicNotFoundError, VersionConflictError, EntryNotFoundError. `schema` replaces project_memory
+    for callers that install the tables elsewhere (Add's configurable schema)."""
     space_id = change_set.space_id
     with tuple_cursor(cursor) as cur:
         cur.execute(
-            f"SELECT clear_time FROM {SCHEMA}.spaces WHERE id = %s FOR KEY SHARE", (space_id,)
+            qualify(f"SELECT clear_time FROM {SCHEMA}.spaces WHERE id = %s FOR KEY SHARE", schema),
+            (space_id,),
         )
         row = cur.fetchone()
         if row is None:
@@ -377,14 +401,20 @@ def write_change_set(
             raise SpaceClearedError(
                 f"Space {space_id} was cleared at {row[0]}, after the task was accepted"
             )
-        cur.execute(f"SELECT domain, id FROM {SCHEMA}.domains WHERE space_id = %s", (space_id,))
+        cur.execute(
+            qualify(f"SELECT domain, id FROM {SCHEMA}.domains WHERE space_id = %s", schema),
+            (space_id,),
+        )
         domain_ids = dict(cur.fetchall())
         current_sources: dict[str, list] = {}
         if change_set.updates:
             # Lock in id order so concurrent change sets cannot deadlock on each other.
             cur.execute(
-                f"""SELECT id, sources FROM {SCHEMA}.topics WHERE id = ANY(%s) AND space_id = %s
-                    ORDER BY id FOR NO KEY UPDATE""",
+                qualify(
+                    f"""SELECT id, sources FROM {SCHEMA}.topics WHERE id = ANY(%s)
+                    AND space_id = %s ORDER BY id FOR NO KEY UPDATE""",
+                    schema,
+                ),
                 (sorted({u.topic_id for u in change_set.updates}), space_id),
             )
             current_sources = dict(cur.fetchall())
@@ -399,17 +429,17 @@ def write_change_set(
 
         results = []
         for item in change_set.creates:
-            topic_id = _create_topic(cur, space_id, resolve(item.domain), item, now)
+            topic_id = _create_topic(cur, space_id, resolve(item.domain), item, now, schema)
             results.append(TopicChangeResult(topic_id=topic_id, operation="ADD"))
         for item in change_set.updates:
             if item.topic_id not in current_sources:
                 raise TopicNotFoundError(f"Topic not found in space {space_id}: {item.topic_id}")
             domain_id = None if item.domain is None else resolve(item.domain)
             current_sources[item.topic_id] = _update_topic(
-                cur, space_id, domain_id, item, current_sources[item.topic_id], now
+                cur, space_id, domain_id, item, current_sources[item.topic_id], now, schema
             )
             results.append(TopicChangeResult(topic_id=item.topic_id, operation="UPDATE"))
-        refresh_topic_ranks(cur, [r.topic_id for r in results])
+        refresh_topic_ranks(cur, [r.topic_id for r in results], schema)
     return results
 
 
@@ -444,7 +474,7 @@ def refresh_topic_ranks(cursor: Any, topic_ids: list[str], schema: str = SCHEMA)
     from psycopg2.extras import execute_values
 
     with tuple_cursor(cursor) as cur:
-        cur.execute(_RANK_SIGNALS.replace(f"{SCHEMA}.", f"{schema}."), (list(set(topic_ids)),))
+        cur.execute(qualify(_RANK_SIGNALS, schema), (list(set(topic_ids)),))
         values = []
         for topic_id, update_time, *counts in cur.fetchall():
             key, bonus = rank_time(update_time, RankSignals(*counts))
