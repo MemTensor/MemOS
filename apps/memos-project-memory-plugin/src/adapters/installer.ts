@@ -157,7 +157,7 @@ export async function uninstallAdapter(id:string,options:Options={}):Promise<Ins
 }
 
 export async function adapterInstalled(profile:AdapterProfile,options:Options={}):Promise<boolean>{
- if(profile.id==='deepseek-harness')return (await import('./_shared/native-install.ts')).isDshInstalled(profile,{home:options.home??homedir(),cwd:options.cwd??process.cwd(),dshHome:options.dshHome??(options.home?undefined:process.env.DSH_HOME)});
+ if(profile.id==='deepseek-harness'||profile.id==='doubao-work')return (await import('./_shared/native-install.ts')).isNativeInstalled(profile,{home:options.home??homedir(),cwd:options.cwd??process.cwd(),dshHome:options.dshHome??(options.home?undefined:process.env.DSH_HOME)});
  const manifest=await json(manifestPath(profile,options.home??homedir()));
  return Object.keys(manifest).length>0&&manifest.installed!==false;
 }
@@ -169,9 +169,10 @@ export async function listInstalledAgents(options:Options={}):Promise<Array<Adap
 export async function listAgents():Promise<Array<AdapterProfile&{route:string;detected:boolean;version:string|null;installed:boolean;support:string}>>{
  return Promise.all(profiles.map(async profile=>{
   let version:string|null=null;let detected=false;
-  try{const result=await run(profile.command,['--version'],{timeout:2500,maxBuffer:8192});detected=true;version=(result.stdout||result.stderr).trim().split('\n')[0]??null;}catch{/* Not installed or no version probe supported. */}
-  if(!detected&&process.platform==='darwin'&&profile.id==='workbuddy'){
-   try{const output=await run('plutil',['-extract','CFBundleShortVersionString','raw','/Applications/WorkBuddy.app/Contents/Info.plist']);version=output.stdout.trim();detected=!!version;}catch{/* Desktop absent. */}
+  if(profile.id!=='doubao-work')try{const result=await run(profile.command,['--version'],{timeout:2500,maxBuffer:8192});detected=true;version=(result.stdout||result.stderr).trim().split('\n')[0]??null;}catch{/* Not installed or no version probe supported. */}
+  if(!detected&&process.platform==='darwin'&&['workbuddy','doubao-work'].includes(profile.id)){
+   const bundle=profile.id==='doubao-work'?'DoubaoWork':'WorkBuddy';
+   try{const output=await run('plutil',['-extract','CFBundleShortVersionString','raw',`/Applications/${bundle}.app/Contents/Info.plist`]);version=output.stdout.trim();detected=!!version;}catch{/* Desktop absent. */}
   }
   const installed=await adapterInstalled(profile);
   const matched=version!==null&&profile.versions.some(candidate=>version!.split(/\s+/).includes(candidate)||version!.split(/\s+/).includes(`v${candidate}`));

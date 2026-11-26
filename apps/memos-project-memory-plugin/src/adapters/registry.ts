@@ -20,7 +20,8 @@ import { profile as p18 } from './cline-cli/profile.ts';
 import { profile as p19 } from './pi/profile.ts';
 import { profile as p20 } from './prime-agent/profile.ts';
 import { profile as p21 } from './deepseek-harness/profile.ts';
-export const profiles = [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19, p20, p21];
+import { profile as doubaoWork } from './doubao-work/profile.ts';
+export const profiles = [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19, p20, p21, doubaoWork];
 export function getProfile(id: string) {
  const profile=profiles.find(item=>item.id===id);
  if (!profile) throw new Error(`Unknown adapter: ${id}`);

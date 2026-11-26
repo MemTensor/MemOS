@@ -281,7 +281,7 @@ function displayProjectOptions(agentType, projects) {
   const bindings = (state.bindings ?? []).filter(scope => scope.agentType === agentType);
   projectOptions = projects.map(project => {
     const binding = bindings.find(scope => scope.root === project.root);
-    return binding ? { ...project, name: binding.name, spaceIds: binding.spaceIds, bindingStatus: binding.spaceIds.length ? 'bound' : 'unbound' } : project;
+    return binding ? { ...project, name: agentType === 'doubao-work' ? project.name : binding.name, spaceIds: binding.spaceIds, bindingStatus: binding.spaceIds.length ? 'bound' : 'unbound' } : project;
   });
   const options = [el('option', !agentType ? t("先选择 Agent") : projects.length ? t("选择本地项目") : projectCache.has(agentType) ? t("未发现项目") : t("正在读取项目…"))];
   options[0].value = '';
@@ -449,7 +449,7 @@ function renderTraceBreadcrumb(session) {
   const breadcrumb = clear('#trace-breadcrumb');
   breadcrumb.append(el('span', t("会话轨迹")));
   if (!session) return;
-  const group = projectSessionGroups(state).find(group => group.sessions.some(item => item.id === session.id));
+  const group = traceScopeGroups(state, session.agentType).find(group => group.sessions.some(item => item.id === session.id));
   breadcrumb.append(el('span', '/', 'hint'), el('span', agentName(session.agentType)), el('span', '/', 'hint'), el('span', group?.name ?? t("未归属项目")));
 }
 function clearSelectedSession(message = t("此范围暂无符合条件的会话")) {

@@ -262,7 +262,8 @@ export function taskTraceEntries(trace, time) {
 export function traceScopeGroups(state, agent = '') {
   return projectSessionGroups(state).map(group => {
     const sessions = group.sessions.filter(session => !agent || session.agentType === agent);
-    return { ...group, sessions, turnCount: sessions.reduce((sum, session) => sum + (Number(session.turnCount) || 0), 0) };
+    const scope = agent && state.bindings?.find(binding => binding.agentType === agent && binding.projectId === group.id);
+    return { ...group, name: scope?.name ?? group.name, sessions, turnCount: sessions.reduce((sum, session) => sum + (Number(session.turnCount) || 0), 0) };
   }).filter(group => group.sessions.length);
 }
 export function traceScopeSessions(groups, { project = undefined, query = '', from = '', to = '' } = {}) {

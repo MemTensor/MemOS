@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { filterBindRecords, isBindControl } from '../adapters/_shared/bind-records.ts';
 import { hasTaskContent } from '../adapters/_shared/message-content.ts';
 import { createReadStream } from 'node:fs';
@@ -20,8 +21,13 @@ import { workbuddyConfigDir } from '../adapters/workbuddy/paths.ts';
 import { primeSources, readPrimeSession } from '../adapters/prime-agent/sessions.ts';
 import { primeIdle, primeStatus } from '../adapters/prime-agent/capture.ts';
 
+import { DoubaoHost, type CompletedDoubaoTurn } from '../adapters/doubao-work/host.ts';
+import { doubaoSessionsPath, readDoubaoTurn } from '../adapters/doubao-work/capture.ts';
+import { adapterInstalled } from '../adapters/installer.ts';
+import { profile as doubaoProfile } from '../adapters/doubao-work/profile.ts';
+
 type Candidate = { nativeSessionId: string; sourceId: string };
-type Source = { path: string; nativeSessionId: string; cwd: string; startedAt?: string; parentNativeSessionId?: string };
+type Source = { path: string; nativeSessionId: string; cwd: string; startedAt?: string; parentNativeSessionId?: string; doubao?: CompletedDoubaoTurn[]; digests?: Map<string,string> };
 type Scan = { status: 'pending' | 'scanning' | 'ready' | 'failed'; recordCount: number; error?: string; warning?: string; cutoff?: string; signature?: string; sources: Source[]; records: Candidate[] };
 type HistoricalTurn = { key: string; records: TraceInput[]; completedAt: string };
 
@@ -31,6 +37,7 @@ export class HistoryService {
     close() { this.closed = true; }
     private scans = new Map<string, Scan>();
     private running = new Map<string, Promise<void>>();
+    private doubao?: DoubaoHost;
     private store: Store;
     private options: CodexCaptureOptions & { home?: string };
     constructor(store: Store, options: CodexCaptureOptions & { home?: string } = {}) { this.store = store; this.options = options; }
@@ -54,7 +61,7 @@ export class HistoryService {
     }
     private mergeLocalRecords(scopeId: string, scan: Scan) {
         const local = this.store.rows(`SELECT s.nativeSessionId,t.sourceId FROM traces t JOIN sessions s ON s.id=t.sessionId JOIN turns u ON u.id=t.conversationId
-WHERE s.objectId=? AND COALESCE(json_extract(t.raw,'$.type'),'')<>'memos-bind-operation' AND u.completedAt IS NOT NULL AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=u.id AND r.captureStatus!='complete')`, scopeId)
+WHERE s.objectId=? AND (s.agentType<>'doubao-work' OR s.cwd=?) AND COALESCE(json_extract(t.raw,'$.type'),'')<>'memos-bind-operation' AND u.completedAt IS NOT NULL AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=u.id AND r.captureStatus!='complete')`, scopeId, this.store.memory.get(scopeId)?.root ?? '')
             .map(row => ({ nativeSessionId: String(row.nativeSessionId), sourceId: String(row.sourceId) }));
         scan.records = [...new Map([...scan.records, ...local].map(record => [record.sourceId.startsWith('codex:v2:') ? record.sourceId : JSON.stringify(record), record])).values()];
         scan.recordCount = scan.records.length;
@@ -74,6 +81,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         if (this.closed) throw new Error('历史扫描已停止');
         const scope = this.store.memory.get(scopeId);
         if (!scope?.spaceIds.length) throw new Error('项目尚未绑定 Space');
+        if (scope.agentType === 'doubao-work' && (!scope.enabledAt || !this.store.matchesConnection(scope.connectionId))) throw new Error('豆包工作项目绑定已失效');
         if (expected && (scope.enabledAt !== expected.enabledAt || scope.root !== expected.root)) throw new Error('项目绑定已变化，请重新扫描历史');
         return scope;
     }
@@ -82,7 +90,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         this.scans.set(scopeId, scan);
         try {
             const scope = this.active(scopeId);
-            const supported = ['codex-cli', 'claude-code', 'deepseek-harness', 'pi', 'prime-agent', 'opencode-v1', 'opencode-v2', 'kimi-code', 'workbuddy'].includes(scope.agentType);
+            const supported = ['codex-cli', 'claude-code', 'deepseek-harness', 'pi', 'prime-agent', 'doubao-work', 'opencode-v1', 'opencode-v2', 'kimi-code', 'workbuddy'].includes(scope.agentType);
             scan.sources = supported ? await this.sources(scope) : [];
             if (!supported) scan.warning = '仅包含插件已采集会话，该 Agent 未提供本地历史读取接口';
             else if (!scan.sources.length) scan.warning = '未发现可读取的本地历史文件，仅包含插件已采集会话';
@@ -92,6 +100,7 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
             } else {
                 for (const source of scan.sources) {
                     const turns = await this.turns(scope, source, scan.cutoff!);
+                    if (source.doubao) source.digests = new Map(turns.map(turn => [turn.key, this.doubaoDigest(turn)]));
                     source.startedAt = turns.flatMap(turn => turn.records.map(record => this.store.memory.recordTime(record.raw))).filter((time): time is string => !!time).sort()[0];
                     for (const turn of turns) scan.records.push(...turn.records.filter(record => record.message && hasTaskContent(stripImages(record.message))).map(record => ({ nativeSessionId: source.nativeSessionId, sourceId: record.sourceId })));
                 }
@@ -123,28 +132,53 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
                 this.active(scopeId, scope);
                 if (this.store.memory.resolve(scope.agentType, source.cwd)?.id !== scopeId) throw new Error('历史会话项目归属已变化，请重新扫描');
                 if (!turns.length) continue;
-                const session = this.store.registerSession({ agentType: scope.agentType, nativeSessionId: source.nativeSessionId, cwd: source.cwd });
-                for (const item of turns) {
-                    const existing = item.records.map(record => this.store.row('SELECT id,conversationId FROM traces WHERE sessionId=? AND sourceId=?', session.id, record.sourceId));
-                    if (existing.every(Boolean) && scope.agentType !== 'workbuddy') continue;
-                    const conversations = new Set(existing.flatMap(record => record?.conversationId ? [String(record.conversationId)] : []));
-                    const knownTurn = conversations.size === 1 ? this.store.row('SELECT id FROM turns WHERE id=?', [...conversations][0]!) : undefined;
-                    const turn = knownTurn ?? this.store.startTurn(session.id, item.key, false);
-                    for (const input of item.records) {
-                        if (!isBindControl(input) && !allowed.has(JSON.stringify({ nativeSessionId: source.nativeSessionId, sourceId: input.sourceId }))) continue;
-                        const record = isBindControl(input) ? input : stripImages(normalizeTaskTrace(scope.agentType, input));
-                        if (!record?.message || !isBindControl(record) && !hasTaskContent(record.message)) continue;
-                        if (Array.isArray(object(input.raw).bindCallIds)) record.raw = { ...object(record.raw), bindCallIds: object(input.raw).bindCallIds };
-                        if (scope.agentType === 'workbuddy' && this.store.mergeWorkBuddyTrace(session, record)) continue;
-                        this.store.db.prepare('INSERT OR IGNORE INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(?,?,?,?,?,?)')
-                            .run(session.id, String(turn.id), record.sourceId, JSON.stringify(record.raw), JSON.stringify(record.message), this.store.memory.recordTime(record.raw) ?? item.completedAt);
-                    }
-                    this.store.db.prepare('UPDATE turns SET completedAt=COALESCE(completedAt,?) WHERE id=?').run(item.completedAt, String(turn.id));
-                }
-                if (scope.agentType === 'workbuddy') this.store.refreshUnsentBatches(session.id);
+                if (source.doubao) {
+                    await this.validateSources(scope, [source]);
+                    this.store.db.exec('BEGIN');
+                    try {
+                        this.importTurns(scope, source, turns, allowed);
+                        this.store.db.exec('COMMIT');
+                    } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
+                } else this.importTurns(scope, source, turns, allowed);
             }
         }
         return scan.records.filter(record => !sessions || sessions.has(record.nativeSessionId));
+    }
+    private importTurns(scope: MemoryScope, source: Source, turns: HistoricalTurn[], allowed: Set<string>) {
+        const session = this.store.registerSession({ agentType: scope.agentType, nativeSessionId: source.nativeSessionId, cwd: source.cwd });
+        if (source.doubao && (session.cwd !== scope.root || session.objectId !== scope.id)) throw new Error('豆包工作会话已关联其他项目，请重新扫描');
+        for (const item of turns) {
+            const existing = item.records.map(record => this.store.row('SELECT id,conversationId FROM traces WHERE sessionId=? AND sourceId=?', session.id, record.sourceId));
+            if (source.doubao) this.checkStoredDoubao(session.id, item);
+            if (existing.every(Boolean) && scope.agentType !== 'workbuddy' && !source.doubao) continue;
+            const conversations = new Set(existing.flatMap(record => record?.conversationId ? [String(record.conversationId)] : []));
+            const knownTurn = conversations.size === 1 ? this.store.row('SELECT id FROM turns WHERE id=?', [...conversations][0]!) : undefined;
+            const turn = knownTurn ?? this.store.startTurn(session.id, item.key, false);
+            for (const input of item.records) {
+                if (!isBindControl(input) && !allowed.has(JSON.stringify({ nativeSessionId: source.nativeSessionId, sourceId: input.sourceId }))) continue;
+                const record = isBindControl(input) ? input : stripImages(normalizeTaskTrace(scope.agentType, input));
+                if (!record?.message || !isBindControl(record) && !hasTaskContent(record.message)) continue;
+                if (Array.isArray(object(input.raw).bindCallIds)) record.raw = { ...object(record.raw), bindCallIds: object(input.raw).bindCallIds };
+                if (scope.agentType === 'workbuddy' && this.store.mergeWorkBuddyTrace(session, record)) continue;
+                this.store.db.prepare('INSERT OR IGNORE INTO traces(sessionId,conversationId,sourceId,raw,message,createdAt) VALUES(?,?,?,?,?,?)')
+                    .run(session.id, String(turn.id), record.sourceId, JSON.stringify(record.raw), JSON.stringify(record.message), this.store.memory.recordTime(record.raw) ?? item.completedAt);
+            }
+            this.store.db.prepare('UPDATE turns SET completedAt=COALESCE(completedAt,?) WHERE id=?').run(item.completedAt, String(turn.id));
+        }
+        if (scope.agentType === 'workbuddy') this.store.refreshUnsentBatches(session.id);
+    }
+    private doubaoDigest(turn: HistoricalTurn) {
+        return createHash('sha256').update(JSON.stringify(turn)).digest('hex');
+    }
+    private checkStoredDoubao(sessionId: string, turn: HistoricalTurn) {
+        const stored = this.store.rows('SELECT t.sourceId,t.message FROM traces t JOIN turns u ON u.id=t.conversationId WHERE t.sessionId=? AND u.nativeKey=?', sessionId, turn.key);
+        const rows = new Map(turn.records.map(input => {
+            const record = isBindControl(input) ? input : stripImages(normalizeTaskTrace('doubao-work', input));
+            return [input.sourceId, JSON.stringify(record?.message)];
+        }));
+        if (stored.some(row => rows.get(String(row.sourceId)) !== row.message)
+            || turn.records.some(record => this.store.row('SELECT 1 FROM traces t LEFT JOIN turns u ON u.id=t.conversationId WHERE t.sessionId=? AND t.sourceId=? AND u.nativeKey IS NOT ?', sessionId, record.sourceId, turn.key)))
+            throw new Error('豆包工作历史轨迹与已有本地记录冲突，请重新扫描');
     }
     async *materializeSessions(scopeId: string) {
         const scan = this.scans.get(scopeId);
@@ -173,14 +207,36 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
     }
     private async validateSources(scope: MemoryScope, sources: Source[]) {
         this.active(scope.id, scope);
-        if (sources.length) {
+        if (sources.length || scope.agentType === 'doubao-work') {
             const current = await this.sources(scope);
-            for (const source of sources) if (!current.some(candidate => candidate.path === source.path && candidate.cwd === source.cwd && candidate.nativeSessionId === source.nativeSessionId))
+            for (const source of sources) if (!current.some(candidate => candidate.path === source.path && candidate.cwd === source.cwd && candidate.nativeSessionId === source.nativeSessionId
+                && (!source.doubao || source.doubao.every(turn => candidate.doubao?.some(now => now.questionId === turn.questionId
+                    && now.answerId === turn.answerId && now.startedAt === turn.startedAt && now.endedAt === turn.endedAt)))))
                 throw new Error('历史会话项目归属或源身份已变化，请重新扫描');
         }
         this.active(scope.id, scope);
     }
     private async sources(scope: MemoryScope): Promise<Source[]> {
+        if (scope.agentType === 'doubao-work') {
+            if (!await adapterInstalled(doubaoProfile, {home: this.options.home})) throw new Error('豆包工作接入尚未安装');
+            this.active(scope.id, scope);
+            this.doubao ??= new DoubaoHost(this.options.home);
+            await this.doubao.refresh();
+            this.active(scope.id, scope);
+            const sessions = new Map<string, Source>();
+            for (const turn of this.doubao.completed()) {
+                if (turn.root !== scope.root || this.store.memory.resolve('doubao-work', turn.root)?.id !== scope.id) continue;
+                const known = this.store.row('SELECT cwd,objectId FROM sessions WHERE agentType=? AND nativeSessionId=?', 'doubao-work', turn.sessionId);
+                if (known && (known.cwd !== turn.root || known.objectId !== scope.id)) continue;
+                let source = sessions.get(turn.sessionId);
+                if (!source) {
+                    source = {path:join(doubaoSessionsPath(this.options.home),turn.sessionId), cwd:turn.root, nativeSessionId:turn.sessionId, doubao:[]};
+                    sessions.set(turn.sessionId, source);
+                }
+                source.doubao!.push(turn);
+            }
+            return [...sessions.values()];
+        }
         if (scope.agentType === 'prime-agent') return (await primeSources(this.options.home)).filter(source => source.cwd === scope.root);
         const home = this.options.home ?? homedir();
         const base = (variable: string, fallback: string) => this.options.home ? join(home, fallback) : process.env[variable] || join(home, fallback);
@@ -287,10 +343,25 @@ FROM sessions s JOIN turns u ON u.sessionId=s.id LEFT JOIN traces t ON t.convers
         return snapshots.map(snapshot => ({ ...snapshot, turns: snapshot.turns.filter(turn => complete.has(turn)) })).filter(snapshot => snapshot.turns.length);
     }
     private async turns(scope: MemoryScope, source: Source, cutoff: string): Promise<HistoricalTurn[]> {
-        return (await this.sourceTurns(scope, source, cutoff)).map(turn => ({ ...turn, records: filterBindRecords(turn.records.map(record => ({ ...record, nativeTurnId: record.nativeTurnId ?? turn.key }))) }));
+        const turns = (await this.sourceTurns(scope, source, cutoff)).map(turn => ({ ...turn, records: filterBindRecords(turn.records.map(record => ({ ...record, nativeTurnId: record.nativeTurnId ?? turn.key }))) }));
+        if (source.digests) {
+            if (source.digests.size !== turns.length || turns.some(turn => source.digests!.get(turn.key) !== this.doubaoDigest(turn)))
+                throw new Error('豆包工作历史轨迹已变化，请重新扫描');
+        }
+        return turns;
     }
     private async sourceTurns(scope: MemoryScope, source: Source, cutoff: string): Promise<HistoricalTurn[]> {
         this.active(scope.id, scope);
+        if (source.doubao) {
+            const turns: HistoricalTurn[] = [];
+            for (const turn of source.doubao) {
+                if (turn.endedAt > Date.parse(cutoff) || source.digests && !source.digests.has(turn.questionId)) continue;
+                this.active(scope.id, scope);
+                const records = await readDoubaoTurn(turn, this.options.home);
+                if (records?.length) turns.push({key:turn.questionId, records, completedAt:new Date(turn.endedAt).toISOString()});
+            }
+            return turns;
+        }
         if (scope.agentType === 'prime-agent') {
             const before = await stat(source.path);
             const snapshot = await readPrimeSession(source.path);

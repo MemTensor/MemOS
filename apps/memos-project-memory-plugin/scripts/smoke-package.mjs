@@ -41,6 +41,15 @@ try {
  const wrapper=await readFile(join(home,'.config/opencode/plugins/memos-project-memory.js'),'utf8');assert.match(wrapper,/dist\/adapters\/opencode-v1\/extension\/index.js/);
  await import(pathToFileURL(join(home,'.config/opencode/plugins/memos-project-memory.js')));
  await uninstallAdapter('opencode-v1',{home,cwd:root});
+ const doubao=await installAdapter('doubao-work',{home,cwd:root});
+ const skill=await readFile(doubao.files[0],'utf8');
+ const command=/```sh\n([^\n]+)\n```/.exec(skill)[1];
+ assert.match(command,/dist\/adapters\/doubao-work\/skill-runner\.js/);
+ await assert.rejects(exec('/bin/sh',['-c',command],{env:{...process.env,MEMOS_PM_URL:url,MCP_VM_CONVERSATION_ID:'1',DOUBAO_OFFICE_ANSWER_MESSAGE_ID:'2'}}),error=>{
+  assert.equal(JSON.parse(error.stdout).status,'CONTEXT_MISSING');return true;
+ });
+ await uninstallAdapter('doubao-work',{home,cwd:root});
+ await assert.rejects(readFile(doubao.files[0]),{code:'ENOENT'});
  console.log('PASS: clean npm install, compiled service, Viewer assets, CLI, hook/native installation and resource paths');
 } finally {
  if(pid){try{process.kill(pid,'SIGTERM');}catch{} for(let i=0;i<50;i++){try{process.kill(pid,0);}catch{break;}await new Promise(r=>setTimeout(r,100));}}

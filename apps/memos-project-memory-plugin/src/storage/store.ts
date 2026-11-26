@@ -268,8 +268,12 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
         spaceId = spaceId.trim();
         this.db.exec('BEGIN');
         try {
-            const project = this.row('SELECT * FROM projects WHERE root=? ORDER BY createdAt,rowid LIMIT 1', root) as unknown as Project | undefined ?? this.createProject(name, root);
+            const project = this.row('SELECT * FROM projects WHERE root=? ORDER BY createdAt,rowid LIMIT 1', root) as unknown as Project | undefined ?? this.createProject(agentType === 'doubao-work' ? basename(root) || root : name, root);
             const scopeId = this.memory.ensure(project.id, agentType);
+            if (agentType === 'doubao-work') {
+                const association = this.db.prepare('UPDATE project_agents SET localName=COALESCE(localName, ?) WHERE id=? RETURNING localName').get(name.trim(), scopeId);
+                project.name = String(association!.localName);
+            }
             const sessions = this.rows('SELECT s.* FROM sessions s JOIN tasks t ON t.id=s.taskId WHERE s.agentType=? AND (t.projectId IS NULL OR t.projectId=?)', agentType, project.id).filter(session => this.projectForDirectory(String(session.cwd))?.id === project.id);
             this.bind(scopeId, spaceId, baseUrl, spaceName, nextTurnOnly);
             for (const session of sessions) {

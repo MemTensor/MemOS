@@ -27,3 +27,17 @@ test('trace details preserve full malicious-looking content as text', () => {
 });
 
 const all=(node:Node):Node[]=>[node,...node.children.flatMap(all)];
+
+test('the Agent project picker shows the scoped name while the shared group keeps its name', () => {
+  const state = {
+    projects: [{ id: 'p', name: 'Shared', root: '/work' }],
+    bindings: [{ id: 'scope', projectId: 'p', agentType: 'doubao-work', name: 'Renamed', spaceIds: ['space'] }],
+    sessions: [
+      { id: 'a', projectId: 'p', objectId: 'scope', agentType: 'doubao-work' },
+      { id: 'b', projectId: 'p', agentType: 'codex-cli' },
+    ],
+  };
+  assert.equal(view.traceScopeGroups(state, 'doubao-work')[0].name, 'Renamed');
+  assert.equal(view.traceScopeGroups(state, 'codex-cli')[0].name, 'Shared');
+  assert.equal(view.traceScopeGroups(state)[0].name, 'Shared');
+});

@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createZstdDecompress } from 'node:zlib';
 import { object } from './_shared/transcript.ts';
 import { workbuddyConfigDir } from './workbuddy/paths.ts';
+import { discoverDoubaoProjects } from './doubao-work/cache.ts';
 import { discoverPrimeProjects } from './prime-agent/projects.ts';
 
 export type Project = { name: string; root: string };
@@ -76,6 +77,7 @@ function copilotDirectory(text: string): string | undefined {
 
 /** Discover existing host projects without starting agents or registering local state. */
 export async function discoverProjects(agentType: string, options: { home?: string } = {}): Promise<Project[]> {
+  if (agentType === 'doubao-work') return discoverDoubaoProjects(options);
   if (agentType === 'prime-agent') return discoverPrimeProjects(options);
   const home = options.home ?? homedir();
   const base = (variable: string, fallback: string) => options.home ? join(home, fallback) : process.env[variable] || join(home, fallback);

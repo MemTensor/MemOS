@@ -87,7 +87,7 @@ export function createLocalServer(service: PluginService) {
             if (path === '/api/bind' && req.method === 'GET')
                 return json(service.bindingState());
             if (path === '/api/bind' && req.method === 'DELETE')
-                return json(service.store.unbind(String(body.objectId ?? ''), String(body.spaceId ?? '')));
+                return json(service.unbind(String(body.objectId ?? ''), String(body.spaceId ?? '')));
             if (req.method === 'GET' && (path === '/api/state' || path === '/api/sessions' || path.startsWith('/api/sessions/')))
                 await service.refreshSessionTitles();
             if (path === '/api/state' && req.method === 'GET')
@@ -121,6 +121,8 @@ export function createLocalServer(service: PluginService) {
                 }
                 return json({ ok: true });
             }
+            if (path === '/api/doubao/search' && req.method === 'POST')
+                return json(await service.searchDoubao(body));
             if (path === '/api/search' && req.method === 'POST')
                 return json(await service.search(body));
             if (path === '/api/sync' && req.method === 'POST') {
@@ -135,7 +137,7 @@ export function createLocalServer(service: PluginService) {
                     return json(await installer.listAgents());
                 const match = path.match(/^\/api\/adapters\/([^/]+)\/(install|repair|uninstall)$/);
                 if (match && req.method === 'POST')
-                    return json(await (match[2] === 'uninstall' ? installer.uninstallAdapter : installer.installAdapter)(decodeURIComponent(match[1]!)));
+                    return json(await service.changeAdapter(decodeURIComponent(match[1]!), match[2] === 'uninstall'));
             }
             return json({ error: 'Not found' }, 404);
         }
