@@ -7,7 +7,12 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+
+from memos.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 ALLOWED_ROLES = {"user", "assistant", "system"}
@@ -159,13 +164,28 @@ class TextualMemoryMetadata(BaseModel):
         description="Internal algorithm metadata reserved for system use.",
     )
 
-    @field_validator("history", mode="before")
+    @model_validator(mode="before")
     @classmethod
     def _decode_history(cls, value: Any) -> Any:
-        # Neo4j stores each archived snapshot as a JSON string in its property list.
-        if isinstance(value, list):
-            return [json.loads(entry) if isinstance(entry, str) else entry for entry in value]
-        return value
+        if not isinstance(value, dict) or not isinstance(value.get("history"), list):
+            return value
+        metadata = value.copy()
+        history = []
+        quarantine = list(metadata.get("history_quarantine", []))
+        for entry in value["history"]:
+            try:
+                decoded = json.loads(entry) if isinstance(entry, str) else entry
+                if isinstance(decoded, dict):
+                    # Missing legacy timestamps are unknown, not the time of this read.
+                    decoded = {"created_at": None, **decoded}
+                history.append(ArchivedTextualMemory.model_validate(decoded))
+            except ValueError:
+                quarantine.append(entry if isinstance(entry, str) else json.dumps(entry))
+                logger.warning("Quarantined invalid history entry while reading memory metadata")
+        metadata["history"] = history
+        if quarantine:
+            metadata["history_quarantine"] = quarantine
+        return metadata
 
     @field_validator("internal_info", "info", mode="before")
     @classmethod

@@ -30,6 +30,7 @@ def test_version_fallback_preserves_history_across_updates(
         metadata={
             "memory_type": "WorkingMemory",
             "version": 2,
+            "history_quarantine": ["legacy broken entry"],
             "history": [{"version": 1, "memory": "Earlier memory"}] if has_history else [],
         },
     )
@@ -53,6 +54,9 @@ def test_version_fallback_preserves_history_across_updates(
         assert result["id"] == old.id
         assert fields["memory"] == text
         assert fields["version"] == version
+        assert fields["history_quarantine"] == ["legacy broken entry"]
+        if has_history:
+            assert fields["history"][0]["created_at"] is None
         history = [ArchivedTextualMemory.model_validate(entry) for entry in fields["history"]]
         assert history[:-1] == old.metadata.history
         assert history[-1].memory == old.memory

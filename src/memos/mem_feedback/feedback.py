@@ -394,9 +394,7 @@ class MemFeedback(BaseMemFeedback):
             updated_fields = {
                 "memory": updated_item.memory,
                 "version": updated_item.metadata.version,
-                "history": [
-                    entry.model_dump(exclude_none=True) for entry in updated_item.metadata.history
-                ],
+                "history": [entry.model_dump() for entry in updated_item.metadata.history],
                 "key": updated_item.metadata.key,
                 "tags": updated_item.metadata.tags,
                 "embedding": updated_item.metadata.embedding,
@@ -409,6 +407,8 @@ class MemFeedback(BaseMemFeedback):
                 ],
                 "covered_history": old_memory_item.id,
             }
+            if getattr(updated_item.metadata, "history_quarantine", None):
+                updated_fields["history_quarantine"] = updated_item.metadata.history_quarantine
             archived_item = None
             archived_metadata = None
 

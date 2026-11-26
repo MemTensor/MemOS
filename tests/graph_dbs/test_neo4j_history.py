@@ -5,11 +5,12 @@ import pytest
 
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.graph_dbs.neo4j_community import Neo4jCommunityGraphDB
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import ArchivedTextualMemory, TextualMemoryItem
 
 
 @pytest.mark.parametrize("db_cls", [Neo4jGraphDB, Neo4jCommunityGraphDB])
-def test_history_update_roundtrips_without_mutating_fields(db_cls):
+@pytest.mark.parametrize("as_model", [False, True])
+def test_history_update_roundtrips_without_mutating_fields(db_cls, as_model):
     db = db_cls.__new__(db_cls)
     db.config = SimpleNamespace(user_name="cube-1", use_multi_db=False)
     db.db_name = "memory"
@@ -18,6 +19,8 @@ def test_history_update_roundtrips_without_mutating_fields(db_cls):
         "version": 2,
         "history": [{"version": 1, "memory": "旧记忆", "update_type": "feedback"}],
     }
+    if as_model:
+        fields["history"] = [ArchivedTextualMemory(**fields["history"][0])]
 
     db.update_node("memory-1", fields)
 
@@ -28,4 +31,4 @@ def test_history_update_roundtrips_without_mutating_fields(db_cls):
     assert item.metadata.history[0].memory == "旧记忆"
     assert item.metadata.history[0].version == 1
     assert item.metadata.version == 2
-    assert isinstance(fields["history"][0], dict)
+    assert isinstance(fields["history"][0], ArchivedTextualMemory if as_model else dict)
