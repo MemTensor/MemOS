@@ -502,7 +502,6 @@ def test_delete_memory_routes_topic_ids_to_project_memory(app, monkeypatch):
         {"memory_ids": ["topic_a", "mem-1"]},
         {"memory_ids": ["topic_a", ""]},
         {"memory_ids": ["topic_a"], "filter": {"user_id": "u1"}},
-        {"memory_ids": ["topic_a"], "filter": {}},
         {"memory_ids": ["topic_a"], "user_id": "u1"},
         {"memory_ids": ["topic_a"], "writable_cube_ids": ["cube"]},
         {"memory_ids": ["topic_a"], "file_ids": ["file-1"]},

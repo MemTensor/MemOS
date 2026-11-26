@@ -383,11 +383,6 @@ class RelationalProjectView:
         if not topic_ids:
             return []
         with self.store.transaction() as cursor:
-            # Lock in ID order first so concurrent writers to the same topics cannot deadlock.
-            cursor.execute(
-                "SELECT id FROM topics WHERE id = ANY(%s::text[]) ORDER BY id FOR UPDATE",
-                (list(topic_ids),),
-            )
             cursor.execute(
                 "DELETE FROM topics WHERE id = ANY(%s::text[]) RETURNING id", (list(topic_ids),)
             )
