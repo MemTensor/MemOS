@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from memos.project_memory.add_commit import refresh_topic_items
+from memos.project_memory.add_layout import import_topics
 from memos.project_memory.add_merge import prepare_merge, rebase_append_only, rewrite_metadata
 from memos.project_memory.add_view import RelationalProjectView
 from memos.project_memory.judge import ModelError
@@ -490,13 +490,19 @@ def test_relational_search_and_get_keep_member_stance_times_private(add_store):
         cur.execute(
             "INSERT INTO domains (id, space_id, domain) VALUES ('domain', 'space', 'product')"
         )
-        cur.execute(
-            """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary,
-                                   topic_description, create_time, update_time)
-               VALUES ('topic', 'space', 'domain', 'Exports', 'Export daily.', '', %s, %s)""",
-            (topic["create_time"], topic["update_time"]),
+        import_topics(
+            cur,
+            [
+                {
+                    **topic,
+                    "id": "topic",
+                    "space_id": "space",
+                    "domain_id": "domain",
+                    "topic_name": "Exports",
+                    "topic_summary": "Export daily.",
+                }
+            ],
         )
-        refresh_topic_items(cur, {**topic, "id": "topic", "space_id": "space"})
     (projected_topic,) = add_store.read_topics("space")
     (projected_decision,) = projected_topic["decisions"]
     assert projected_decision["_member_stance_times"]["bob"] == "2026-11-19T05:00:00+00:00"

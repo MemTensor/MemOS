@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from memos.log import get_logger
 
 from .add_entry_fields import experience_retired
+from .add_layout import child_key
 from .add_limits import LIMITS, cut_at_sentence
 
 
@@ -134,6 +135,22 @@ def index_changeset(
                 if text and not retired:
                     texts.append(text)
                     destinations.append((edit["item_embeddings"], item["id"]))
+                if kind != "decision" or retired:
+                    continue
+                # Decision child rows are searchable too: new history rows and every conflict
+                # (conflicts are rewritten whole) carry their own vector.
+                children = [
+                    (child_key(item["id"], "h", seq), row)
+                    for seq, row in enumerate(item.get("history") or [], 1)
+                    if not row.get("id")
+                ] + [
+                    (child_key(item["id"], "c", row.get("seq") or seq), row)
+                    for seq, row in enumerate(item.get("conflicts") or [], 1)
+                ]
+                for key, row in children:
+                    if row.get("content"):
+                        texts.append(row["content"])
+                        destinations.append((edit["item_embeddings"], key))
     try:
         vectors = _vectors(embedder, texts, dimension)
     except Exception as exc:

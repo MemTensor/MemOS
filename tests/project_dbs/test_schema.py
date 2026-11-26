@@ -143,3 +143,53 @@ def test_required_extensions_include_btree_gist():
 
     assert required_extensions("simple") == ["vector", "btree_gist"]
     assert required_extensions("zhparser") == ["vector", "btree_gist", "zhparser"]
+
+
+def test_writer_and_reader_follow_a_custom_schema(cur):
+    """Add installs the shared tables in its own schema and writes in its own transaction."""
+    from datetime import datetime, timezone
+
+    from memos.project_dbs.item import (
+        ConflictCard,
+        Decision,
+        TopicChangeSet,
+        TopicCreate,
+        TopicUpdate,
+    )
+    from memos.project_dbs.postgres_rows import _ENTRY_COLS, entries_from_rows, qualify
+    from memos.project_dbs.postgres_writer import write_change_set
+
+    at = datetime(2026, 11, 19, tzinfo=timezone.utc)
+    decision = Decision(
+        content="A",
+        chat_time=at,
+        user_ids=["u"],
+        conflicts=[ConflictCard(content="B", chat_time=at, user_ids=["v"])],
+    )
+    create = TopicCreate(
+        domain="dev",
+        topic_name="n",
+        topic_summary="s",
+        topic_description="d",
+        entries=[decision],
+        create_time=at,
+        update_time=at,
+    )
+    (created,) = write_change_set(
+        cur, TopicChangeSet(space_id="sp", accept_time=at, creates=[create]), schema=S
+    )
+    cur.execute(
+        f"SELECT version, extra ? 'rank_time' FROM {S}.topics WHERE id = %s", (created.topic_id,)
+    )
+    assert cur.fetchone() == (1, True)
+    cur.execute(
+        f"SELECT {_ENTRY_COLS} FROM {S}.project_entries e WHERE e.parent_decision_id IS NULL"
+    )
+    (stored,) = entries_from_rows(cur, cur.fetchall(), with_children=True, schema=S)
+    assert stored.conflicts[0].content == "B"
+    update = TopicUpdate(topic_id=created.topic_id, expected_version=1, topic_summary="s2")
+    write_change_set(cur, TopicChangeSet(space_id="sp", accept_time=at, updates=[update]), schema=S)
+    cur.execute(f"SELECT topic_summary FROM {S}.topics WHERE id = %s", (created.topic_id,))
+    assert cur.fetchone() == ("s2",)
+    with pytest.raises(ValueError, match="lowercase"):
+        qualify("SELECT 1 FROM project_memory.spaces", "Bad-Schema")

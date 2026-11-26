@@ -3,6 +3,8 @@
 Shared by PostgresProjectDB and the writer; everything here runs on a plain tuple cursor.
 """
 
+import re
+
 from typing import Any
 
 from memos.project_dbs.item import (
@@ -19,6 +21,18 @@ from memos.project_dbs.item import (
 
 
 SCHEMA = "project_memory"
+_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]*")
+
+
+def qualify(sql: str, schema: str) -> str:
+    """`sql` with the default schema replaced by `schema`, for callers that install the
+    tables elsewhere (the Add plugin's configurable schema, scratch schemas in tests)."""
+    if schema == SCHEMA:
+        return sql
+    if not _IDENTIFIER.fullmatch(schema):
+        raise ValueError("Project memory schema names must be lowercase identifiers")
+    return sql.replace(f"{SCHEMA}.", f"{schema}.")
+
 
 _TOPIC_COLS = (
     "t.id, t.space_id, d.domain, t.topic_name, t.topic_summary, t.topic_description, "
@@ -136,16 +150,19 @@ def entry_from_row(
 
 
 def load_children(
-    cur: Any, decision_ids: list[str]
+    cur: Any, decision_ids: list[str], schema: str = SCHEMA
 ) -> dict[str, tuple[list[DecisionCard], list[ConflictCard]]]:
     """history (ARCHIVED) and conflicts (CONFLICT) per decision, oldest chat_time first."""
     children: dict[str, tuple[list, list]] = {d: ([], []) for d in decision_ids}
     if not decision_ids:
         return children
     cur.execute(
-        f"""SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e
+        qualify(
+            f"""SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e
             WHERE e.parent_decision_id = ANY(%s)
             ORDER BY e.chat_time, e.id COLLATE "C" """,
+            schema,
+        ),
         (list(decision_ids),),
     )
     for row in cur.fetchall():
@@ -165,13 +182,15 @@ def load_children(
     return children
 
 
-def entries_from_rows(cur: Any, rows: list[tuple], with_children: bool) -> list[AnyEntry]:
+def entries_from_rows(
+    cur: Any, rows: list[tuple], with_children: bool, schema: str = SCHEMA
+) -> list[AnyEntry]:
     """Entry models in row order; decisions get their child rows when with_children."""
     if not with_children:
         return [entry_from_row(row) for row in rows]
     data = [dict(zip(_ENTRY_NAMES, row, strict=True)) for row in rows]
     decision_ids = [d["id"] for d in data if d["entry_type"] == "decision"]
-    children = load_children(cur, decision_ids)
+    children = load_children(cur, decision_ids, schema)
     return [entry_from_row(row, children.get(d["id"])) for row, d in zip(rows, data, strict=True)]
 
 
@@ -180,12 +199,15 @@ def attach_entries(topics: dict[str, Topic], entries: list[AnyEntry]) -> None:
         getattr(topics[entry.topic_id], TOPIC_FIELDS[entry.entry_type]).append(entry)
 
 
-def load_entries_by_id(cur: Any, entry_ids: list[str]) -> dict[str, AnyEntry]:
+def load_entries_by_id(cur: Any, entry_ids: list[str], schema: str = SCHEMA) -> dict[str, AnyEntry]:
     """Entries with children, keyed by id; unknown ids are skipped."""
     if not entry_ids:
         return {}
     cur.execute(
-        f"SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e WHERE e.id = ANY(%s)",
+        qualify(
+            f"SELECT {_ENTRY_COLS} FROM {SCHEMA}.project_entries e WHERE e.id = ANY(%s)", schema
+        ),
         (list(entry_ids),),
     )
-    return {e.id: e for e in entries_from_rows(cur, cur.fetchall(), with_children=True)}
+    rows = cur.fetchall()
+    return {e.id: e for e in entries_from_rows(cur, rows, with_children=True, schema=schema)}

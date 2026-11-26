@@ -1,5 +1,6 @@
 import os
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 from uuid import uuid4
@@ -500,3 +501,140 @@ def test_concurrent_formation_planning_is_skipped(store):
     finally:
         client.delete(runtime._formation_key("planning", "test"))
     assert runtime.flush("test")["formation"]["ran"] is True
+
+
+def _drain(runtime, work):
+    while work:
+        runtime.handle([work.pop(0)])
+
+
+def _conversation(runtime, task_id, *texts):
+    return runtime.accept(
+        SimpleNamespace(
+            task_id=task_id,
+            user_id="member",
+            conversation_id="chat",
+            space_ids=["test"],
+            messages=[
+                {"message_id": f"{task_id}:{i}", "role": "user", "content": text}
+                for i, text in enumerate(texts)
+            ],
+        )
+    )
+
+
+def _close_and_publish(runtime):
+    closed = runtime.acceptance.close_open("test")
+    for episode_id in closed:
+        runtime._publish(episode_id)
+    return closed
+
+
+def test_boundary_split_creates_sibling_episodes_before_extraction(store):
+    calls = []
+
+    def write(scope, _prompt, inputs):
+        calls.append(scope)
+        if scope == "episode.boundary":
+            assert [turn["member"] for turn in inputs["turns"]] == ["Fix the export.", "Now docs."]
+            return {
+                "continues_previous": False,
+                "segments": [
+                    {"start_turn": 0},
+                    {"start_turn": 1, "reason": "docs", "quote": "Now docs."},
+                ],
+            }
+        return {"episode_summary": "", "drafts": []}
+
+    hub = Mock()
+    hub.write.side_effect = write
+    work = []
+    runtime = EpisodeAddRuntime(store, hub, work.extend, Mock(), RuntimeSettings())
+    task = _conversation(runtime, "task", "Fix the export.", "Now docs.")["task_id"]
+    (closed,) = _close_and_publish(runtime)
+    _drain(runtime, work)
+    assert calls == ["episode.boundary", "episode.extract", "episode.extract"]
+
+    first = store.load_episode(closed)
+    assert (first["message_seq_start"], first["message_seq_end"]) == (1, 1)
+    assert first["boundary"]["starts"] == [0, 1] and first["boundary"]["judged"]
+    with store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT id FROM episodes WHERE id <> %s", (closed,))
+        sibling = store.load_episode(cursor.fetchone()["id"])
+    assert (sibling["message_seq_start"], sibling["message_seq_end"]) == (2, 2)
+    assert sibling["previous_episode_id"] == closed
+    assert sibling["boundary"]["continues_previous"] is False
+    assert sibling["boundary"]["judged"] is False
+    assert sibling["task_ranges"] == {"task": [2, 2]}
+    assert first["task_ranges"] == {"task": [1, 1]}
+    assert sibling["close_reason"] == "split"
+    assert sibling["accept_time"] == first["accept_time"]
+    assert {first["outcome"], sibling["outcome"]} == {"skipped"}
+    assert runtime.status(task, "member")["status"] == "completed"
+
+
+def test_boundary_model_outage_falls_back_after_the_retries(store):
+    def write(scope, _prompt, _inputs):
+        if scope == "episode.boundary":
+            raise ModelError("boundary down")
+        return {"episode_summary": "", "drafts": []}
+
+    hub = Mock()
+    hub.write.side_effect = write
+    work = []
+    clock = [datetime.now(timezone.utc)]
+    runtime = EpisodeAddRuntime(
+        store, hub, work.extend, Mock(), RuntimeSettings(), clock=lambda: clock[0]
+    )
+    _conversation(runtime, "task", "First part.", "Second part.")
+    (closed,) = _close_and_publish(runtime)
+    for _ in range(4):
+        _drain(runtime, work)
+        clock[0] += timedelta(seconds=60)
+        runtime.recover()
+    episode = store.load_episode(closed)
+    assert episode["outcome"] == "skipped"
+    assert episode["warnings"] == ["BOUNDARY_MODEL_UNAVAILABLE"]
+    assert episode["boundary"] == {
+        "starts": [0],
+        "continues_previous": False,
+        "judged": False,
+        "reasons": [],
+    }
+
+
+def test_a_switch_drops_the_previous_topic_from_recall(store, monkeypatch):
+    from memos.project_memory import add_runtime
+
+    seen = []
+
+    def recall(episode, topics, ranked=None, **kwargs):
+        seen.append(episode.get("previous"))
+        return []
+
+    monkeypatch.setattr(add_runtime, "recall_candidates", recall)
+    switch = {"continues_previous": False}
+
+    def write(scope, _prompt, inputs):
+        if scope == "episode.boundary":
+            return {**switch, "segments": [{"start_turn": 0}]}
+        (message,) = inputs["episode"]
+        quote = message["content"]
+        draft = {"kind": "decision", "message_id": message["id"], "quote": quote, "content": quote}
+        return {"episode_summary": quote, "drafts": [draft]}
+
+    hub = Mock()
+    hub.write.side_effect = write
+    work = []
+    runtime = EpisodeAddRuntime(store, hub, work.extend, Mock(), RuntimeSettings())
+    for task, text in (("one", "We use the old API."), ("two", "We ship on Friday.")):
+        _conversation(runtime, task, text)
+        _close_and_publish(runtime)
+        _drain(runtime, work)
+    switch["continues_previous"] = True
+    _conversation(runtime, "three", "We keep shipping on Friday.")
+    _close_and_publish(runtime)
+    _drain(runtime, work)
+    # First Episode: nothing before it; second: a switch; third: continues the second.
+    assert seen[0] is None and seen[1] is None
+    assert seen[2]["outcome"] == "staged"

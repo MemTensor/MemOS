@@ -219,27 +219,31 @@ def _usage_summary(rows: list[dict[str, Any]], complete: bool, methods: set[str]
 
 
 def task_metrics(cursor: Any, project_id: str, task_id: str, user_id: str) -> dict[str, Any]:
-    """Timing and attributed usage of one Add request, read in the caller's transaction."""
+    """Timing and attributed usage of one Add request, read in the caller's transaction.
+
+    The Task's Episodes are the add_jobs rows listing it; each Turn's Task and size come from
+    its `turn` event. Episodes without Turn events split equally among their Tasks."""
     cursor.execute(
-        """SELECT episode_id, turn_id, accepted_at FROM episode_turns
-           WHERE project_id = %s AND task_id = %s AND user_id = %s""",
-        (project_id, task_id, user_id),
-    )
-    own = cursor.fetchall()
-    episode_ids = sorted({row["episode_id"] for row in own})
-    cursor.execute(
-        """SELECT id, space_id, state, stage, outcome, close_reason, opened_at, closed_at,
-                  updated_at
-           FROM episodes WHERE project_id = %s AND id = ANY(%s::text[]) ORDER BY opened_at, id""",
-        (project_id, episode_ids),
+        """SELECT j.episode_id AS id, j.space_id, j.stage, j.outcome, j.task_ids,
+                  j.update_time AS updated_at, e.create_time AS opened_at,
+                  j.organize_result->'close'->>'reason' AS close_reason,
+                  (j.organize_result->'close'->>'at')::timestamptz AS closed_at,
+                  (j.organize_result->'task_owners'->%s->>'accepted_at')::timestamptz
+                      AS accepted_at,
+                  j.organize_result ? 'extraction' AS extracted
+           FROM add_jobs j JOIN episodes e ON e.id = j.episode_id
+           WHERE j.project_id = %s AND j.task_ids @> ARRAY[%s]::text[]
+             AND j.organize_result->'task_owners'->%s->>'user_id' = %s
+           ORDER BY e.create_time, j.episode_id""",
+        (task_id, project_id, task_id, task_id, user_id),
     )
     episodes = cursor.fetchall()
-    cursor.execute(
-        """SELECT episode_id, task_id, turn_id FROM episode_turns
-           WHERE project_id = %s AND episode_id = ANY(%s::text[])""",
-        (project_id, episode_ids),
-    )
-    members = cursor.fetchall()
+    for episode in episodes:
+        stage = episode["stage"]
+        episode["state"] = (
+            "open" if stage == "episode_open" else "extracted" if episode["extracted"] else "closed"
+        )
+    episode_ids = [episode["id"] for episode in episodes]
     cursor.execute(
         """SELECT episode_id, event, at, stage, attempt, detail FROM add_episode_events
            WHERE project_id = %s AND episode_id = ANY(%s::text[]) ORDER BY episode_id, at, id""",
@@ -247,13 +251,28 @@ def task_metrics(cursor: Any, project_id: str, task_id: str, user_id: str) -> di
     )
     events: dict[str, list[dict]] = defaultdict(list)
     sizes: dict[tuple[str, str], int] = {}
+    members: list[dict[str, Any]] = []
     for row in cursor.fetchall():
         events[row["episode_id"]].append(row)
         if row["event"] == "turn":
-            sizes[(row["episode_id"], row["detail"].get("turn_id"))] = int(
-                row["detail"].get("chars") or 0
+            detail = row["detail"]
+            sizes[(row["episode_id"], detail.get("turn_id"))] = int(detail.get("chars") or 0)
+            members.append(
+                {
+                    "episode_id": row["episode_id"],
+                    "task_id": detail.get("task_id"),
+                    "turn_id": detail.get("turn_id"),
+                }
+            )
+    counted = {member["episode_id"] for member in members}
+    for episode in episodes:
+        if episode["id"] not in counted:
+            members.extend(
+                {"episode_id": episode["id"], "task_id": task, "turn_id": f"task:{task}"}
+                for task in episode["task_ids"]
             )
     weights, turns, methods = turn_weights(members, sizes)
+    own = episodes
 
     accepted = min((row["accepted_at"] for row in own), default=None)
     timelines = []

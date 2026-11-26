@@ -100,6 +100,10 @@ def test_migration_preserves_identity_and_archives_exceptions(add_store):
     episode = add_store.load_episode("episode")
     assert episode["outcome"] == "committed"
     assert episode["messages"][0]["origin_task_id"] == "task"
+    # A legacy Episode becomes a msg_seq range, its Topic and its add_jobs receipt.
+    assert (episode["message_seq_start"], episode["message_seq_end"]) == (1, 1)
+    assert episode["topic_id"] == "topic-b" and episode["stage"] == "done"
+    assert episode["task_ranges"] == {"task": [1, 1]}
     assert AddAcceptance(add_store).status("task", "owner")["memory_views"]["project"][
         "memory_ids"
     ] == ["topic-b"]

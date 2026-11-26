@@ -118,6 +118,8 @@ def test_merged_episode_bills_each_add_by_its_turns(store, monkeypatch):
     calls = []
 
     def write(scope, _prompt, _inputs):
+        if scope == "episode.boundary":  # Two Turns: one judgment, before extraction.
+            return {"continues_previous": False, "segments": [{"start_turn": 0}]}
         assert scope == "episode.extract"
         calls.append(clock["now"])
         if len(calls) == 1:
