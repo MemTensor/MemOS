@@ -41,7 +41,6 @@ from .add_commit import (
     commit_formation,
 )
 from .add_dispatch import EpisodeDispatch, StageLease, label_for
-from .add_evidence import anchor_keys, collect_anchors
 from .add_extraction import extract_episode, jsonable
 from .add_index import index_changeset, ranked_topics
 from .add_merge import VersionConflictError, prepare_merge, rebase_append_only, rewrite_metadata
@@ -117,9 +116,7 @@ class EpisodeAddRuntime:
         self.embedder = self._metered(embedder, embedding_model_id) if embedder else None
         self.legacy_status = legacy_status
         self.embedding_model_id = embedding_model_id
-        self.acceptance = AddAcceptance(
-            store, clock=self.now, anchor_collector=collect_anchors, anchor_keyer=anchor_keys
-        )
+        self.acceptance = AddAcceptance(store, clock=self.now)
         self.dispatch = EpisodeDispatch(store, lease_seconds=self.settings.stage_lease_seconds)
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
