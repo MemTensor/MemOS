@@ -393,14 +393,16 @@ class DecisionDraft:
 
 @dataclass
 class ConflictItem:
-    seq: int
+    seq: int  # label c{seq} in the decision prompts; storage refers to the item by `id`
     content: str
     time: str
     user_ids: list[str] = field(default_factory=list)
     source: Source = field(default_factory=Source)
+    id: str | None = None  # stored child row; None until storage writes it
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "id": self.id,
             "seq": self.seq,
             "content": self.content,
             "time": self.time,
@@ -416,6 +418,7 @@ class ConflictItem:
             time=d.get("time", ""),
             user_ids=list(d.get("user_ids") or []),
             source=Source.from_json(d.get("source")),
+            id=d.get("id"),
         )
 
 
@@ -428,9 +431,11 @@ class HistoryItem:
     source: Source = field(default_factory=Source)
     reason: str = ""
     change_source: Source = field(default_factory=Source)
+    id: str | None = None  # stored child row; None until storage writes it
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "id": self.id,
             "seq": self.seq,
             "content": self.content,
             "time": self.time,
@@ -450,6 +455,7 @@ class HistoryItem:
             source=Source.from_json(d.get("source")),
             reason=d.get("reason", "") or "",
             change_source=Source.from_json(d.get("change_source")),
+            id=d.get("id"),
         )
 
 
