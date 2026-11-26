@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from .add_evidence import strong_anchor_keys, unwitnessed_tokens
 from .add_extraction import jsonable
-from .add_limits import LIMITS, count_units
+from .add_limits import LIMITS, count_units, cut_at_sentence
 from .judge import ModelError
 from .types import stable_uuid, time_key
 
@@ -263,13 +263,12 @@ def recall_candidates(
     ]
 
 
-_QUOTE_LIMIT = 200
 _EVIDENCE_LIMIT = 4
 _QUOTED_CANDIDATES = 5
 
 
 def _clip(text: str) -> str:
-    return text if len(text) <= _QUOTE_LIMIT else text[: _QUOTE_LIMIT - 1] + "…"
+    return cut_at_sentence(text, LIMITS.quote)[0]
 
 
 def _decision_quotes(topic: dict) -> list[dict]:

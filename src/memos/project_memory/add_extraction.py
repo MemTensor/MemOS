@@ -30,11 +30,11 @@ if TYPE_CHECKING:
 _EXTRACT = """[系统]
 你为项目整理一段完整 Episode。仅输出一个 JSON 对象，包含 episode_summary 和 drafts 数组。
 episode_summary 开头先写成员本段要交付的具体对象（功能、接口、配置项、规则或产出物），保留原文标识符；
-成员一段里提出多项独立要求时逐项点名，不能只写其中一项。之后写成员的结论和相关资源，不写推测，200 字以内。
+成员一段里提出多项独立要求时逐项点名，不能只写其中一项。之后写成员的结论和相关资源，不写推测，{summary_limit} 字以内。
 不要补“仅为规则说明”“未见后续进展”这类对状态的套话，摘要只陈述这一段实际出现的内容。
 闲聊或没可保留的事实输出空数组。prior 只帮助理解，不能为新结论授权。
 drafts 每项给出 kind、content、message_id、quote、origin，可附 source_path（默认 /content）。
-content 字数上限：decision 与 timeline {decision_limit} 字，experience {experience_limit} 字（一个汉字或一个英文单词计一字），
+content 字数上限：decision {decision_limit} 字，timeline {timeline_limit} 字，experience {experience_limit} 字（一个汉字或一个英文单词计一字），
 超出时自行精简，保留对象、取值与原因。
 kind 是 decision（成员确定的团队做法）、experience（有场景与证据的经验）、timeline（可验证的进展）。
 decision 只记范围内的规则、对外约定和共同约定。对 Agent 回复格式或表达方式的要求、一次性的局部实现、
@@ -372,11 +372,19 @@ def extract_episode(
     model_inputs = {
         "prior": prior,
         "episode": current,
-        "previous_summary": str((episode.get("previous") or {}).get("episode_summary") or "")[:200],
+        "previous_summary": cut_at_sentence(
+            str((episode.get("previous") or {}).get("episode_summary") or ""),
+            LIMITS.episode_summary,
+        )[0],
     }
     prompt = fill(
         _EXTRACT,
-        {"{decision_limit}": str(LIMITS.decision), "{experience_limit}": str(LIMITS.experience)},
+        {
+            "{summary_limit}": str(LIMITS.episode_summary),
+            "{decision_limit}": str(LIMITS.decision),
+            "{timeline_limit}": str(LIMITS.timeline),
+            "{experience_limit}": str(LIMITS.experience),
+        },
     )
     output = hub.write("episode.extract", prompt, model_inputs)
     summary = output.get("episode_summary")
@@ -439,7 +447,8 @@ def extract_episode(
     summary = strip_tokens(summary, unwitnessed_tokens(summary, corpus))
     if valid and not summary.strip():
         summary = "。".join(draft["content"] for draft in valid.values())
-    result.update(episode_summary=summary.strip()[:200], drafts=list(valid.values()))
+    summary = cut_at_sentence(summary, LIMITS.episode_summary)[0]
+    result.update(episode_summary=summary, drafts=list(valid.values()))
     if valid:
         result["extract_status"] = "drafted"
     return result

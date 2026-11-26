@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from memos.configs.project_memory_limits import LIMITS, cut_at_sentence
 from memos.project_dbs.exceptions import (
     DomainNotFoundError,
     EntryNotFoundError,
@@ -37,7 +38,6 @@ from memos.project_dbs.ranking import RankSignals, rank_time
 
 
 EXPERIENCE_SEPARATOR = "｜"
-EXPERIENCE_CONTENT_LIMIT = 200
 _CARD_COLUMNS = {"id", "content", "chat_time", "user_ids", "embedding"}
 
 _INSERT_ENTRY = f"""INSERT INTO {SCHEMA}.project_entries (id, topic_id, space_id, entry_type,
@@ -108,10 +108,11 @@ def anchor_keys(anchors: Iterable[JsonPart | dict]) -> list[str]:
 
 
 def experience_content(card: JsonPart) -> str:
-    """content of an experience: task_intent, problem and principle joined, at most 200."""
+    """content of an experience: task_intent, problem and principle joined, within the
+    experience limit of memos.configs.project_memory_limits."""
     data = card.model_dump()
     parts = (str(data[k]) for k in ("task_intent", "problem", "principle") if data.get(k))
-    return EXPERIENCE_SEPARATOR.join(parts)[:EXPERIENCE_CONTENT_LIMIT]
+    return cut_at_sentence(EXPERIENCE_SEPARATOR.join(parts), LIMITS.experience)[0]
 
 
 # ---------- entry rows ----------

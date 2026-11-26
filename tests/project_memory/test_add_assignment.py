@@ -8,6 +8,7 @@ from memos.project_memory.add_algorithm import (
     organize_episode,
     recall_candidates,
 )
+from memos.project_memory.add_limits import LIMITS, count_units
 from memos.project_memory.judge import ModelError
 
 
@@ -695,7 +696,7 @@ def test_assignment_and_formation_read_verified_source_quotes():
 
     quoted = {
         "kind": "decision",
-        "quote": "Use `--safe-mode`, not `--safe`." + "x" * 400,
+        "quote": "Use `--safe-mode`, not `--safe`." + " filler" * 500,
         "origin": "member",
         "source": {"turn_ids": ["turn-new"]},
     }
@@ -708,7 +709,8 @@ def test_assignment_and_formation_read_verified_source_quotes():
     topics = [topic(f"t{i}", "project", decisions=[{**decided, "id": f"d{i}"}]) for i in range(7)]
     inputs = _assignment_input(current, recall_candidates(current, topics))
     (evidence,) = inputs["evidence"]
-    assert evidence["kind"] == "decision" and len(evidence["quote"]) == 200
+    assert evidence["kind"] == "decision"
+    assert count_units(evidence["quote"]) <= LIMITS.quote < count_units(quoted["quote"])
     quoted_views = [c for c in inputs["candidates"] if "decision_quotes" in c]
     assert len(quoted_views) == 5
     assert [q["quote"] for q in quoted_views[0]["decision_quotes"]] == [

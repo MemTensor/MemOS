@@ -18,6 +18,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .add_limits import LIMITS, cut_at_sentence
 from .judge import ModelError
 from .prompts import DECISION_EXTRACT, DECISION_UPDATE
 from .types import (
@@ -41,7 +42,6 @@ if TYPE_CHECKING:
     from .judge import ModelHub
 
 
-MAX_CONTENT_CHARS = 100
 MAX_TOPIC_DECISIONS = 50
 CATEGORIES = ("范围", "对外约定", "共同约定")
 
@@ -139,7 +139,7 @@ def verify(
         if not d.content:
             drop(d, "content 为空：找不到所指的内容，暂缓")
             continue
-        d.content = d.content.strip()[:MAX_CONTENT_CHARS]
+        d.content = cut_at_sentence(d.content, LIMITS.decision)[0]
         if d.category not in CATEGORIES:
             d.category = "共同约定"
         # 代码从消息元数据补说话人与时间：说话人就是这项结论的负责人
@@ -175,7 +175,7 @@ def update_inputs(
             "name": d.name,
             "time": d.time,
             "content": d.content,
-            "quote": d.quote[:240],
+            "quote": cut_at_sentence(d.quote, LIMITS.quote)[0],
             "final": d.final,
             "approved_by": d.approved_by,
             "listed": d.listed,
@@ -192,7 +192,7 @@ def update_inputs(
                     "members": [dec.user_labels.get(u, u) for u in it.user_ids],
                     "time": it.time,
                     "text": it.content,
-                    "quote": (it.source.quote or "")[:240],
+                    "quote": cut_at_sentence(it.source.quote or "", LIMITS.quote)[0],
                 }
             )
         olds.append({"id": dec.id, "topic": topic_name, "items": items})

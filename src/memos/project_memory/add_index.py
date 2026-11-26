@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from memos.log import get_logger
 
 from .add_entry_fields import experience_retired
+from .add_limits import LIMITS, cut_at_sentence
 
 
 if TYPE_CHECKING:
@@ -41,9 +42,10 @@ def topic_item_content(kind: str, item: dict) -> str:
     if kind != "experience":
         return item.get("content") or ""
     card = item.get("card") or item.get("info") or {}
-    return "｜".join(
+    text = "｜".join(
         str(card[key]) for key in ("task_intent", "problem", "principle") if card.get(key)
-    )[:200]
+    )
+    return cut_at_sentence(text, LIMITS.experience)[0]
 
 
 def ranked_topics(
