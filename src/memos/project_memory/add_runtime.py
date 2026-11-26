@@ -9,6 +9,7 @@ import time
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -34,6 +35,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 
 from .add_acceptance import AddAcceptance
 from .add_algorithm import formation_due, organize_episode, organize_staged, recall_candidates
+from .add_boundary import judge_boundary, unjudged
 from .add_commit import (
     DraftWitnessError,
     EpisodeFenceError,
@@ -540,6 +542,18 @@ class EpisodeAddRuntime:
         if previous and previous["state"] != "extracted" and previous["outcome"] == "pending":
             self._wait(lease, episode, "previous", self.settings.previous_wait_seconds, 5)
             return
+        warnings = list(episode.get("warnings") or [])
+        if episode.get("boundary") is None:
+            boundary = self._judge_boundary(lease, episode, warnings)
+            segments = _segments(episode["turns"], boundary["starts"])
+            siblings = self.dispatch.settle_boundary(lease, self.now(), episode, boundary, segments)
+            if siblings is None:
+                return  # Another worker owns the stage now.
+            for sibling in siblings:
+                self._publish(sibling)
+            if siblings:
+                episode = self.store.load_episode(lease.episode_id)
+                previous = episode.get("previous")
         result = extract_episode(
             self.hub,
             episode,
@@ -547,30 +561,62 @@ class EpisodeAddRuntime:
             (previous or {}).get("messages"),
             input_budget=self.settings.input_budget,
         )
-        fields = {
-            name: result[name]
-            for name in ("drafts", "anchors", "anchor_keys", "episode_summary", "extract_status")
+        persist = {
+            "extraction": {
+                "at": self.now().isoformat(),
+                "status": result["extract_status"],
+                "anchors": result["anchors"],
+                "anchor_keys": result["anchor_keys"],
+            },
+            "warnings": warnings,
         }
+        summary = {"episode_summary": result["episode_summary"] or None}
         if result["drafts"]:
             self._advance(
                 lease,
-                **fields,
-                state="extracted",
-                stage="organizing_queued",
-                extracted_at=self.now(),
-                organize_result={},
+                stage="organizing",
+                drafts=result["drafts"],
+                organize_result={"queued": True},
+                persist=persist,
+                episode=summary,
             )
         else:
             self._advance(
                 lease,
-                **fields,
-                state="extracted",
                 stage="done",
                 outcome="skipped",
-                extracted_at=self.now(),
-                result={"topic_ids": []},
+                drafts=result["drafts"],
                 organize_result={},
+                persist=persist,
+                episode=summary,
             )
+
+    def _judge_boundary(self, lease: StageLease, episode: dict, warnings: list[str]) -> dict:
+        """Where the member's tasks start in this Episode and whether it continues the previous
+        one. A model failure is retried by the stage; on the last try the Episode keeps one
+        segment and is flagged BOUNDARY_MODEL_UNAVAILABLE instead of failing."""
+        previous = episode.get("previous")
+        prior = (
+            {
+                "episode_summary": previous.get("episode_summary"),
+                "topic_name": previous.get("topic_name"),
+            }
+            if previous
+            else None
+        )
+        try:
+            judged = judge_boundary(self.hub, boundary_turns(episode), prior)
+        except ModelError:
+            if lease.data.get("retries", 0) < 3:
+                raise
+            judged = unjudged(prior)
+            warnings.append("BOUNDARY_MODEL_UNAVAILABLE")
+        return {
+            "starts": list(judged.starts),
+            "continues_previous": judged.continues_previous,
+            "judged": judged.judged,
+            "reasons": list(judged.reasons),
+        }
 
     def _organize(self, lease: StageLease, episode: dict) -> None:
         data = lease.data
@@ -589,6 +635,11 @@ class EpisodeAddRuntime:
         if space is None:
             self._terminal(lease, episode, "SPACE_CLEARED", "The Space was removed")
             return
+        boundary = episode.get("boundary") or {}
+        if boundary and not boundary.get("continues_previous"):
+            # The member moved to other work: the previous Topic is no must-consider candidate
+            # and no previous-Episode basis for attaching.
+            episode = {**episode, "previous": None}
         ranked, degraded = ranked_topics(self.store, episode, self.embedder)
         plan = organize_episode(
             self.hub,
@@ -679,14 +730,14 @@ class EpisodeAddRuntime:
                     lease, stage="committing", attempt=lease.attempt + 1, organize_result=data
                 )
                 return
-        self._advance(lease, stage="organizing_queued", organize_result=data)
+        self._advance(lease, stage="organizing", organize_result={**data, "queued": True})
 
     def _restart(self, lease: StageLease, episode: dict) -> None:
         self._release(episode, lease.data.get("lock_token"))
         self._advance(
             lease,
-            stage="organizing_queued",
-            organize_result={"conflicts": lease.data.get("conflicts", 0)},
+            stage="organizing",
+            organize_result={"conflicts": lease.data.get("conflicts", 0), "queued": True},
         )
 
     def _wait(
@@ -700,12 +751,11 @@ class EpisodeAddRuntime:
             return
         tries = data.get(f"{kind}_retries", 0) + 1
         data[f"{kind}_retries"] = tries
-        data["resume_stage"] = lease.stage
+        # The Episode waits in its stage; the retry time keeps it from being delivered sooner.
         self.dispatch.advance(
             lease,
             now,
-            stage="retry_wait",
-            next_retry_at=now + timedelta(seconds=min(10, base_delay * 2 ** min(tries - 1, 4))),
+            next_retry_time=now + timedelta(seconds=min(10, base_delay * 2 ** min(tries - 1, 4))),
             organize_result=data,
         )
 
@@ -714,23 +764,25 @@ class EpisodeAddRuntime:
         if retries > 3:
             self._terminal(lease, episode, reason, "Stage retry budget exhausted", exhausted=True)
             return
-        data = {**lease.data, "retries": retries, "resume_stage": lease.stage}
+        data = {**lease.data, "retries": retries}
         token = data.pop("lock_token", None)
         self._release(episode, token)
+        stage = {}
         if token and label != PROCESS:
-            data = {
-                "retries": retries,
-                "conflicts": data.get("conflicts", 0),
-                "resume_stage": "organizing_queued",
-            }
+            # The Space lock is gone: organize again in a new round.
+            data = {"retries": retries, "conflicts": data.get("conflicts", 0), "queued": True}
+            stage = {"stage": "organizing"}
         now = self.now()
         self.dispatch.advance(
             lease,
             now,
-            stage="retry_wait",
-            next_retry_at=now + timedelta(seconds=2**retries),
-            last_error=episode.get("last_error") or self._error(lease, reason, "Stage will retry"),
+            next_retry_time=now + timedelta(seconds=2**retries),
             organize_result=data,
+            persist={
+                "last_error": episode.get("last_error")
+                or self._error(lease, reason, "Stage will retry")
+            },
+            **stage,
         )
 
     def _terminal(
@@ -785,3 +837,28 @@ class EpisodeAddRuntime:
                 logger.warning(
                     "Project Add will let the Space lock expire (%s)", type(exc).__name__
                 )
+
+
+def boundary_turns(episode: dict) -> list[dict]:
+    """Turns for the boundary judgment: the member's words and the Agent's replies."""
+    turns: dict[str, dict] = {}
+    for message in episode["messages"]:
+        turn = turns.setdefault(message["turn_id"], {"member": [], "agent": []})
+        if message["role"] == "user":
+            turn["member"].append(message["content"] or "")
+        elif message["role"] == "assistant" and message["content"]:
+            turn["agent"].append(message["content"])
+    return [
+        {"member": "\n".join(turn["member"]), "agent": "\n".join(turn["agent"])}
+        for turn in turns.values()
+    ]
+
+
+def _segments(turns: list[dict], starts: list[int]) -> list[tuple[int, int]]:
+    """msg_seq ranges of the segments that begin at the given Turn indexes."""
+    bounds = [*starts, len(turns)]
+    return [
+        (turns[begin]["seq_start"], turns[end - 1]["seq_end"])
+        for begin, end in pairwise(bounds)
+        if begin < end
+    ]

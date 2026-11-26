@@ -269,3 +269,132 @@ class EpisodeDispatch:
                      AND outcome = 'pending' AND organize_result->'work' IS NULL""",
                 (now.isoformat(), episode["id"], episode["stage"], episode["attempt"]),
             )
+
+    def settle_boundary(
+        self,
+        lease: StageLease,
+        now: datetime,
+        episode: dict[str, Any],
+        boundary: dict[str, Any],
+        segments: list[tuple[int, int]],
+    ) -> list[str] | None:
+        """Record the boundary judgment and split the Episode at its task starts, in one
+        transaction and only while this lease owns the stage. The Episode keeps the first
+        segment; each later one becomes a sibling Episode (same Space and conversation,
+        chained previous_episode_id, only the Tasks and Turn events of its messages) that
+        starts at extraction and is not judged again. Returns the sibling ids, or None when
+        the lease is lost."""
+        with self.store.transaction() as cursor:
+            cursor.execute(
+                """SELECT organize_result FROM add_jobs
+                   WHERE episode_id = %s AND stage = %s AND attempt = %s
+                     AND outcome = 'pending' AND organize_result->'work'->>'token' = %s
+                   FOR UPDATE""",
+                (lease.episode_id, lease.stage, lease.attempt, lease.token),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            organize = row["organize_result"] or {}
+            ranges = organize.get("task_ranges") or {}
+            owners = organize.get("task_owners") or {}
+
+            def restricted(start: int, end: int) -> tuple[dict, dict]:
+                kept = {
+                    task: [max(lo, start), min(hi, end)]
+                    for task, (lo, hi) in ranges.items()
+                    if lo <= end and hi >= start
+                }
+                return kept, {task: owners.get(task) or {} for task in kept}
+
+            first_start, first_end = segments[0]
+            task_ranges, task_owners = restricted(first_start, first_end)
+            cursor.execute(
+                """UPDATE add_jobs SET task_ids = %s, update_time = %s,
+                          organize_result = organize_result || %s::jsonb
+                    WHERE episode_id = %s""",
+                (
+                    list(task_ranges) or list(episode["task_ids"]),
+                    now,
+                    json_value(
+                        {"boundary": boundary, "task_ranges": task_ranges,
+                         "task_owners": task_owners}
+                        if len(segments) > 1
+                        else {"boundary": boundary}
+                    ),
+                    lease.episode_id,
+                ),
+            )  # fmt: skip
+            if len(segments) == 1:
+                return []
+            times = {m["msg_seq"]: m["chat_time"] for m in episode["messages"]}
+            turn_ids = {m["msg_seq"]: m["turn_id"] for m in episode["messages"]}
+
+            def chat_times(start: int, end: int) -> tuple[Any, Any]:
+                values = [times[seq] for seq in range(start, end + 1) if seq in times]
+                return min(values), max(values)
+
+            cursor.execute(
+                """UPDATE episodes SET message_seq_end = %s, first_chat_time = %s,
+                          last_chat_time = %s WHERE id = %s""",
+                (first_end, *chat_times(first_start, first_end), lease.episode_id),
+            )
+            siblings: list[str] = []
+            previous = lease.episode_id
+            for start, end in segments[1:]:
+                sibling = str(uuid4())
+                task_ranges, task_owners = restricted(start, end)
+                tasks = list(task_ranges) or list(episode["task_ids"])
+                user = next(
+                    (o.get("user_id") for o in task_owners.values() if o.get("user_id")),
+                    episode["user_id"],
+                )
+                cursor.execute(
+                    """INSERT INTO episodes (id, space_id, conversation_key, message_seq_start,
+                           message_seq_end, previous_episode_id, first_chat_time,
+                           last_chat_time, create_time)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (sibling, episode["space_id"], episode["conversation_key"], start, end,
+                     previous, *chat_times(start, end), now),
+                )  # fmt: skip
+                sibling_result = {
+                    "task_ranges": task_ranges,
+                    "task_owners": task_owners,
+                    "close": {"reason": "split", "at": now.isoformat()},
+                    # A later segment is a switch: it does not continue the previous work.
+                    "boundary": {
+                        "starts": [0],
+                        "continues_previous": False,
+                        "judged": False,
+                        "reasons": [],
+                        "split_from": lease.episode_id,
+                    },
+                }
+                cursor.execute(
+                    """INSERT INTO add_jobs (episode_id, project_id, space_id, conversation_key,
+                           user_id, task_ids, domains, stage, accept_time, organize_result,
+                           update_time)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'extracting', %s, %s, %s)""",
+                    (sibling, episode["project_id"], episode["space_id"],
+                     episode["conversation_key"], user, tasks, episode["domains"],
+                     episode["accept_time"], json_value(sibling_result), now),
+                )  # fmt: skip
+                moved = sorted({turn_ids[s] for s in range(start, end + 1) if s in turn_ids})
+                cursor.execute(
+                    """UPDATE add_episode_events SET episode_id = %s
+                       WHERE episode_id = %s AND event = 'turn'
+                         AND detail->>'turn_id' = ANY(%s::text[])""",
+                    (sibling, lease.episode_id, moved),
+                )
+                for event, detail in (("opened", None), ("closed", {"reason": "split"})):
+                    record_event(cursor, None, sibling, event, now, stage="extracting",
+                                 detail=detail)  # fmt: skip
+                siblings.append(sibling)
+                previous = sibling
+            # Episodes that followed the original now follow its last segment.
+            cursor.execute(
+                """UPDATE episodes SET previous_episode_id = %s
+                   WHERE previous_episode_id = %s AND NOT (id = ANY(%s::text[]))""",
+                (previous, lease.episode_id, siblings),
+            )
+            return siblings
