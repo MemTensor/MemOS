@@ -43,26 +43,39 @@ def store():
         db.close()
 
 
-def episode(store, eid, draft):
+def episode(store, eid, draft, *, start=1):
+    """A committing Episode over one member message at msg_seq `start` of conversation eid."""
     with store.transaction() as cursor:
         cursor.execute(
-            """INSERT INTO episodes(id, project_id, space_id, conversation_key, user_id, domains,
-                          state, opened_at, last_turn_at, closed_at, stage, attempt, drafts, organize_result)
-                          VALUES (%s,'project','space',%s,'user','{project}',
-                                  'extracted',now(),now(),now(),'committing',1,%s,%s)""",
-            (eid, eid, json_value([draft]), json_value({"work": {"token": "active-token"}})),
+            """INSERT INTO messages(project_id, conversation_key, message_id, msg_seq, role,
+                          content, chat_time, accept_time, task_id, content_sha256)
+               VALUES ('project',%s,%s,%s,'user','池大小设为 16',now(),now(),'task','fixture')""",
+            (eid, eid, start),
         )
         cursor.execute(
-            """INSERT INTO messages(project_id, conversation_key, message_id, turn_id,
-                          turn_seq,msg_seq,role,content,chat_time,accepted_at,task_id,user_id,content_sha256)
-                          VALUES ('project',%s,%s,%s,1,1,'user','池大小设为 16',now(),now(),'task','user','fixture')""",
-            (eid, eid, eid),
+            """INSERT INTO episodes(id, space_id, conversation_key, message_seq_start,
+                          message_seq_end, first_chat_time, last_chat_time)
+               VALUES (%s,'space',%s,%s,%s,now(),now())""",
+            (eid, eid, start, start),
         )
         cursor.execute(
-            """INSERT INTO episode_turns(project_id,space_id,conversation_key,episode_id,turn_id,
-                          turn_seq,message_count,task_id,user_id,chat_time,accepted_at)
-                          VALUES ('project','space',%s,%s,%s,1,1,'task','user',now(),now())""",
-            (eid, eid, eid),
+            """INSERT INTO add_jobs(episode_id, project_id, space_id, conversation_key, user_id,
+                          task_ids, domains, stage, attempt, accept_time, drafts, organize_result)
+               VALUES (%s,'project','space',%s,'user','{task}','{project}','committing',1,
+                       now(),%s,%s)""",
+            (
+                eid,
+                eid,
+                json_value([draft]),
+                json_value(
+                    {
+                        "work": {"token": "active-token"},
+                        "task_ranges": {"task": [start, start]},
+                        "task_owners": {"task": {"user_id": "user"}},
+                        "extraction": {"at": "2026-11-19T00:00:00+00:00"},
+                    }
+                ),
+            ),
         )
 
 
@@ -117,7 +130,8 @@ def test_topic_projection_and_receipt_commit_together_and_replay_once(store):
         commit_changeset(store, "one", 1, edit, work_token="expired")
     with store.transaction() as cursor:
         cursor.execute(
-            "UPDATE episodes SET organize_result = %s WHERE id = 'one'",
+            """UPDATE add_jobs SET organize_result = organize_result || %s
+               WHERE episode_id = 'one'""",
             (json_value({"work": {"token": "active-token", "until": "2026-01-01T00:00:00Z"}}),),
         )
     with pytest.raises(VersionConflictError):
@@ -125,15 +139,22 @@ def test_topic_projection_and_receipt_commit_together_and_replay_once(store):
     assert not store.read_topics("space")
     with store.transaction() as cursor:
         cursor.execute(
-            "UPDATE episodes SET organize_result = %s WHERE id = 'one'",
+            """UPDATE add_jobs SET organize_result = organize_result || %s
+               WHERE episode_id = 'one'""",
             (json_value({"work": {"token": "active-token", "until": "2999-01-01T00:00:00Z"}}),),
         )
     first = commit_changeset(store, "one", 1, edit, work_token="active-token")
     assert commit_changeset(store, "one", 1, edit, work_token="active-token") == first
-    assert first["topic_ids"] == ["topic"]
-    assert store.load_episode("one")["commit_key"] == "one:1"
     (topic,) = store.read_topics("space")
+    # Storage names the new Topic; the receipt, the Episode and the creator mark follow it.
+    assert topic["id"].startswith("topic_") and first["topic_ids"] == [topic["id"]]
+    assert first["created_topic_ids"] == [topic["id"]]
+    assert topic["created_by_episode_id"] == "one" and topic["last_commit_key"] == "one:1"
+    committed = store.load_episode("one")
+    assert committed["commit_key"] == "one:1" and committed["topic_id"] == topic["id"]
+    assert committed["outcome"] == "committed" and committed["stage"] == "done"
     assert topic["version"] == 1
+    assert topic["create_time"].isoformat() == "2026-11-19T03:00:00+00:00"
     with store.transaction(readonly=True) as cursor:
         cursor.execute("SELECT entry_type, content, version FROM project_entries")
         assert cursor.fetchone() == {
@@ -175,8 +196,8 @@ def test_commit_accepts_extracted_quote_with_source_whitespace(store):
     (draft,) = extract_episode(writer, current, current["messages"])["drafts"]
     with store.transaction() as cursor:
         cursor.execute(
-            "UPDATE episodes SET state = 'extracted', stage = 'committing', attempt = 1, drafts = %s "
-            "WHERE id = %s",
+            "UPDATE add_jobs SET stage = 'committing', attempt = 1, drafts = %s "
+            "WHERE episode_id = %s",
             (json_value([draft]), episode_id),
         )
     edit = changeset(
@@ -193,7 +214,8 @@ def test_commit_accepts_extracted_quote_with_source_whitespace(store):
         },
     )
 
-    assert commit_changeset(store, episode_id, 1, edit)["topic_ids"] == ["topic"]
+    (topic_id,) = commit_changeset(store, episode_id, 1, edit)["topic_ids"]
+    assert [topic["id"] for topic in store.read_topics("space")] == [topic_id]
 
 
 def test_version_conflict_rolls_back_entire_episode_change(store):
@@ -221,6 +243,7 @@ def test_version_conflict_rolls_back_entire_episode_change(store):
     assert after["version"] == 2
     assert len(after["timeline"]) == 2
     assert store.load_episode("three")["commit_key"] is None
+    assert store.load_episode("three")["stage"] == "committing"
 
 
 def test_vector_index_uses_same_commit_and_filters_domains(store):
@@ -246,7 +269,8 @@ def test_vector_index_uses_same_commit_and_filters_domains(store):
         {"space_id": "space", "domains": ["project"], "episode_summary": "unmatched-lexical"},
         embed,
     )
-    assert [topic["id"] for _, topic in ranked] == ["topic"]
+    (stored,) = store.read_topics("space")
+    assert [topic["id"] for _, topic in ranked] == [stored["id"]]
     assert degraded is False
     excluded, _ = ranked_topics(
         store,
@@ -271,7 +295,7 @@ def test_vector_index_uses_same_commit_and_filters_domains(store):
         ("assistant", True, 0, True),
         ("tool", True, 0, False),
         ("assistant", False, 0, False),
-        ("assistant", True, 2, False),
+        ("assistant", True, 1, False),
     ],
 )
 def test_commit_checks_the_original_assistant_proposal(store, role, same_conversation, seq, fits):
@@ -286,16 +310,31 @@ def test_commit_checks_the_original_assistant_proposal(store, role, same_convers
     )
     # The span should select the exact cited proposal, even when the message is longer.
     ref["end"] = len("Propose")
-    episode(store, "adopted", draft)
+    # The proposal precedes the authorization (seq 1 < 2) or follows it (seq 3).
+    proposal_seq = 3 if seq else 1
+    episode(store, "adopted", draft, start=2)
     with store.transaction() as cursor:
         conversation = "adopted" if same_conversation else "other"
         cursor.execute(
-            """INSERT INTO messages(project_id, conversation_key, message_id, turn_id,
-                          turn_seq,msg_seq,role,content,chat_time,accepted_at,task_id,user_id,content_sha256)
-                          VALUES ('project',%s,'proposal','adopted',1,%s,%s,'Propose 16',
-                                  now() - interval '5 minutes',now() - interval '5 minutes','earlier','user','fixture')""",
-            (conversation, seq, role),
+            """INSERT INTO messages(project_id, conversation_key, message_id, msg_seq, role,
+                          content, chat_time, accept_time, task_id, content_sha256)
+               VALUES ('project',%s,'proposal',%s,%s,'Propose 16',
+                       now() - interval '5 minutes', now() - interval '5 minutes', 'earlier',
+                       'fixture')""",
+            (conversation, proposal_seq, role),
         )
+        low, high = sorted((2, proposal_seq))
+        cursor.execute(
+            """UPDATE episodes SET message_seq_start = %s, message_seq_end = %s
+               WHERE id = 'adopted'""",
+            (low, high),
+        )
+        if proposal_seq > 2:
+            # A later proposal is accepted after the authorization.
+            cursor.execute(
+                """UPDATE messages SET accept_time = now() + interval '1 minute',
+                          chat_time = now() + interval '1 minute' WHERE message_id = 'proposal'"""
+            )
     prepared = prepare_merge(
         None,
         {
@@ -352,11 +391,9 @@ def test_commit_checks_adoption_in_conversation_order_across_episodes(store, pro
     current = store.load_episode(current_id)
     previous = current["previous"]
     assert previous["id"] == earlier_id
-    assert previous["turns"][0]["turn_seq"] == current["turns"][0]["turn_seq"] == 1
     proposal_row = previous["messages"][1]
     authorization_row = current["messages"][0]
-    assert (proposal_row["turn_seq"], proposal_row["msg_seq"]) == (1, 2)
-    assert (authorization_row["turn_seq"], authorization_row["msg_seq"]) == (2, 1)
+    assert (proposal_row["msg_seq"], authorization_row["msg_seq"]) == (2, 3)
     writer = SimpleNamespace(
         write=lambda *_args: {
             "episode_summary": "选择池大小",
@@ -382,8 +419,8 @@ def test_commit_checks_adoption_in_conversation_order_across_episodes(store, pro
                 evidence["ref"] = ref
     with store.transaction() as cursor:
         cursor.execute(
-            "UPDATE episodes SET state = 'extracted', stage = 'committing', attempt = 1, drafts = %s "
-            "WHERE id = %s",
+            "UPDATE add_jobs SET stage = 'committing', attempt = 1, drafts = %s "
+            "WHERE episode_id = %s",
             (json_value([draft]), current_id),
         )
     prepared = changeset(
@@ -399,8 +436,9 @@ def test_commit_checks_adoption_in_conversation_order_across_episodes(store, pro
         },
     )
     if proposal_id == "earlier-proposal":
-        assert commit_changeset(store, current_id, 1, prepared)["topic_ids"] == ["topic"]
+        (topic_id,) = commit_changeset(store, current_id, 1, prepared)["topic_ids"]
         (topic,) = store.read_topics("space")
+        assert topic["id"] == topic_id
         assert topic["decisions"][0]["content"] == "池大小设为 16"
     else:
         with pytest.raises(DraftWitnessError, match="earlier assistant proposal"):

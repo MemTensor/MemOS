@@ -441,6 +441,9 @@ def _episode_input(episode: dict) -> dict:
             "last_turn_at",
             "first_chat_time",
             "last_chat_time",
+            "speaker_ids",
+            "agent_id",
+            "accept_time",
         )
         if key in episode
     }

@@ -104,6 +104,20 @@ def _decision_draft(item: dict) -> DecisionDraft:
     )
 
 
+# Keys a decision rewrite replaces; any other stored key (Add extras) is kept.
+_REPLACED_DECISION_KEYS = {"history", "conflicts", "source", "sources", "content", "time"}
+
+
+def draft_source(draft: DecisionDraft, episode: dict) -> dict:
+    """The statement behind a decision change, as a decision source."""
+    return {
+        "conversation_id": episode.get("conversation_id") or "",
+        "message_id": draft.message_id,
+        "quote": draft.quote,
+        "episode_id": episode["id"],
+    }
+
+
 def _member_stance_times(row: dict, options: dict[str, ConflictItem]) -> dict[str, str]:
     times = {}
     for option in options.values():
@@ -165,7 +179,8 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
             topic_id,
         )
         memory.id = stable_uuid(f"decision:{topic_id}:{item['draft_id']}")
-        snapshot["decisions"].append({"id": memory.id, **memory.to_project()})
+        source = {**memory.source.to_json(), "episode_id": episode["id"]}
+        snapshot["decisions"].append({"id": memory.id, **memory.to_project(), "sources": [source]})
         return
     index = next(i for i, row in enumerate(snapshot["decisions"]) if row["id"] == target.id)
     stored = snapshot["decisions"][index]
@@ -213,9 +228,17 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
             "source_refs": item["source_refs"],
         }
         snapshot["timeline"] = _extend(snapshot.get("timeline") or [], [record], "timeline")
+    sources = stored.get("sources") or []
+    if applied.action == decision.OP_RESOLVE:
+        # The adopted item's source plus the statement that decided it.
+        sources = [memory.source.to_json(), draft_source(draft, episode)]
+    elif memory.source != target.source:
+        sources = [memory.source.to_json()]
     snapshot["decisions"][index] = {
+        **{key: value for key, value in stored.items() if key not in _REPLACED_DECISION_KEYS},
         "id": memory.id,
         **memory.to_project(),
+        "sources": sources,
         _MEMBER_STANCE_TIMES: times,
     }
 
@@ -452,21 +475,25 @@ def prepare_merge(hub: ModelHub, plan: dict) -> dict:
         drafts = _apply_drafts(hub, proposed, episodes)
         episode_ids = [ep["id"] for ep in episodes]
         for episode in episodes:
-            authors = sorted({user for draft in episode["drafts"] for user in draft["authors"]})
-            agents = sorted(
-                {
+            # A source is the conversation, the members who spoke in the Episode and its agent.
+            speakers = list(episode.get("speaker_ids") or []) or sorted(
+                {user for draft in episode["drafts"] for user in draft["authors"]}
+            )
+            agent = episode.get("agent_id") or next(
+                (
                     agent
                     for draft in episode["drafts"]
                     for agent in as_list((draft.get("source") or {}).get("agent_id"))
-                }
+                ),
+                None,
             )
             proposed["sources"] = _extend(
                 proposed["sources"],
                 [
                     {
                         "conversation_id": episode.get("conversation_id"),
-                        "user_id": authors,
-                        "agent_id": agents,
+                        "user_id": speakers,
+                        "agent_id": agent,
                     }
                 ],
                 "sources",

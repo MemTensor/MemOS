@@ -464,6 +464,16 @@ class PostgresAddStore:
                                AND m.conversation_key = e.conversation_key
                                AND m.msg_seq BETWEEN e.message_seq_start AND e.message_seq_end
                                AND m.role = 'user') AS turn_count,
+                           ARRAY(SELECT DISTINCT m.role_id FROM messages m
+                             WHERE m.project_id = j.project_id
+                               AND m.conversation_key = e.conversation_key
+                               AND m.msg_seq BETWEEN e.message_seq_start AND e.message_seq_end
+                               AND m.role = 'user' AND m.role_id IS NOT NULL) AS speaker_ids,
+                           (SELECT m.agent_id FROM messages m
+                             WHERE m.project_id = j.project_id
+                               AND m.conversation_key = e.conversation_key
+                               AND m.msg_seq BETWEEN e.message_seq_start AND e.message_seq_end
+                               AND m.agent_id IS NOT NULL ORDER BY m.msg_seq LIMIT 1) AS agent_id,
                            p.topic_id AS previous_topic_id, pj.topic_ids AS previous_topic_ids,
                            pj.organize_result->'staged' AS previous_staged
                     FROM {EPISODE_FROM}
@@ -522,6 +532,12 @@ def load_episode(cursor: Any, episode_id: str, *, lock: bool = False) -> dict[st
     )
     episode["messages"] = annotate_messages(episode, cursor.fetchall())
     episode["turns"] = episode_turns(episode["messages"])
+    episode["speaker_ids"] = list(
+        dict.fromkeys(
+            m["role_id"] for m in episode["messages"] if m["role"] == "user" and m["role_id"]
+        )
+    )
+    episode["agent_id"] = next((m["agent_id"] for m in episode["messages"] if m["agent_id"]), None)
     episode["owner_task_id"] = (
         episode["turns"][0]["task_id"] if episode["turns"] else (episode["task_ids"] or [None])[0]
     )

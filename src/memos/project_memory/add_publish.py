@@ -17,6 +17,7 @@ from typing import Any
 from .add_entry_fields import experience_retired, experience_status
 from .add_layout import load_topics
 from .index import Topic, Vector, replace_snapshot, set_embedding
+from .types import time_key
 
 
 REGISTRY_TABLES = """
@@ -48,7 +49,7 @@ def install(cursor: Any) -> None:
 def sync_space(cursor: Any, tenant: str, space_id: str) -> None:
     """Mirror one Space and its Domains from the Add tables on the caller's search path."""
     cursor.execute(
-        "SELECT cleared_at FROM spaces WHERE project_id = %s AND id = %s", (tenant, space_id)
+        "SELECT clear_time FROM spaces WHERE project_id = %s AND id = %s", (tenant, space_id)
     )
     row = cursor.fetchone()
     if row is None:
@@ -64,7 +65,7 @@ def sync_space(cursor: Any, tenant: str, space_id: str) -> None:
            VALUES (%s, %s, %s, NULL)
            ON CONFLICT (space_id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id,
                cleared_at = EXCLUDED.cleared_at, deleted_at = NULL""",
-        (tenant, space_id, row["cleared_at"]),
+        (tenant, space_id, row["clear_time"]),
     )
     cursor.execute("DELETE FROM memos_project.pm_domains WHERE space_id = %s", (space_id,))
     cursor.execute(
@@ -88,8 +89,27 @@ def _statement(item: dict, *keys: str) -> dict:
     return data
 
 
+def _decision_order(item: dict) -> tuple:
+    """Decisions with open conflicts first, then more members, then the newest."""
+    return (
+        not item.get("conflicts"),
+        -len(item.get("user_ids") or []),
+        -time_key(item.get("time")),
+    )
+
+
+def _experience_order(item: dict) -> tuple:
+    """Verified experiences first, then higher confidence, then the newest."""
+    return (
+        experience_status(item) != "verified",
+        -float(item.get("confidence") or 0),
+        -time_key(item.get("time")),
+    )
+
+
 def topic_snapshot(row: dict) -> Topic:
-    """The public Topic view of one committed `topics` row joined with its domain name."""
+    """The public Topic view of one committed Topic (an add_layout Topic dict); entries are
+    in Topic-page order and `rank_time` is the storage ranking key."""
     from .add_index import topic_item_content
 
     decisions = [
@@ -103,11 +123,10 @@ def topic_snapshot(row: dict) -> Topic:
             ],
             "conflicts": [_statement(c, "source") for c in item.get("conflicts") or []],
         }
-        for item in row["decisions"] or []
-        if not item.get("archived")
+        for item in sorted(row["decisions"] or [], key=_decision_order)
     ]
     experiences = []
-    for item in row["experiences"] or []:
+    for item in sorted(row["experiences"] or [], key=_experience_order):
         if experience_retired(item):
             continue
         card = item.get("card") or {}
@@ -127,8 +146,8 @@ def topic_snapshot(row: dict) -> Topic:
         )
     timeline = [
         {"id": item["id"], **_statement(item)}
-        for item in row["timeline"] or []
-        if item.get("id") and not item.get("archived")
+        for item in sorted(row["timeline"] or [], key=lambda item: time_key(item.get("time")))
+        if item.get("id")
     ]
     return Topic.model_validate(
         {
@@ -139,6 +158,7 @@ def topic_snapshot(row: dict) -> Topic:
             "topic_description": row["topic_description"] or "",
             "create_time": _iso(row["create_time"]),
             "update_time": _iso(row["update_time"]),
+            "rank_time": row.get("rank_time"),
             "sources": row["sources"] or [],
             "decisions": decisions,
             "experiences": experiences,
@@ -175,7 +195,8 @@ def publish_topics(
             vectors.append((row["id"], vector))
         cursor.execute(
             """SELECT id, embedding::text AS embedding_text FROM project_entries
-               WHERE space_id = %s AND topic_id = %s AND embedding IS NOT NULL""",
+               WHERE space_id = %s AND topic_id = %s AND embedding IS NOT NULL
+                 AND parent_decision_id IS NULL AND status = 0""",
             (space_id, row["id"]),
         )
         for item in cursor.fetchall():

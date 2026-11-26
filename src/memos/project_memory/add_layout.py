@@ -317,9 +317,13 @@ def _decision_sources(item: dict) -> list[EntrySource]:
     the current source alone (a rewrite replaces them; a resolution sets them explicitly)."""
     current = _entry_source(item.get("source"))
     listed = [s for s in (_entry_source(raw) for raw in item.get("sources") or []) if s]
-    if listed and listed[0] == current:
+    if listed and current and _same_quote(listed[0], current):
         return listed
     return [current] if current else []
+
+
+def _same_quote(left: EntrySource, right: EntrySource) -> bool:
+    return all(getattr(left, key) == getattr(right, key) for key in ("message_id", "quote"))
 
 
 def child_key(decision_id: str, kind: str, seq: int) -> str:
