@@ -13,6 +13,7 @@ from memos.configs.llm import AzureLLMConfig, OpenAILLMConfig
 from memos.exceptions import ConfigurationError, LLMRateLimitError
 from memos.llms import rate_limit
 from memos.llms.base import BaseLLM
+from memos.llms.usage import CHAT, record_usage
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
 from memos.types import MessageList
@@ -100,10 +101,12 @@ class OpenAILLM(BaseLLM):
         start_time = time.perf_counter()
         logger.info(f"OpenAI LLM Request body: {request_body}")
 
+        response = None
         try:
             response = rate_limit.create_completion(
                 self.client, request_body, self.config.rate_limit
             )
+            record_usage(CHAT, request_body["model"], getattr(response, "usage", None))
             cost_time = time.perf_counter() - start_time
             logger.info(
                 f"Request body: {request_body}, Response from OpenAI: "
@@ -113,6 +116,8 @@ class OpenAILLM(BaseLLM):
         except (LLMRateLimitError, ConfigurationError):
             raise
         except Exception as e:
+            if response is None:  # A response that failed to parse was already recorded.
+                record_usage(CHAT, request_body["model"], failed=True)
             if not self.use_backup_client:
                 raise
             logger.warning(
@@ -123,9 +128,16 @@ class OpenAILLM(BaseLLM):
                 **request_body,
                 "model": self.config.backup_model_name_or_path or request_body["model"],
             }
-            backup_response = rate_limit.create_completion(
-                self.backup_client, backup_body, self.config.rate_limit
-            )
+            try:
+                backup_response = rate_limit.create_completion(
+                    self.backup_client, backup_body, self.config.rate_limit
+                )
+            except (LLMRateLimitError, ConfigurationError):
+                raise
+            except Exception:
+                record_usage(CHAT, backup_body["model"], failed=True)
+                raise
+            record_usage(CHAT, backup_body["model"], getattr(backup_response, "usage", None))
             cost_time = time.perf_counter() - start_time
             logger.info(
                 f"Backup LLM request succeeded, Response: "

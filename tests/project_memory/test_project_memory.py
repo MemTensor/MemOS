@@ -448,6 +448,17 @@ def test_decide_owner_rewrites_non_owner_conflicts_old_message_cannot_rewrite():
     assert dec.decide(other, row, {"d1": d}).action == "conflict"
     p = dec.decide(old, row, {"d1": d})
     assert p.action == "conflict" and p.guarded, "早于当前结论的话不能改写"
+    # Relaying that the owner agreed is not the owner's own change.
+    relayed = DecisionDraft(
+        "m4",
+        "q",
+        "B 方案",
+        user_id="user_c",
+        name="用户C",
+        time="2026-10-30T10:00:00+08:00",
+        approved_by=["用户B"],
+    )
+    assert dec.decide(relayed, row, {"d1": d}).action == "conflict"
 
 
 def test_complete_decision_update_requires_explicit_option_comparison():
@@ -804,3 +815,28 @@ def test_expected_4xx_are_not_logged_as_hook_failures(monkeypatch):
         assert logged == []
     finally:
         reset_project_hooks()
+
+
+def test_sibling_rules_from_one_message_never_rewrite_each_other():
+    d = _decision()
+    d.source = Source("conv", "m-sample", "留样 125 克，保存 48 小时。")
+    sibling = DecisionDraft(
+        "m-sample",
+        "留样 125 克，保存 48 小时。",
+        "每道菜留样 125 克。",
+        user_id="user_b",
+        name="用户B",
+        time="2026-10-30T10:00:00+08:00",
+    )
+    row = {"decision_id": "d1", "same_as": None, "action": "rewrite"}
+    plan = dec.decide(sibling, row, {"d1": d})
+    assert plan.action == "add" and plan.decision_id is None and plan.guarded
+    later = DecisionDraft(
+        "m-later",
+        "q",
+        "每道菜留样 150 克。",
+        user_id="user_b",
+        name="用户B",
+        time="2026-10-30T10:00:00+08:00",
+    )
+    assert dec.decide(later, row, {"d1": d}).action == "rewrite"

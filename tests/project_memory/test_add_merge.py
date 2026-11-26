@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from memos.project_memory.add_commit import refresh_topic_items
+from memos.project_memory.add_layout import import_topics
 from memos.project_memory.add_merge import prepare_merge, rebase_append_only, rewrite_metadata
 from memos.project_memory.add_view import RelationalProjectView
 from memos.project_memory.judge import ModelError
@@ -107,6 +107,10 @@ def test_existing_decision_rewrite_retains_history_and_does_not_mutate_snapshot(
     assert change["kind"] == "modify"
     assert data == frozen
     assert writer.calls == ["dec.update"]
+    # The owner's own change is also kept as progress on the Topic.
+    (record,) = [row for row in proposed["timeline"] if "池大小设为 16" in row["content"]]
+    assert "池大小设为 8" in record["content"]
+    assert record["source_refs"][0]["message_id"] == "message"
 
 
 def test_append_rebase_keeps_concurrent_entries_and_rewrites_metadata():
@@ -146,6 +150,10 @@ def test_m05_adds_experience_from_draft_with_evidence():
     assert experience["user_ids"] == ["user"]
     assert change["kind"] == "append"
     assert not writer.calls
+    # The Add write-table document's experiences[] item; nothing derivable is stored.
+    assert experience["exp_status"] == "candidate"
+    assert not {"status", "archived", "user_id", "session_id"} & set(experience)
+    assert experience["sources"][0]["conversation_id"] == "session"
 
 
 def test_same_conversation_provenance_merges_members_additively():
@@ -329,6 +337,10 @@ def with_stance(topic, author, content, hour, *, same_as=None, confirms=None):
         "chat_time": f"2026-11-19T{hour:02}:00:00Z",
         "final": confirms is not None,
         "listed": list((confirms or {}).values()),
+        # Each stance is its own message; one message's clauses are sibling rules instead.
+        "source_refs": [
+            {"message_id": f"{author}-{hour}", "source_path": "/content", "start": 0, "end": 1}
+        ],
     }
     writer = Writer()
     if topic is not None:
@@ -478,13 +490,19 @@ def test_relational_search_and_get_keep_member_stance_times_private(add_store):
         cur.execute(
             "INSERT INTO domains (id, space_id, domain) VALUES ('domain', 'space', 'product')"
         )
-        cur.execute(
-            """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary,
-                                   topic_description, create_time, update_time)
-               VALUES ('topic', 'space', 'domain', 'Exports', 'Export daily.', '', %s, %s)""",
-            (topic["create_time"], topic["update_time"]),
+        import_topics(
+            cur,
+            [
+                {
+                    **topic,
+                    "id": "topic",
+                    "space_id": "space",
+                    "domain_id": "domain",
+                    "topic_name": "Exports",
+                    "topic_summary": "Export daily.",
+                }
+            ],
         )
-        refresh_topic_items(cur, {**topic, "id": "topic", "space_id": "space"})
     (projected_topic,) = add_store.read_topics("space")
     (projected_decision,) = projected_topic["decisions"]
     assert projected_decision["_member_stance_times"]["bob"] == "2026-11-19T05:00:00+00:00"
@@ -505,3 +523,151 @@ def test_relational_search_and_get_keep_member_stance_times_private(add_store):
         assert row["id"] == decision_id
         assert row["time"] == "2026-11-19T01:00:00+00:00"
         assert "_member_stance_times" not in row
+
+
+def test_decision_update_shows_the_original_quotes():
+    from memos.project_memory.decision import update_inputs
+    from memos.project_memory.prompts import DECISION_UPDATE
+    from memos.project_memory.types import ConflictItem, Decision, DecisionDraft, Source
+
+    draft = DecisionDraft(
+        message_id="m2", quote="Default to `false` in CI.", content="CI 默认 false", user_id="bob"
+    )
+    decision = Decision(
+        content="默认 true",
+        user_ids=["alice"],
+        source=Source("conv", "m1", "Default to `true` everywhere."),
+    )
+    decision.conflicts.append(
+        ConflictItem(1, "默认 auto", None, ["carol"], Source("conv", "m3", "Use `auto`."))
+    )
+    inputs = update_inputs([draft], [decision], "bail")
+    assert inputs["new"][0]["quote"] == "Default to `false` in CI."
+    quotes = [item["quote"] for item in inputs["decisions"][0]["items"]]
+    assert quotes == ["Default to `true` everywhere.", "Use `auto`."]
+    assert "以 quote 原话为准" in DECISION_UPDATE
+
+
+def test_decision_update_keeps_parallel_variants_and_name_differences_apart():
+    from memos.project_memory.prompts import DECISION_UPDATE
+
+    assert "再加一个并列的变体" in DECISION_UPDATE
+    assert "接口名或参数名有一处不同就算不同" in DECISION_UPDATE
+
+
+@pytest.mark.parametrize(
+    ("author", "recorded"),
+    [("other", True), ("newcomer", False)],
+    ids=["own-conflict-updated", "new-conflict-appended"],
+)
+def test_changing_ones_own_conflicting_position_is_recorded(author, recorded):
+    stored = {
+        "id": "same-decision",
+        "content": "池大小设为 8",
+        "time": "2026-11-19T01:00:00Z",
+        "user_ids": ["user"],
+        "source": {},
+        "history": [],
+        "conflicts": [
+            {
+                "seq": 1,
+                "content": "池大小设为 12",
+                "time": "2026-11-19T02:00:00Z",
+                "user_ids": ["other"],
+                "source": {},
+            }
+        ],
+    }
+    data = plan_for(
+        {"kind": "decision", "content": "池大小设为 16", "authors": [author], "author_name": author}
+    )
+    data["assignments"][0]["topic"]["decisions"] = [stored]
+    writer = Writer(
+        {
+            "dec.update": {
+                "results": [
+                    {"n": 1, "decision_id": "same-decision", "same_as": None, "action": "conflict"}
+                ]
+            }
+        }
+    )
+    proposed = prepare_merge(writer, data)["topics"][0]["topic"]
+    changes = [row["content"] for row in proposed["timeline"]]
+    if recorded:
+        assert changes == [f"{author} 将结论从「池大小设为 12」改为「池大小设为 16」"]
+    else:
+        assert changes == []
+
+
+def test_experience_rows_in_the_previous_shape_are_still_read():
+    from memos.project_memory.add_merge import _card_from
+
+    episode = {"space_id": "space"}
+    legacy = {
+        "id": "old",
+        "card": {"principle": "p"},
+        "status": "verified",
+        "archived": True,
+        "user_id": "alice",
+        "session_id": "conv-1",
+        "confidence": 0.6,
+    }
+    card = _card_from(legacy, episode, "topic")
+    assert (card.exp_status, card.node_status, card.user_id, card.session_id) == (
+        "verified",
+        "archived",
+        "alice",
+        "conv-1",
+    )
+    current = {
+        "id": "new",
+        "card": {"principle": "p"},
+        "exp_status": "verified",
+        "confidence": 0.05,
+        "user_ids": ["bob", "carol"],
+        "sources": [{"conversation_id": "conv-2", "message_id": "m"}],
+    }
+    card = _card_from(current, episode, "topic")
+    # Below the confidence floor an experience is retired without a stored flag.
+    assert (card.exp_status, card.node_status, card.user_id, card.session_id) == (
+        "verified",
+        "archived",
+        "bob",
+        "conv-2",
+    )
+
+
+def test_experience_history_keeps_the_documented_version_fields():
+    from memos.project_memory.add_entry_fields import experience_version
+
+    stored = {
+        "version": 1,
+        "memory": "legacy text",
+        "update_type": "duplicate",
+        "archived_memory_id": "snap",
+        "created_at": "2026-11-19T00:00:00Z",
+        "replaced_by": "x",
+        "card": {"principle": "old"},
+    }
+    assert experience_version(stored) == {
+        "version": 1,
+        "card": {"principle": "old"},
+        "time": "2026-11-19T00:00:00Z",
+    }
+
+
+@pytest.mark.parametrize(("witnessed", "status"), [(True, "verified"), (False, "candidate")])
+def test_witnessed_validation_lets_an_experience_be_verified(witnessed, status):
+    card = {
+        "task_intent": "调整池",
+        "principle": "池大小设为 16",
+        "validation": "12 passed",
+        "signal": "test",
+        "status": "verified",
+        "validation_witnessed": witnessed,
+    }
+    draft = {"kind": "experience", "content": "池大小设为 16", "card": card}
+    change = prepare_merge(Writer(), plan_for(draft))
+    (experience,) = change["topics"][0]["topic"]["experiences"]
+    assert experience["exp_status"] == status
+    assert "validation_witnessed" not in experience["card"]

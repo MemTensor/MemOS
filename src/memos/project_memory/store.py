@@ -445,10 +445,11 @@ class RetrievalStore:
             cur.execute("SELECT set_config('TimeZone',%s,true)", (str(default_timezone()),))
             cur.execute("SELECT count(*) " + where, params)
             total = cur.fetchone()[0]
+            # Importance first (the storage ranking key), then recency; stable for paging.
             query = (
                 "SELECT i.id,i.payload "
                 + where
-                + " ORDER BY "
+                + " ORDER BY (i.payload->>'rank_time')::timestamptz DESC NULLS LAST, "
                 + time_column("update_time")
                 + " DESC,i.id"
             )

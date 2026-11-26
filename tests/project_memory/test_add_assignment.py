@@ -8,6 +8,7 @@ from memos.project_memory.add_algorithm import (
     organize_episode,
     recall_candidates,
 )
+from memos.project_memory.add_limits import LIMITS, count_units
 from memos.project_memory.judge import ModelError
 
 
@@ -97,6 +98,7 @@ def test_recall_preserves_predecessor_and_does_not_expose_other_domains_or_draft
                 "action": "attach",
                 "topic_id": "prior",
                 "relationship": "same_work",
+                "same_deliverable": True,
                 "positive_basis": "previous_episode",
                 "independently_deliverable": False,
                 "affects_existing_decisions": True,
@@ -145,6 +147,7 @@ def test_name_only_match_is_staged():
                 "action": "attach",
                 "topic_id": "top",
                 "relationship": "same_work",
+                "same_deliverable": True,
                 "positive_basis": "name",
                 "independently_deliverable": False,
                 "affects_existing_decisions": True,
@@ -172,6 +175,7 @@ def test_mention_only_anchor_does_not_establish_same_work():
                 "action": "attach",
                 "topic_id": "top",
                 "relationship": "same_work",
+                "same_deliverable": True,
                 "positive_basis": "shared_anchor",
                 "independently_deliverable": False,
                 "affects_existing_decisions": True,
@@ -234,6 +238,7 @@ def staged_choice(eid, target):
         "topic_id": target,
         "action": "attach",
         "relationship": "same_work",
+        "same_deliverable": True,
         "positive_basis": "same_goal",
         "independently_deliverable": False,
         "affects_existing_decisions": True,
@@ -492,3 +497,343 @@ def test_formation_does_not_join_episodes_linked_only_by_conversation():
     )
     assert plan["assignments"] == []
     assert {u["episode_id"]: u["status"] for u in plan["staged_updates"]}["old"] == "active"
+
+
+def _formation_plan(writer, new, staged, candidates=(), all_topics=None):
+    return organize_episode(
+        writer,
+        new,
+        list(candidates),
+        staged,
+        {"staged_since_last_formation": 3, "last_formation_at": NOW - timedelta(hours=3)},
+        now=NOW,
+        all_topics=all_topics,
+    )
+
+
+def test_formation_records_why_each_cluster_was_rejected():
+    new = episode("new", episode_summary="tire tread depth")
+    old = episode("old", episode_summary="fuel card payment", staged_at=NOW - timedelta(hours=3))
+    lone = episode("lone", staged_at=NOW - timedelta(hours=3))
+    reply = formation_reply(["new", "old"])
+    reply["clusters"].append(
+        {**reply["clusters"][0], "episode_ids": ["lone"], "name": " ".join(["export"] * 21)}
+    )
+    plan = _formation_plan(Writer([reply]), new, [old, lone])
+    assert plan["assignments"] == []
+    assert plan["formation"]["rejected"] == [
+        {"episode_ids": ["new", "old"], "reason": "unlinked_episode"},
+        {"episode_ids": ["lone"], "reason": "invalid_name"},
+    ]
+
+
+def test_formation_accepts_a_specific_name_longer_than_twenty_characters():
+    new = episode("new")
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    name = "Validated.combine_n 多值组合"
+    plan = _formation_plan(Writer([formation_reply(["new", "old"], name=name)]), new, [old])
+    (assignment,) = plan["assignments"]
+    assert assignment["topic"]["topic_name"] == name
+    assert "rejected" not in plan["formation"]
+
+
+def test_formation_attaches_a_cluster_to_an_existing_topic_every_member_recalled():
+    existing = topic("combine", "project", name="Cache rollout")
+    new = episode("new")
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    reply = {
+        "clusters": [
+            {"episode_ids": ["new", "old"], "topic_id": "combine", "same_deliverable": True}
+        ]
+    }
+    writer = Writer(
+        [{"action": "stage"}, {"assignments": [{"episode_id": "old", "action": "stage"}]}, reply]
+    )
+    candidates = recall_candidates(new, [existing])
+    plan = _formation_plan(writer, new, [old], candidates, all_topics=[existing])
+    (assignment,) = plan["assignments"]
+    assert assignment["topic"]["id"] == "combine"
+    assert assignment["topic"]["version"] == 1
+    assert {row["id"] for row in assignment["episodes"]} == {"new", "old"}
+    assert {u["episode_id"]: u["status"] for u in plan["staged_updates"]}["old"] == "moved"
+
+
+def test_formation_rejects_an_existing_topic_not_recalled_by_every_member():
+    existing = topic("combine", "project", name="Cache rollout")
+    new = episode("new")
+    old = episode(
+        "old", domains=["other"], episode_summary="unrelated", staged_at=NOW - timedelta(hours=3)
+    )
+    reply = {
+        "clusters": [
+            {"episode_ids": ["new", "old"], "topic_id": "combine", "same_deliverable": True}
+        ]
+    }
+    writer = Writer([{"action": "stage"}, reply])
+    candidates = recall_candidates(new, [existing])
+    plan = _formation_plan(writer, new, [old], candidates, all_topics=[existing])
+    assert plan["assignments"] == []
+    assert plan["formation"]["rejected"] == [
+        {"episode_ids": ["new", "old"], "reason": "topic_not_recalled"}
+    ]
+
+
+def test_formation_prompt_offers_attaching_to_existing_topics():
+    from memos.project_memory.add_algorithm import _FORMATION
+
+    assert "topic_id" in _FORMATION
+    assert "无法独立交付的组保留在默认主题" not in _FORMATION
+
+
+@pytest.mark.parametrize("prompt", [_ASSIGN, _ASSIGN_BATCH], ids=["direct", "batch"])
+def test_assignment_prompt_requires_the_same_deliverable(prompt):
+    assert "same_deliverable" in prompt
+    assert "episode_deliverable" in prompt
+    assert "连续的请求常常已转到下一项工作" in prompt
+
+
+@pytest.mark.parametrize("judged", [False, None, "true"], ids=["false", "missing", "text"])
+def test_attach_needs_an_explicit_same_deliverable_judgment(judged):
+    target = topic("prior", "project")
+    current = episode("new", previous={"result": {"topic_ids": ["prior"]}})
+    reply = {
+        "action": "attach",
+        "topic_id": "prior",
+        "relationship": "same_work",
+        "positive_basis": "previous_episode",
+        "independently_deliverable": False,
+        "affects_existing_decisions": True,
+    }
+    if judged is not None:
+        reply["same_deliverable"] = judged
+    plan = organize_episode(
+        Writer([reply]),
+        current,
+        recall_candidates(current, [target]),
+        [],
+        {"staged_since_last_formation": 0, "last_formation_at": NOW},
+        now=NOW,
+    )
+    assert plan["assignments"] == []
+    assert plan["staging"]["reason"] == "NO_CONFIRMED_TOPIC"
+
+
+def test_formation_prompt_separates_deliverables_in_one_module():
+    from memos.project_memory.add_algorithm import _FORMATION
+
+    assert "交付对象和验收条件不同" in _FORMATION
+
+
+def test_formation_due_covers_a_quiet_space_after_the_interval():
+    from memos.project_memory.add_algorithm import formation_due
+
+    staged = [episode("old", staged_at=NOW - timedelta(hours=1))]
+    quiet = {"staged_since_last_formation": 1, "last_formation_at": NOW - timedelta(hours=3)}
+    recent = {"staged_since_last_formation": 1, "last_formation_at": NOW - timedelta(minutes=5)}
+    full = {"staged_since_last_formation": 10, "last_formation_at": NOW}
+    due = {"formation_count": 10, "formation_interval": 7200}
+    assert formation_due(quiet, staged, NOW, **due)
+    assert not formation_due(recent, staged, NOW, **due)
+    assert formation_due(full, staged, NOW, **due)
+    assert not formation_due(quiet, [], NOW, **due)
+
+
+def test_organize_staged_forms_topics_without_a_carrier_episode():
+    from memos.project_memory.add_algorithm import organize_staged
+
+    first = episode("first", staged_at=NOW - timedelta(hours=3), staged_attempts=1)
+    second = episode("second", staged_at=NOW - timedelta(hours=2))
+    lone = episode("lone", episode_summary="fuel card payment", staged_at=NOW)
+    foreign = episode("foreign", space_id="other-space")
+    writer = Writer([formation_reply(["first", "second"])])
+    space = {"id": "space", "formation_version": 3, "staged_since_last_formation": 3}
+    plan = organize_staged(writer, [first, second, lone, foreign], space, [], now=NOW)
+    assert [scope for scope, _ in writer.calls] == ["episode.formation"]
+    assert plan["episode_id"] is None and plan["staging"] is None
+    (assignment,) = plan["assignments"]
+    assert {row["id"] for row in assignment["episodes"]} == {"first", "second"}
+    updates = {u["episode_id"]: (u["status"], u["attempts"]) for u in plan["staged_updates"]}
+    assert updates == {"first": ("moved", 2), "second": ("moved", 1), "lone": ("active", 1)}
+    assert plan["formation"] == {"version": 3, "consumed": 3}
+
+
+def test_organize_staged_keeps_the_plan_when_formation_is_unavailable():
+    from memos.project_memory.add_algorithm import organize_staged
+
+    writer = Writer([ModelError("down")])
+    plan = organize_staged(writer, [episode("a", staged_at=NOW)], {"id": "space"}, [], now=NOW)
+    assert plan["formation"] is None
+    assert plan["staged_updates"] == []
+    assert plan["warnings"] == ["FORMATION_MODEL_UNAVAILABLE"]
+
+
+def _delegated(*messages):
+    return [
+        {
+            "kind": "timeline",
+            "origin": "delegated",
+            "episode_id": "one",
+            "source": {"turn_ids": ["turn-one"], "message_ids": [message]},
+        }
+        for message in messages
+    ]
+
+
+def test_one_turn_with_results_in_several_agent_replies_is_enough_evidence():
+    from memos.project_memory.add_algorithm import _has_evidence
+
+    assert _has_evidence([episode("one", turn_count=1, drafts=_delegated("m019", "m036"))])
+    # One reply with two results, or a single result, still waits for more evidence.
+    assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m007", "m007"))])
+    assert not _has_evidence([episode("one", turn_count=1, drafts=_delegated("m036"))])
+    # The member's own message is not an Agent reply.
+    member = {**_delegated("one")[0], "origin": "member"}
+    assert not _has_evidence([episode("one", turn_count=1, drafts=[member, *_delegated("m2")])])
+
+
+def test_assignment_and_formation_read_verified_source_quotes():
+    from memos.project_memory.add_algorithm import _FORMATION, _assignment_input
+
+    quoted = {
+        "kind": "decision",
+        "quote": "Use `--safe-mode`, not `--safe`." + " filler" * 500,
+        "origin": "member",
+        "source": {"turn_ids": ["turn-new"]},
+    }
+    current = episode("new", drafts=[quoted])
+    decided = {
+        "time": "2026-11-19T00:00:00+00:00",
+        "source": {"quote": "Expose `--safe`."},
+        "conflicts": [{"source": {"quote": "Call it `--safe-mode`."}}],
+    }
+    topics = [topic(f"t{i}", "project", decisions=[{**decided, "id": f"d{i}"}]) for i in range(7)]
+    inputs = _assignment_input(current, recall_candidates(current, topics))
+    (evidence,) = inputs["evidence"]
+    assert evidence["kind"] == "decision"
+    assert count_units(evidence["quote"]) <= LIMITS.quote < count_units(quoted["quote"])
+    quoted_views = [c for c in inputs["candidates"] if "decision_quotes" in c]
+    assert len(quoted_views) == 5
+    assert [q["quote"] for q in quoted_views[0]["decision_quotes"]] == [
+        "Expose `--safe`.",
+        "Call it `--safe-mode`.",
+    ]
+    for prompt in (_ASSIGN, _ASSIGN_BATCH, _FORMATION):
+        assert "先读这些原文再判断交付对象" in prompt
+
+
+def test_formation_input_carries_episode_evidence():
+    new = episode("new", drafts=[{**episode("x")["drafts"][0], "quote": "Keep the pool at 8."}])
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    writer = Writer([formation_reply(["new", "old"])])
+    _formation_plan(writer, new, [old])
+    (call,) = [inputs for scope, inputs in writer.calls if scope == "episode.formation"]
+    by_id = {row["id"]: row for row in call["episodes"]}
+    assert by_id["new"]["evidence"] == [{"kind": "decision", "quote": "Keep the pool at 8."}]
+    assert by_id["old"]["evidence"] == []
+
+
+def test_formation_links_need_an_operated_resource_not_a_shared_mention():
+    from memos.project_memory.add_algorithm import _formation_links
+
+    mention = [{"path": "/tmp/plan.md", "status": "unresolved", "change_kind": "mention"}]
+    edited = [{"path": "src/core.ts", "status": "unresolved", "change_kind": "modified"}]
+    episodes = [
+        episode(
+            "a", episode_summary="loading state", anchors=mention, anchor_keys=["path:/tmp/plan.md"]
+        ),
+        episode(
+            "b",
+            episode_summary="validated container",
+            anchors=mention,
+            anchor_keys=["path:/tmp/plan.md"],
+        ),
+        episode("c", episode_summary="resolver", anchors=edited, anchor_keys=["path:src/core.ts"]),
+        episode("d", episode_summary="debounce", anchors=edited, anchor_keys=["path:src/core.ts"]),
+    ]
+    pairs = {tuple(link["episode_ids"]): link["signals"] for link in _formation_links(episodes)}
+    assert "shared_anchor" not in pairs[("a", "b")]
+    assert "shared_mention" in pairs[("a", "b")]
+    assert "shared_anchor" in pairs[("c", "d")]
+
+
+def test_formation_attach_needs_the_same_deliverable_judgment():
+    existing = topic("combine", "project", name="Cache rollout")
+    new = episode("new")
+    old = episode("old", staged_at=NOW - timedelta(hours=3))
+    reply = {"clusters": [{"episode_ids": ["new", "old"], "topic_id": "combine"}]}
+    writer = Writer(
+        [{"action": "stage"}, {"assignments": [{"episode_id": "old", "action": "stage"}]}, reply]
+    )
+    plan = _formation_plan(
+        writer, new, [old], recall_candidates(new, [existing]), all_topics=[existing]
+    )
+    assert plan["assignments"] == []
+    assert plan["formation"]["rejected"] == [
+        {"episode_ids": ["new", "old"], "reason": "not_same_deliverable"}
+    ]
+
+
+def test_assignment_prompts_treat_carrying_out_a_rule_as_the_same_work():
+    from memos.project_memory.add_algorithm import _FORMATION
+
+    for prompt in (_ASSIGN, _ASSIGN_BATCH, _FORMATION):
+        assert "按候选已有的规则或决定去落实的回报" in prompt
+
+
+def _reference_episode():
+    quote = "按刚才那个导出接口的规则把重试补上"
+    drafts = [{"kind": "timeline", "content": "补上重试", "origin": "delegated", "quote": quote}]
+    return episode("new", episode_summary="补上导出重试", drafts=drafts)
+
+
+@pytest.mark.parametrize(
+    ("quote", "attached"),
+    [("刚才那个导出接口", True), ("上次说的导入接口", False), (None, False)],
+    ids=["quoted", "not-in-episode", "missing"],
+)
+def test_explicit_reference_is_the_model_s_call_backed_by_a_quote(quote, attached):
+    target = topic("export", "project", name="导出接口")
+    current = _reference_episode()
+    reply = {
+        "action": "attach",
+        "topic_id": "export",
+        "same_deliverable": True,
+        "relationship": "same_work",
+        "positive_basis": "explicit_reference",
+        "independently_deliverable": False,
+        "affects_existing_decisions": True,
+        "reference_quote": quote,
+    }
+    candidates = recall_candidates(current, [target])
+    assert "explicit_reference" not in candidates[0]["recall"]["channels"]
+    plan = organize_episode(
+        Writer([reply]),
+        current,
+        candidates,
+        [],
+        {"staged_since_last_formation": 0, "last_formation_at": NOW},
+        now=NOW,
+    )
+    assert bool(plan["assignments"]) is attached
+
+
+@pytest.mark.parametrize(
+    ("deliverable", "formed"),
+    [("export retry policy", True), ("api/v2/import retries", False), (None, False)],
+    ids=["witnessed", "unwitnessed-token", "missing"],
+)
+def test_unlinked_episodes_join_on_a_stated_deliverable_from_their_own_text(deliverable, formed):
+    new = episode("new", episode_summary="export retry policy for api/v1/export")
+    old = episode(
+        "old",
+        episode_summary="导出任务的重试策略落地",
+        staged_at=NOW - timedelta(hours=3),
+    )
+    reply = formation_reply(["new", "old"])
+    reply["clusters"][0]["deliverable"] = deliverable
+    plan = _formation_plan(Writer([reply]), new, [old])
+    assert bool(plan["assignments"]) is formed
+    if not formed:
+        assert plan["formation"]["rejected"] == [
+            {"episode_ids": ["new", "old"], "reason": "unlinked_episode"}
+        ]

@@ -1,0 +1,27 @@
+# Project memory length limits, in 字: one CJK character or one Latin word counts as one.
+#
+# A Topic is shared by every member of a project, so these sizes are a server decision and
+# never come from a request. Override at deployment, in increasing priority:
+#   1. a YAML or JSON file named by PROJECT_MEMORY_LIMITS_FILE (any subset of these keys);
+#   2. one environment variable per key, PROJECT_MEMORY_LIMIT_<KEY>, e.g.
+#      PROJECT_MEMORY_LIMIT_TOPIC_SUMMARY=200.
+#
+# The reviewed PRD sizes (name 20, summary 80, description 400, decision and progress 100,
+# experience 200) proved too small for long engineering work, so the defaults are larger.
+
+# Topic header
+topic_name: 30              # Formation names; set once, never rewritten
+topic_summary: 160          # the work's goal
+description_base: 800       # description room for a new Topic ...
+description_per_entry: 80   # ... plus this per current decision or experience ...
+description_cap: 3000       # ... up to this cap
+
+# Entries
+decision: 200               # one decision's conclusion
+timeline: 200               # one progress record
+experience: 400             # experience content (task_intent｜problem｜principle)
+
+# Model inputs and intermediate text
+episode_summary: 400        # the extraction's Episode summary
+quote: 400                  # each source quote shown to assignment, Formation and decision merge
+metadata_input: 8000        # current facts given to the summary/description writer

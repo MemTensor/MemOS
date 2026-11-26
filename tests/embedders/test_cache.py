@@ -225,3 +225,15 @@ def test_core_import_does_not_require_optional_cachetools():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_cache_hit_is_metered_as_a_zero_token_call(monkeypatch):
+    from memos.llms.usage import expect_usage, meter_usage
+
+    _enable_optimization(monkeypatch, ttl_seconds="60")
+    embedder = CachingEmbedder(_backend())
+    embedder.embed(["same"])
+    with meter_usage() as meter, expect_usage("embedding", "embedding-model"):
+        embedder.embed(["same"])
+    (row,) = meter.summary()
+    assert (row["calls"], row["calls_without_usage"], row["total_tokens"]) == (1, 0, 0)

@@ -21,8 +21,8 @@ x-memos: &memos
     QDRANT_HOST: qdrant
     QDRANT_PORT: "6333"
     NEO4J_URI: bolt://neo4j:7687
-    PROJECT_MEMORY_POSTGRES_HOST: pm-postgres
-    PROJECT_MEMORY_POSTGRES_PORT: "5432"
+    PROJECT_DB_HOST: pm-postgres
+    PROJECT_DB_PORT: "5432"
     MEMSCHEDULER_USE_REDIS_QUEUE: "true"
     REDIS_HOST: redis
     REDIS_PORT: "6379"

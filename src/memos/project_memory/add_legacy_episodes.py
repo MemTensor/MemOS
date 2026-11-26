@@ -1,4 +1,11 @@
-"""Recover historical Turn provenance from the legacy message and Task links."""
+"""Recover historical Turn provenance from the legacy message and Task links.
+
+Legacy Episodes become spec rows: each message once per conversation with a `msg_seq`
+assigned Episode by Episode in acceptance order (so an Episode's new messages are
+contiguous), each Episode a msg_seq range of its Space and conversation, and its `add_jobs`
+row with the Tasks that sent its messages (`task_ids`, `organize_result.task_ranges` /
+`task_owners`) and its outcome.
+"""
 
 from __future__ import annotations
 
@@ -35,13 +42,13 @@ def _turns(message_nodes: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return groups
 
 
-def _message(
-    node: dict[str, Any],
-    episode: dict[str, Any],
-    turn_id: str,
-    owner: dict[str, Any],
-    seq: int,
-) -> dict[str, Any]:
+def _first(value: Any) -> str | None:
+    if isinstance(value, list):
+        value = next((item for item in value if isinstance(item, str) and item), None)
+    return value if isinstance(value, str) and value else None
+
+
+def _message(node: dict[str, Any], episode: dict[str, Any], owner: dict[str, Any]) -> dict:
     meta = node["metadata"]
     message_id = meta.get("message_id")
     role = {"member": "user", "agent": "assistant"}.get(meta.get("role"), meta.get("role"))
@@ -60,22 +67,18 @@ def _message(
     message = {
         "project_id": episode["project_id"],
         "conversation_key": episode["conversation_key"],
-        "conversation_id": episode["conversation_id"],
         "message_id": message_id,
-        "turn_id": turn_id,
-        "msg_seq": seq,
         "role": role,
         "role_id": meta.get("role_id") or None,
         "role_name": meta.get("role_name") or None,
+        "agent_id": _first(meta.get("agent_id")),
         "content": node["memory"],
         "tool_calls": tool_calls,
         "tool_call_id": meta.get("tool_call_id") or None,
         "experience_notes": meta.get("experience_notes") or None,
         "chat_time": recorded_time(meta.get("chat_time")),
-        "accepted_at": recorded_time(owner.get("create_time"), owner.get("created_at")),
+        "accept_time": recorded_time(owner.get("create_time"), owner.get("created_at")),
         "task_id": owner["task_id"],
-        "user_id": owner["user_id"],
-        "agent_id": meta.get("agent_id"),
     }
     message["content_sha256"] = message_fingerprint(message)
     return message
@@ -90,6 +93,7 @@ def _episode_rows(
     project_id: str,
     settings: AcceptanceSettings,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The Episode (with its add_jobs fields), its messages in order, and their owners."""
     meta = node["metadata"]
     legacy_state = meta.get("episode_state")
     if legacy_state not in ("open", "closed") or (meta.get("epoch") or 0) < space["legacy_epoch"]:
@@ -131,37 +135,16 @@ def _episode_rows(
     }
     if set(episode["domains"]) - set(space["domain_names"]):
         raise ValueError("Episode references an unavailable domain")
-    messages = []
-    turn_rows = []
-    for seq, group in enumerate(_turns(raw), 1):
+    messages, message_owner = [], []
+    for group in _turns(raw):
         owner = owners[group[0]["id"]]
         if any(owners[source["id"]]["task_id"] != owner["task_id"] for source in group):
             raise ValueError("Turn sources span more than one legacy Task")
-        turn_id = group[0]["metadata"].get("message_id")
-        turn = [_message(record, episode, turn_id, owner, j) for j, record in enumerate(group, 1)]
-        first = turn[0]
-        messages.extend(turn)
-        turn_rows.append(
-            {
-                **{key: episode[key] for key in ("project_id", "space_id", "conversation_key")},
-                **{
-                    key: first[key]
-                    for key in (
-                        "turn_id",
-                        "task_id",
-                        "user_id",
-                        "chat_time",
-                        "accepted_at",
-                        "agent_id",
-                    )
-                },
-                "episode_id": episode["id"],
-                "turn_seq": seq,
-                "message_count": len(turn),
-            }
-        )
-    opened = min(message["accepted_at"] for message in messages)
-    last_received = max(message["accepted_at"] for message in messages)
+        for record in group:
+            messages.append(_message(record, episode, owner))
+            message_owner.append(owner)
+    opened = min(message["accept_time"] for message in messages)
+    last_received = max(message["accept_time"] for message in messages)
     topic = topics.get(meta.get("topic_id"))
     if topic is not None and topic["space_id"] != space_id:
         raise ValueError("Episode receipt is associated with another Space")
@@ -173,17 +156,21 @@ def _episode_rows(
         else None
     )
     episode.update(
-        state="open" if closed is None else "extracted",
-        stage="episode_open" if closed is None else "done",
-        outcome="pending" if closed is None else ("committed" if topic else "skipped"),
-        opened_at=opened,
-        last_turn_at=max(message["chat_time"] for message in messages),
+        open=closed is None,
+        accept_time=opened,
         closed_at=closed,
-        idle_due_at=last_received + timedelta(seconds=settings.idle_seconds),
-        max_wait_due_at=opened + timedelta(seconds=settings.wait_seconds),
-        result={"topic_ids": [topic["id"]]} if topic else None,
+        first_chat_time=min(message["chat_time"] for message in messages),
+        last_chat_time=max(message["chat_time"] for message in messages),
+        close_due_time=None
+        if closed
+        else min(
+            last_received + timedelta(seconds=settings.idle_seconds),
+            opened + timedelta(seconds=settings.wait_seconds),
+        ),
+        outcome="pending" if closed is None else ("committed" if topic else "skipped"),
+        topic_id=topic["id"] if topic else None,
     )
-    return episode, messages, turn_rows
+    return episode, messages, message_owner
 
 
 def rebuild_legacy_trajectories(
@@ -194,75 +181,121 @@ def rebuild_legacy_trajectories(
     settings: AcceptanceSettings,
     exceptions: list[dict[str, str]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """(episodes rows, messages rows, add_jobs rows) of the legacy Episodes that can be proven;
+    the rest are reported in `exceptions` and stay in the archive."""
     message_owners: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for node in nodes.values():
         meta = node["metadata"]
         if meta.get("memory_type") == PROJECT_TASK and meta.get("task_id"):
             for node_id in set(meta.get("message_ids") or []):
                 message_owners[node_id].append(meta)
-    episodes = []
-    messages: dict[tuple[str, str], dict[str, Any]] = {}
-    turn_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
-    open_conversations: set[tuple[str, str]] = set()
+    candidates = []
     for node in nodes.values():
         meta = node["metadata"]
         if meta.get("memory_type") != PROJECT_EPISODE or meta.get("user_name") not in spaces:
             continue
         try:
-            episode, batch, turns = _episode_rows(
-                node, nodes, message_owners, spaces[meta["user_name"]], topics, project_id, settings
+            candidates.append(
+                _episode_rows(
+                    node,
+                    nodes,
+                    message_owners,
+                    spaces[meta["user_name"]],
+                    topics,
+                    project_id,
+                    settings,
+                )
             )
-            scope = (episode["space_id"], episode["conversation_key"])
-            if episode["state"] == "open" and scope in open_conversations:
-                raise ValueError("more than one open legacy Episode exists for this conversation")
-            source_keys = [
-                (message["conversation_key"], message["message_id"]) for message in batch
-            ]
-            for key, message in zip(source_keys, batch, strict=True):
-                stored = messages.get(key)
-                if stored and any(
-                    stored[k] != message[k] for k in ("turn_id", "msg_seq", "content_sha256")
-                ):
-                    raise ValueError("legacy message ID conflicts with another representation")
-            membership_keys = [
-                (turn["space_id"], turn["conversation_key"], turn["turn_id"]) for turn in turns
-            ]
-            if (
-                len(set(membership_keys)) != len(membership_keys)
-                or len(set(source_keys)) != len(source_keys)
-                or any(key in turn_rows for key in membership_keys)
-            ):
-                raise ValueError("legacy Turn has multiple assignments in the same Space")
         except ValueError as error:
             exceptions.append({"id": node["id"], "kind": "episode", "reason": str(error)})
-            continue
-        episodes.append(episode)
-        if episode["state"] == "open":
-            open_conversations.add(scope)
-        turn_rows.update(zip(membership_keys, turns, strict=True))
-        for key, message in zip(source_keys, batch, strict=True):
-            existing = messages.get(key)
-            if not existing or message["accepted_at"] < existing["accepted_at"]:
-                messages[key] = message
+    candidates.sort(key=lambda row: (row[0]["accept_time"], row[0]["id"]))
 
+    messages: dict[tuple[str, str], dict[str, Any]] = {}
+    next_seq: dict[str, int] = defaultdict(int)
+    ranges: dict[tuple[str, str], list[tuple[int, int]]] = defaultdict(list)
+    open_conversations: set[tuple[str, str]] = set()
     previous: dict[tuple[str, str], str] = {}
-    episodes.sort(key=lambda episode: (episode["opened_at"], episode["id"]))
-    for episode in episodes:
+    episodes, jobs = [], []
+    for episode, batch, owners in candidates:
         scope = (episode["space_id"], episode["conversation_key"])
-        if episode["conversation_id"]:
-            episode["previous_episode_id"] = previous.get(scope)
-        if episode["closed_at"]:
+        try:
+            if episode["open"] and scope in open_conversations:
+                raise ValueError("more than one open legacy Episode exists for this conversation")
+            keys = [(message["conversation_key"], message["message_id"]) for message in batch]
+            if len(set(keys)) != len(keys):
+                raise ValueError("legacy Turn has multiple assignments in the same Space")
+            for key, message in zip(keys, batch, strict=True):
+                stored = messages.get(key)
+                if stored and stored["content_sha256"] != message["content_sha256"]:
+                    raise ValueError("legacy message ID conflicts with another representation")
+            # Messages new to the conversation take the next seqs, in the Episode's order.
+            seqs, assigned = [], next_seq[episode["conversation_key"]]
+            for key in keys:
+                if key in messages:
+                    seqs.append(messages[key]["msg_seq"])
+                else:
+                    assigned += 1
+                    seqs.append(assigned)
+            start, end = min(seqs), max(seqs)
+            if any(lo <= end and start <= hi for lo, hi in ranges[scope]):
+                raise ValueError("legacy Turn has multiple assignments in the same Space")
+        except ValueError as error:
+            exceptions.append({"id": episode["id"], "kind": "episode", "reason": str(error)})
+            continue
+        next_seq[episode["conversation_key"]] = assigned
+        for key, message, seq in zip(keys, batch, seqs, strict=True):
+            messages.setdefault(key, {**message, "msg_seq": seq})
+        ranges[scope].append((start, end))
+        if episode["open"]:
+            open_conversations.add(scope)
+        task_ranges: dict[str, list[int]] = {}
+        task_owners: dict[str, dict] = {}
+        for seq, owner in zip(seqs, owners, strict=True):
+            lo, hi = task_ranges.get(owner["task_id"], [seq, seq])
+            task_ranges[owner["task_id"]] = [min(lo, seq), max(hi, seq)]
+            task_owners[owner["task_id"]] = {
+                "user_id": owner["user_id"],
+                "accepted_at": recorded_time(
+                    owner.get("create_time"), owner.get("created_at")
+                ).isoformat(),
+            }
+        prior = previous.get(scope) if episode["conversation_id"] else None
+        if not episode["open"]:
             previous[scope] = episode["id"]
-    sequences: dict[tuple[str, str], int] = {}
-    conversation_counts: dict[str, int] = defaultdict(int)
-    ordered_messages = sorted(
-        messages.values(),
-        key=lambda msg: (msg["accepted_at"], msg["chat_time"], msg["msg_seq"], msg["message_id"]),
-    )
-    for message in ordered_messages:
-        key = (message["conversation_key"], message["turn_id"])
-        if key not in sequences:
-            conversation_counts[key[0]] += 1
-            sequences[key] = conversation_counts[key[0]]
-        message["turn_seq"] = sequences[key]
-    return episodes, ordered_messages, list(turn_rows.values())
+        episodes.append(
+            {
+                "id": episode["id"],
+                "space_id": episode["space_id"],
+                "conversation_key": episode["conversation_key"],
+                "message_seq_start": start,
+                "message_seq_end": end,
+                "previous_episode_id": prior,
+                "topic_id": episode["topic_id"],
+                "first_chat_time": episode["first_chat_time"],
+                "last_chat_time": episode["last_chat_time"],
+                "create_time": episode["accept_time"],
+            }
+        )
+        organize = {"task_ranges": task_ranges, "task_owners": task_owners}
+        if episode["closed_at"]:
+            organize["close"] = {"reason": "legacy", "at": episode["closed_at"].isoformat()}
+            organize["extraction"] = {"at": episode["closed_at"].isoformat(), "status": "legacy"}
+        jobs.append(
+            {
+                "episode_id": episode["id"],
+                "project_id": episode["project_id"],
+                "space_id": episode["space_id"],
+                "conversation_key": episode["conversation_key"],
+                "user_id": episode["user_id"],
+                "task_ids": list(task_ranges),
+                "domains": episode["domains"],
+                "stage": "episode_open" if episode["open"] else "done",
+                "outcome": episode["outcome"],
+                "accept_time": episode["accept_time"],
+                "close_due_time": episode["close_due_time"],
+                "organize_result": organize,
+                "topic_ids": [episode["topic_id"]] if episode["topic_id"] else [],
+            }
+        )
+    ordered = sorted(messages.values(), key=lambda m: (m["conversation_key"], m["msg_seq"]))
+    return episodes, ordered, jobs

@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from .add_acceptance import AcceptanceSettings
-from .add_commit import refresh_topic_items
+from .add_entry_fields import experience_version
+from .add_layout import import_topics
 from .add_legacy import LegacyArchive, read_legacy_postgres, read_legacy_sqlite
 from .add_legacy_episodes import rebuild_legacy_trajectories, recorded_time
 from .add_publish import publish_topics, sync_space
@@ -37,7 +38,7 @@ class MigrationPlan:
     topics: list[dict[str, Any]] = field(default_factory=list)
     episodes: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
-    episode_turns: list[dict[str, Any]] = field(default_factory=list)
+    add_jobs: list[dict[str, Any]] = field(default_factory=list)
     exceptions: list[dict[str, str]] = field(default_factory=list)
 
     def report(self) -> dict[str, Any]:
@@ -103,20 +104,18 @@ def _migrate_experience(
         entry = dict(old)
         if old_node and old_node["metadata"].get("user_name") == card.space_id:
             entry["card"] = ExperienceCard.from_node(archive_id, old_node["metadata"]).card()
-        history.append(entry)
+        history.append(experience_version(entry))
     target = topics[matched_topics[-1]]
     target["experiences"].append(
         {
             "id": identifier,
             "version": card.version,
-            "status": card.exp_status,
+            "exp_status": card.exp_status,
             "confidence": card.confidence,
             "quality_score": card.quality_score,
             "signal": card.signal,
             "time": card.time,
             "last_supported_at": card.last_supported_at,
-            "session_id": card.session_id,
-            "user_id": card.user_id,
             "user_ids": card.author_ids,
             "use_count": card.use_count,
             "card": card.card(),
@@ -208,21 +207,15 @@ def plan_migration(
                 {**project, "id": node["id"], "content": project.get("content") or node["memory"]}
             )
     plan.topics = list(topics.values())
-    plan.episodes, plan.messages, plan.episode_turns = rebuild_legacy_trajectories(
+    plan.episodes, plan.messages, plan.add_jobs = rebuild_legacy_trajectories(
         archive.nodes, spaces, topics, project_id, AcceptanceSettings.from_env(), plan.exceptions
     )
     return plan
 
 
-_TABLES = ("spaces", "domains", "topics", "messages", "episodes", "episode_turns")
-_ENTRY_LISTS = ("decisions", "experiences", "timeline")
-_JSON_COLUMNS = {
-    "sources",
-    "tool_calls",
-    "experience_notes",
-    "agent_id",
-    "result",
-}
+# Insert order; topics (and their entries) go through add_layout.import_topics.
+_TABLES = ("spaces", "domains", "topics", "messages", "episodes", "add_jobs")
+_JSON_COLUMNS = {"tool_calls", "experience_notes", "organize_result"}
 
 
 def _insert_rows(cursor: Any, table: str, rows: list[dict[str, Any]]) -> None:
@@ -256,16 +249,11 @@ def apply_migration(store: PostgresAddStore, plan: MigrationPlan) -> None:
                 "Legacy Space already exists in the destination; import would overwrite data"
             )
         for table in _TABLES:
-            rows = getattr(plan, table)
             if table == "topics":
-                # Entries are project_entries rows in the shared schema.
-                rows = [
-                    {key: value for key, value in row.items() if key not in _ENTRY_LISTS}
-                    for row in rows
-                ]
-            _insert_rows(cursor, table, rows)
-        for topic in plan.topics:
-            refresh_topic_items(cursor, topic)
+                # Topics and entries keep their legacy ids, written like the change-set writer.
+                import_topics(cursor, plan.topics)
+            else:
+                _insert_rows(cursor, table, getattr(plan, table))
         if store.retrieval_index:
             cursor.execute("SELECT clock_timestamp() AS now")
             now = cursor.fetchone()["now"]

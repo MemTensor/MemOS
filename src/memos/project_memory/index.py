@@ -75,6 +75,7 @@ class Topic(BaseModel):
     topic_description: str
     create_time: str
     update_time: str
+    rank_time: str | None = None  # storage ranking key (topics.extra.rank_time)
     sources: list[dict] = Field(default_factory=list)
     decisions: list[Decision] = Field(default_factory=list)
     experiences: list[Experience] = Field(default_factory=list)

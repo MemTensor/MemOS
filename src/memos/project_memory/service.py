@@ -33,11 +33,13 @@ from memos.graph_dbs.base import ConcurrentUpdateError
 from . import decision as dec
 from . import experience as exp
 from . import topic as topic_mod
+from .add_limits import LIMITS, cut_at_sentence
 from .add_view import RelationalProjectView
 from .graph_store import ProjectStore, cosine, lexical_sim
 from .locks import InProcessLocks, conv_key, task_key, topic_key, topics_key
 from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
 from .types import (
+    EXP_VERIFIED,
     OP_ADD,
     PROJECT_DECISION,
     PROJECT_EXPERIENCE,
@@ -69,7 +71,6 @@ DEFAULT_LIMIT = 9  # PRD search/memory 的默认条数
 MAX_LIMIT = 25  # PRD 的上限；超过按上限截断、不报错（校验在工程层）
 REL_MIN = 0.12  # 条目与 query 的最低相关度（二元组相似度；接真向量后在评测集上定）
 MAX_ENTRIES = 5
-EXP_CONTENT_MAX = 200  # PRD：经验条目内容不超过 200 字
 MAX_CAS_RETRIES = 3
 MAX_TRACE_LINES = 80
 MAX_ORGANIZE_RETRIES = 3  # 一段整理失败最多重试几次，之后标 failed
@@ -999,8 +1000,12 @@ class ProjectMemoryService:
             )
             timeline = self._relevant(query, timeline, lambda x: x.get("content", ""))
         else:
-            decisions.sort(key=lambda d: d.time)
-            experiences.sort(key=lambda e: e.confidence, reverse=True)
+            # Topic-page order: open conflicts and wider agreement first, then the newest;
+            # verified experiences first, then by confidence; timeline stays chronological.
+            decisions.sort(key=lambda d: (not d.conflicts, -len(d.user_ids), _newest(d.time)))
+            experiences.sort(
+                key=lambda e: (e.exp_status != EXP_VERIFIED, -e.confidence, _newest(e.time))
+            )
         if types is not None:  # project_item_types：只带要的那几类条目
             decisions = decisions if "decision" in types else []
             experiences = experiences if "experience" in types else []
@@ -1105,7 +1110,7 @@ class ProjectMemoryService:
     def _experience_out(e, full: bool) -> dict[str, Any]:
         out = {
             "id": e.id,
-            "content": e.memory_text[:EXP_CONTENT_MAX],
+            "content": cut_at_sentence(e.memory_text, LIMITS.experience)[0],
             "time": e.time,
             "user_ids": e.author_ids,
             "task_intent": e.task_intent,
@@ -1263,6 +1268,11 @@ def _item_types(req: Any) -> list[str]:
     if bad:
         raise ValueError(f"project_item_types 不支持：{bad}，可选 {list(ITEM_TYPES)}")
     return raw or list(ITEM_TYPES)
+
+
+def _newest(value: Any) -> float:
+    """Sort key that puts later times first."""
+    return -time_key(value) if value else 0.0
 
 
 def _match_filter(t: Topic, flt: dict[str, Any]) -> bool:
