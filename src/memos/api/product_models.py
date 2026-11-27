@@ -7,7 +7,11 @@ from pydantic import BaseModel, Field, model_validator
 # Import message types from core types module
 from memos.api.project_fields import ProjectAddFields, ProjectScopeFields, ProjectSearchFields
 from memos.log import get_logger
+from memos.project_memory.index import Decision, Entry, Experience
 from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
+from memos.types.openai_chat_completion_types.chat_completion_message_function_tool_call_param import (
+    ChatCompletionMessageFunctionToolCallParam,
+)
 
 
 logger = get_logger(__name__)
@@ -375,7 +379,7 @@ class APISearchRequest(BaseRequest, ProjectSearchFields):
     user_id: str = Field(..., description="User ID")
 
     # Project fields (include_memory_view, space_ids, domains, conversation_id,
-    # memory_limit_number, project_item_types, project_result_format) come from ProjectSearchFields.
+    # memory_limit_number) come from ProjectSearchFields.
 
     # ==== Cube scoping ====
     readable_cube_ids: list[str] | None = Field(
@@ -948,9 +952,16 @@ class ProjectListRequest(BaseRequest):
     space_id: str
     mem_cube_id: str | None = None
     page: int = Field(1, ge=1)
-    size: int | None = Field(None, ge=1)
-    page_size: int | None = Field(None, ge=1)
+    size: int | None = Field(None, ge=1, le=50)
+    page_size: int | None = Field(None, ge=1, le=50)
     filter: dict[str, Any] | None = None
+
+
+class ProjectEntryListRequest(BaseRequest):
+    topic_id: str = Field(min_length=1)
+    type: Literal["decision", "experience", "timeline"]
+    page: int = Field(1, ge=1)
+    size: int = Field(10, ge=1, le=50)
 
 
 class ProjectMessagesRequest(BaseRequest):
@@ -1075,13 +1086,54 @@ class GetCreateKnowledgebaseData(BaseModel):
     id: str = Field(..., description="Knowledgebase id")
 
 
+class ProjectHit(BaseModel):
+    """A ranked result in one authorized project space."""
+
+    id: str
+    space_id: str
+    relativity: float
+
+
+class ProjectTopicHit(ProjectHit):
+    domain: str
+    topic_name: str
+    topic_summary: str
+    topic_description: str
+    update_time: str
+    decisions: list[Decision]
+    experiences: list[Experience]
+    timeline: list[Entry]
+
+
+class ProjectMessageHit(ProjectHit):
+    """One message, or a Turn skeleton with its ordered message_ids."""
+
+    conversation_id: str
+    content: str
+    role: Literal["user", "assistant", "tool"] | None = None
+    message_id: str | None = None
+    tool_calls: list[ChatCompletionMessageFunctionToolCallParam] | None = None
+    message_ids: list[str] | None = None
+
+
+class ProjectEpisodeHit(ProjectHit):
+    conversation_id: str
+    topic_id: str | None
+    content: str
+
+
+class ProjectSearchData(BaseModel):
+    """Project hits in final rank order, with partial-retrieval status."""
+
+    project_item_list: list[ProjectTopicHit | ProjectMessageHit | ProjectEpisodeHit]
+    degraded: list[str]
+    truncated: bool
+
+
 class SearchMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
-    topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
     project_item_list: list[MemoryDetail] = Field(default_factory=list)
-    trajectory_detail_list: list[MemoryDetail] = Field(default_factory=list)
-    channels: list[str] = Field(default_factory=list)
     degraded: list[str] = Field(default_factory=list)
     truncated: bool = False
 
@@ -1130,6 +1182,8 @@ class GetMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
     topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    entry_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    space_id: str | None = None
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )

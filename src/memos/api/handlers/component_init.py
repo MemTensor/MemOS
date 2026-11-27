@@ -356,7 +356,5 @@ def init_server() -> dict[str, Any]:
         "feedback_server": feedback_server,
         "redis_client": redis_client,
         "deepsearch_agent": deepsearch_agent,
-        # Read by the project retrieval service for /get_message; set by the project plugin.
-        "project_message_store": plugin_context.get("project_message_store"),
         "project_embedder": plugin_context["shared"].get("project_embedder"),
     }

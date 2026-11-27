@@ -173,7 +173,15 @@ def test_preserves_assistant_tool_link_and_full_original_output(add_store):
     episode = add_store.load_episode(accept.accept(request).closed_episode_ids[0])
     _, call, output = episode["messages"]
     assert call["content"] == "调用工具"
-    assert call["tool_calls"][0]["id"] == output["tool_call_id"] == "call"
+    assert not call["tool_calls"]
+    assert output["message_id"] == "output-message"
+    assert output["tool_calls"] == [
+        {
+            "id": output["tool_call_id"],
+            "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path":"x.py"}'},
+        }
+    ]
     assert output["content"] == raw_output
 
 

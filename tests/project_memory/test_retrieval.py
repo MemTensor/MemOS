@@ -1,11 +1,4 @@
-from memos.project_memory.index import split_turn, terms
-
-
-def test_long_turn_round_trips_without_changing_the_shared_text():
-    original = ("共享原文\n" * 550) + "结尾"
-    chunks = list(split_turn(original))
-    assert "".join(chunks) == original
-    assert all(0 < len(chunk) <= 2000 for chunk in chunks)
+from memos.project_memory.index import terms
 
 
 def test_chinese_and_error_codes_are_searchable():
@@ -29,12 +22,6 @@ def test_mixed_ranks_favor_current_session_then_distinct_content():
     assert selected[0].data["relativity"] >= selected[1].data["relativity"]
 
 
-def test_cacheable_turn_requires_explicit_confirmation():
-    from memos.project_memory.index import Turn
-
-    assert Turn.model_fields["cache_policy"].default == "live"
-
-
 def test_time_budgets_scale_from_the_environment(monkeypatch):
     from memos.project_memory.views import budget
 
@@ -42,3 +29,24 @@ def test_time_budgets_scale_from_the_environment(monkeypatch):
     assert budget(0.46) == 0.46
     monkeypatch.setenv("MEMOS_PROJECT_RETRIEVAL_TIME_SCALE", "4")
     assert budget(0.10) == 0.4
+
+
+def test_skeleton_keeps_message_ids_and_omits_tool_output():
+    from memos.project_memory.turns import turn_skeletons
+
+    messages = [
+        {"message_id": "u", "role": "user", "content": "inspect build"},
+        {
+            "message_id": "a",
+            "role": "assistant",
+            "content": "checking",
+            "tool_calls": [{"function": {"name": "build", "arguments": "verbose args"}}],
+        },
+        {"message_id": "t", "role": "tool", "content": "verbose output"},
+        {"message_id": "r", "role": "assistant", "content": "all tests passed"},
+    ]
+    (turn,) = turn_skeletons([{**m, "turn_id": "add-turn-id"} for m in messages])
+    assert turn.turn_id == "add-turn-id"
+    assert turn.msg_ids == ["u", "a", "t", "r"]
+    assert all(s in turn.content for s in ("inspect build", "build", "all tests passed"))
+    assert "verbose" not in turn.content and "checking" not in turn.content

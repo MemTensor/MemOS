@@ -257,7 +257,6 @@ class PostgresAddStore:
 
         self.schema_name = config.get("schema_name") or "project_memory"
         self.dim = int(config.get("embedding_dimension") or 1024)
-        self.retrieval_index = bool(config.get("retrieval_index"))
         # The shared schema's full-text configuration; zhparser in production, simple in tests.
         self.text_search_parser = config.get("text_search_parser") or "simple"
         if self.text_search_parser not in ("simple", "zhparser"):
@@ -357,10 +356,6 @@ class PostgresAddStore:
                    WHERE st.space_id = s.id AND s.formation_version < st.formation_version"""
             )
             cursor.execute("DROP TABLE add_space_state")
-        if self.retrieval_index:
-            from .add_publish import install
-
-            install(cursor)
 
     @contextmanager
     def transaction(self, *, readonly: bool = False) -> Iterator[Any]:

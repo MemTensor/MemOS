@@ -59,6 +59,7 @@ def test_tables_and_defaults(cur):
         "project_entries",
         "spaces",
         "topics",
+        "turns",
     ]
     cur.execute(f"SELECT resource_bindings, formation_version, clear_time FROM {S}.spaces")
     assert cur.fetchone() == ([], 0, None)

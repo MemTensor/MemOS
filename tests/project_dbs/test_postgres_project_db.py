@@ -96,6 +96,7 @@ def test_init_creates_tables_and_is_idempotent(pg_db):
             "project_entries",
             "spaces",
             "topics",
+            "turns",
         ]
 
 
@@ -259,7 +260,7 @@ def test_delete_space_waits_for_in_flight_topic_insert(pg_db):
 def test_init_tolerates_existing_text_search_config(pg_db):
     with pg_db._tx() as cur:  # tables gone, configuration left behind
         cur.execute(
-            "DROP TABLE project_memory.episodes, "
+            "DROP TABLE project_memory.turns, project_memory.episodes, "
             "project_memory.messages, project_memory.project_entries, project_memory.topics, "
             "project_memory.domains, project_memory.spaces"
         )

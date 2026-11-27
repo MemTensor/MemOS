@@ -512,14 +512,11 @@ def test_relational_search_and_get_keep_member_stance_times_private(add_store):
         project_id="project-a",
         space_ids=["space"],
         query="Export daily",
-        project_item_types=["decision"],
     )
-    (search_topic,) = service.search_result(request)["topic_detail_list"]
-    request.project_result_format = "item"
-    (search_item,) = service.search_result(request)["project_item_list"]
+    (search_topic,) = service.search_result(request)["project_item_list"]
     (get_topic,) = service.get_by_id("topic")["topic_detail_list"]
     (get_item,) = service.get_by_id(decision_id)["project_item_list"]
-    for row in (search_topic["decisions"][0], search_item, get_topic["decisions"][0], get_item):
+    for row in (search_topic["decisions"][0], get_topic["decisions"][0], get_item):
         assert row["id"] == decision_id
         assert row["time"] == "2026-11-19T01:00:00+00:00"
         assert "_member_stance_times" not in row

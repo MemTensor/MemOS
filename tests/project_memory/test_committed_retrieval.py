@@ -1,4 +1,4 @@
-"""Add commits publish into the shared retrieval index read by `RetrievalStore`."""
+"""Read Add commits through the public retrieval projections."""
 
 import os
 import uuid
@@ -8,7 +8,6 @@ import pytest
 from memos.project_memory.add_commit import commit_changeset
 from memos.project_memory.add_index import index_changeset
 from memos.project_memory.add_merge import prepare_merge
-from memos.project_memory.add_publish import publish_topics
 from memos.project_memory.add_store import PostgresAddStore, json_value
 from memos.project_memory.add_view import RelationalProjectView
 from memos.project_memory.config import postgres_config
@@ -21,7 +20,7 @@ from memos.project_memory.types import Domain, Space
 def setup(monkeypatch):
     dsn = os.environ.get("PG_TEST_DSN")
     if not dsn:
-        pytest.skip("PG_TEST_DSN is required for retrieval publishing")
+        pytest.skip("PG_TEST_DSN is required for committed retrieval")
     from psycopg2 import sql
 
     tenant, space = f"tenant-{uuid.uuid4().hex}", f"space-{uuid.uuid4().hex}"
@@ -31,7 +30,7 @@ def setup(monkeypatch):
             **postgres_config(3),
             "text_search_parser": "simple",
             "dsn": dsn,
-            "schema_name": f"test_add_publish_{uuid.uuid4().hex}",
+            "schema_name": f"test_committed_retrieval_{uuid.uuid4().hex}",
         },
     )
     view = RelationalProjectView(store)
@@ -39,14 +38,9 @@ def setup(monkeypatch):
         Space(space_id=space, project_id=tenant, space_name="Ledger", domains=[Domain("开发")])
     )
     try:
-        yield store, view, RetrievalStore(store.pool), tenant, space
+        yield store, view, RetrievalStore(store.pool, store.schema_name), tenant, space
     finally:
         with store.transaction() as cursor:
-            cursor.execute(
-                "DELETE FROM memos_project.pm_retrieval_roots WHERE tenant_id = %s", (tenant,)
-            )
-            cursor.execute("DELETE FROM memos_project.pm_domains WHERE space_id = %s", (space,))
-            cursor.execute("DELETE FROM memos_project.pm_spaces WHERE tenant_id = %s", (tenant,))
             cursor.execute(
                 sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(store.schema_name))
             )
@@ -141,7 +135,7 @@ def _recall(retrieval, tenant, space, query, vector=None):
     return hits
 
 
-def test_commit_publishes_topic_with_entries_and_vectors(setup):
+def test_committed_topic_entries_and_vectors_are_searchable(setup):
     store, _, retrieval, tenant, space = setup
     basis = {
         "id": "topic-pool",
@@ -153,7 +147,7 @@ def test_commit_publishes_topic_with_entries_and_vectors(setup):
         "topic_description": "",
     }
     topic_id = _commit(store, space, "e1", "连接池大小改为 16", basis)
-    (hit,) = _recall(retrieval, tenant, space, "连接池大小")
+    (hit,) = _recall(retrieval, tenant, space, "连接池大小改为")
     assert hit.data["id"] == topic_id and hit.data["domain"] == "开发"
     assert hit.data["rank_time"]
     assert [row["content"] for row in hit.data["timeline"]] == ["连接池大小改为 16"]
@@ -162,13 +156,11 @@ def test_commit_publishes_topic_with_entries_and_vectors(setup):
 
     (current,) = store.read_topics(space)
     _commit(store, space, "e2", "连接池超时改为 30 秒", {**current, "domain": "开发"})
-    (hit,) = _recall(retrieval, tenant, space, "连接池")
+    (hit,) = _recall(retrieval, tenant, space, "连接池大小改为 连接池超时改为")
     assert len(hit.data["timeline"]) == 2
     with store.transaction(readonly=True) as cursor:
-        cursor.execute(
-            "SELECT revision FROM memos_project.pm_retrieval_roots WHERE tenant_id = %s", (tenant,)
-        )
-        assert cursor.fetchone()["revision"] == 2
+        cursor.execute("SELECT version FROM topics WHERE id = %s", (topic_id,))
+        assert cursor.fetchone()["version"] == 2
 
 
 def test_clear_rename_delete_follow_the_add_space(setup):
@@ -187,24 +179,24 @@ def test_clear_rename_delete_follow_the_add_space(setup):
     current = view.get_space(space)
     current.domains[0].name = "研发"
     view.put_space(current)
-    (hit,) = _recall(retrieval, tenant, space, "月报归档")
+    (hit,) = _recall(retrieval, tenant, space, "月报归档到")
     assert hit.data["domain"] == "研发"
     retrieval.validate(Scope(tenant, (space,), ("研发",)))
 
     view.delete_topics(space, [first])
-    assert not _recall(retrieval, tenant, space, "月报归档")
+    assert not _recall(retrieval, tenant, space, "月报归档到")
 
     _commit(store, space, "a2", "月报保留十二个月", {**basis, "id": "topic-b", "domain": "研发"})
-    assert _recall(retrieval, tenant, space, "月报保留")
+    assert _recall(retrieval, tenant, space, "月报保留十二个月")
     view.clear_space_topics(space)
-    assert not _recall(retrieval, tenant, space, "月报保留")
+    assert not _recall(retrieval, tenant, space, "月报保留十二个月")
     view.delete_space_nodes(space)
     with pytest.raises(LookupError):
         retrieval.validate(Scope(tenant, (space,)))
 
 
 def test_list_orders_topics_by_rank_time_and_entries_by_page_order(setup):
-    from memos.project_memory.add_publish import topic_snapshot
+    from memos.project_memory.topic_projection import topic_snapshot
 
     store, _, retrieval, tenant, space = setup
     newer = _commit(
@@ -246,12 +238,8 @@ def test_list_orders_topics_by_rank_time_and_entries_by_page_order(setup):
                WHERE id = %s""",
             (older,),
         )
-        cursor.execute("SELECT project_id, now() AS now FROM spaces WHERE id = %s", (space,))
-        row = cursor.fetchone()
-        cursor.execute("UPDATE topics SET version = version + 1 WHERE id = %s", (older,))
-        publish_topics(cursor, row["project_id"], space, [older], row["now"])
     listed = retrieval.list_topics(Scope(tenant, (space,)), 1, 10, {})
-    assert [topic["id"] for topic in listed["topic_detail_list"]] == [older, newer]
+    assert [topic["id"] for topic in listed["topic_detail_list"]] == [newer, older]
 
     topic = {
         "id": "t",

@@ -736,11 +736,9 @@ def test_project_review_sdk_views_and_scope(client, posted_requests):
         user_id="member",
         space_ids="space-a",
         include_memory_view=["project"],
-        project_result_format="item",
-        project_item_types=["decision"],
     )
     req = _json_payload(posted_requests[-1])
-    assert req["project_result_format"] == "item" and req["project_item_types"] == ["decision"]
+    assert req["space_ids"] == "space-a" and req["include_memory_view"] == ["project"]
     client.get_memory(space_id="space-a", page=2, size=3, filter={"related_id": "agent"})
     assert _json_payload(posted_requests[-1]) == {
         "space_id": "space-a",

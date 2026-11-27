@@ -210,8 +210,6 @@ class MemOSClient:
         context_format: str = "memory",
         space_ids: str | list[str] | None = None,
         domains: str | list[str] | None = None,
-        project_result_format: str | None = None,
-        project_item_types: list[str] | None = None,
     ) -> MemOSSearchResponse | None:
         """Search memories"""
         # Validate required parameters
@@ -243,10 +241,6 @@ class MemOSClient:
             "include_tool_memory": include_tool_memory,
         }
 
-        if project_result_format is not None:
-            payload["project_result_format"] = project_result_format
-        if project_item_types is not None:
-            payload["project_item_types"] = project_item_types
         if space_ids is not None:
             payload["space_ids"] = space_ids
         if domains is not None:
@@ -277,10 +271,19 @@ class MemOSClient:
         include_memory_view: list[str] | None = None,
         filter: dict[str, Any] | None = None,
         space_id: str | None = None,
+        topic_id: str | None = None,
+        type: str | None = None,
     ) -> MemOSGetMemoryResponse | None:
         """get memories"""
         # Validate required parameters
-        if space_id is None:
+        if topic_id is not None or type is not None:
+            if (
+                not topic_id
+                or type not in {"decision", "experience", "timeline"}
+                or any((space_id, user_id, agent_id))
+            ):
+                raise ValueError("Supply topic_id and entry type for a topic entry page")
+        elif space_id is None:
             self._validate_profile_subject(user_id, agent_id)
         elif not space_id.strip() or user_id or agent_id:
             raise ValueError("Supply exactly one of space_id, user_id or agent_id")
@@ -299,7 +302,9 @@ class MemOSClient:
             "size": size,
         }
 
-        if space_id is not None:
+        if topic_id is not None:
+            payload = {"topic_id": topic_id, "type": type, "page": page, "size": size}
+        elif space_id is not None:
             payload = {"space_id": space_id, "page": page, "size": size}
             if filter is not None:
                 payload["filter"] = filter
@@ -332,13 +337,28 @@ class MemOSClient:
             response.close()
 
     def get_memory_by_id(
-        self, memid: str, *, space_id: str | None = None, view: str | None = None
+        self,
+        memid: str,
+        *,
+        space_id: str | None = None,
+        view: str | None = None,
+        conversation_id: str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any] | None:
         """Get one memory detail by its memory ID."""
         self._validate_required_params(memid=memid)
 
         url = f"{self.base_url}/get/memory/{quote(memid, safe='')}"
-        params = {k: v for k, v in (("space_id", space_id), ("view", view)) if v is not None}
+        params = {
+            k: v
+            for k, v in (
+                ("space_id", space_id),
+                ("view", view),
+                ("conversation_id", conversation_id),
+                ("kind", kind),
+            )
+            if v is not None
+        }
         for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.get(

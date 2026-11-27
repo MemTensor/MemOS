@@ -9,7 +9,6 @@ from memos.configs.project_memory_limits import LIMITS, cut_at_sentence
 
 
 ENTRY_FIELDS = {"decision": "decisions", "experience": "experiences", "timeline": "timeline"}
-ITEM_TYPES = ("topic", *ENTRY_FIELDS)
 
 
 def budget(seconds: float) -> float:
@@ -121,29 +120,6 @@ def entry_view(kind: str, payload: dict, full: bool) -> dict:
             for field in ("card", "sources", "version"):
                 data.pop(field, None)
     return data
-
-
-def component(kind: str, payload: dict, header: dict, space: str, full: bool) -> dict:
-    if kind == "topic":
-        members = {u for source in header.get("sources", []) for u in source.get("user_id", [])}
-        data = {
-            "id": header["id"],
-            "content": header["topic_summary"],
-            "time": header["update_time"],
-            "topic_description": header["topic_description"],
-            "user_ids": sorted(members),
-        }
-        if full:
-            data.update(sources=header["sources"], create_time=header["create_time"])
-    else:
-        data = entry_view(kind, payload, full)
-    return {
-        **data,
-        "topic_id": header["id"],
-        "space_id": space,
-        "domain": header["domain"],
-        "topic_name": header["topic_name"],
-    }
 
 
 def topic_detail(header: dict, space: str, entries: list[tuple], full: bool) -> dict:

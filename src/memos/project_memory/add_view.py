@@ -15,7 +15,6 @@ from .add_entry_fields import (
     experience_user_id,
 )
 from .add_layout import load_topics
-from .add_publish import publish_topics, retract_topics, sync_space
 from .add_store import json_value, record_event
 from .graph_store import cosine, lexical_sim
 from .types import (
@@ -137,8 +136,7 @@ class RelationalProjectView:
             cursor.execute("SELECT * FROM spaces WHERE id = %s FOR UPDATE", (space.space_id,))
             current = cursor.fetchone()
             if current is None:
-                project_id = space.project_id
-                if not project_id:
+                if not space.project_id:
                     raise ValueError("project_id 不能为空")
                 cursor.execute(
                     """INSERT INTO spaces (id, project_id, space_name, instructions, create_time, update_time)
@@ -152,7 +150,6 @@ class RelationalProjectView:
                     ),
                 )
             else:
-                project_id = current["project_id"]
                 if (
                     isinstance(space, _StoredSpace)
                     and space.update_time != current["update_time"].isoformat()
@@ -166,33 +163,16 @@ class RelationalProjectView:
                     (space.space_name, space.instructions, space.space_id),
                 )
             updated_at = cursor.fetchone()["update_time"]
-            renamed = self._replace_domains(cursor, space)
-            if self.store.retrieval_index:
-                sync_space(cursor, project_id, space.space_id)
-                if renamed:
-                    # A Topic's domain name is part of its index snapshot.
-                    cursor.execute(
-                        """UPDATE topics SET version = version + 1
-                           WHERE space_id = %s AND domain_id = ANY(%s) RETURNING id""",
-                        (space.space_id, renamed),
-                    )
-                    publish_topics(
-                        cursor,
-                        project_id,
-                        space.space_id,
-                        [row["id"] for row in cursor.fetchall()],
-                        updated_at,
-                    )
+            self._replace_domains(cursor, space)
             space.update_time = updated_at.isoformat()
 
-    def _replace_domains(self, cursor: Any, space: Space) -> list[str]:
-        """Write the Space's domains and return the IDs of renamed domains."""
+    def _replace_domains(self, cursor: Any, space: Space) -> None:
+        """Write the Space's domains and update pending domain assignments."""
         cursor.execute("SELECT id, domain FROM domains WHERE space_id = %s", (space.space_id,))
         existing = {row["id"]: row["domain"] for row in cursor.fetchall()}
         names = {name: domain_id for domain_id, name in existing.items()}
         tracked = space.domain_ids if isinstance(space, _StoredSpace) else {}
         seen = set()
-        renamed = []
         for domain in space.domains:
             domain_id = tracked.get(id(domain)) or names.get(domain.name) or str(uuid4())
             seen.add(domain_id)
@@ -203,7 +183,6 @@ class RelationalProjectView:
                 (domain_id, space.space_id, domain.name, domain.description),
             )
             if domain_id in existing and existing[domain_id] != domain.name:
-                renamed.append(domain_id)
                 # Unfinished and staged Episodes keep their candidate domains by name.
                 cursor.execute(
                     """UPDATE add_jobs SET domains = array_replace(domains, %s, %s),
@@ -238,7 +217,6 @@ class RelationalProjectView:
                 "DELETE FROM domains WHERE space_id = %s AND id = ANY(%s)",
                 (space.space_id, missing),
             )
-        return renamed
 
     def _clear_topics(self, cursor: Any, space_id: str, now: Any) -> list[str]:
         """Record clear_time, reset Formation, fail the unfinished Episodes, retire the staged
@@ -246,10 +224,9 @@ class RelationalProjectView:
         cursor.execute(
             """UPDATE spaces SET clear_time = %s, last_formation_time = NULL,
                       formation_version = formation_version + 1
-               WHERE id = %s RETURNING project_id""",
+               WHERE id = %s""",
             (now, space_id),
         )
-        project_id = cursor.fetchone()["project_id"]
         error = {"reason": "SPACE_CLEARED", "message": "Space was cleared"}
         cursor.execute(
             """WITH pending AS (
@@ -296,9 +273,6 @@ class RelationalProjectView:
         )
         cursor.execute("DELETE FROM topics WHERE space_id = %s RETURNING id", (space_id,))
         removed = sorted(row["id"] for row in cursor.fetchall())
-        if self.store.retrieval_index:
-            # clear_time hides every snapshot accepted before the clear.
-            sync_space(cursor, project_id, space_id)
         return removed
 
     def clear_space_topics(self, space_id: str) -> list[str]:
@@ -314,11 +288,8 @@ class RelationalProjectView:
 
     def delete_space_nodes(self, space_id: str) -> int:
         with self.store.transaction() as cursor:
-            cursor.execute("DELETE FROM spaces WHERE id = %s RETURNING project_id", (space_id,))
-            removed = cursor.fetchall()
-            if removed and self.store.retrieval_index:
-                sync_space(cursor, removed[0]["project_id"], space_id)
-            return len(removed)
+            cursor.execute("DELETE FROM spaces WHERE id = %s", (space_id,))
+            return cursor.rowcount
 
     def _topic_by_id(self, topic_id: str, space_id: str | None = None) -> dict[str, Any] | None:
         with self.store.transaction(readonly=True) as cursor:
@@ -352,8 +323,6 @@ class RelationalProjectView:
             cursor.execute(
                 "DELETE FROM topics WHERE space_id = %s AND id = %s", (topic.space_id, topic.id)
             )
-            if self.store.retrieval_index and cursor.rowcount:
-                self._retract(cursor, topic.space_id, [topic.id])
 
     def delete_topics(self, space_id: str, topic_ids: list[str]) -> list[str]:
         if not topic_ids:
@@ -370,16 +339,7 @@ class RelationalProjectView:
             missing = set(topic_ids) - removed
             if missing:
                 raise LookupError(f"主题不在这个 Space 里：{sorted(missing)}")
-            if self.store.retrieval_index:
-                self._retract(cursor, space_id, sorted(removed))
             return sorted(removed)
-
-    def _retract(self, cursor: Any, space_id: str, topic_ids: list[str]) -> None:
-        cursor.execute(
-            "SELECT project_id, clock_timestamp() AS now FROM spaces WHERE id = %s", (space_id,)
-        )
-        row = cursor.fetchone()
-        retract_topics(cursor, row["project_id"], space_id, topic_ids, row["now"])
 
     def delete_index(self, key: str) -> None:
         """Indexes are derived by the database and cleared with their authoritative rows."""

@@ -15,6 +15,7 @@ from typing import Any
 from memos.api.handlers import project_view
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
+from memos.api.handlers.project_retrieval import add_project_candidates
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.dream.contextualization import CONTEXT_MEMORY_TYPE
 from memos.log import get_logger, summarize_search_request, summarize_search_results
@@ -95,7 +96,7 @@ class SearchHandler(BaseHandler):
 
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
-        results = cube_view.search_memories(search_req_local)
+        results = add_project_candidates(cube_view.search_memories(search_req_local))
         hooked_results = trigger_hook(
             H.SEARCH_MEMORY_RESULTS,
             handler=self,

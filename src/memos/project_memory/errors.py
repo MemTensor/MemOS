@@ -24,8 +24,6 @@ REASONS: list[tuple[str, int, str]] = [
     ("space_name 不能为空", 400, "FIELD_EMPTY"),
     ("领域名称不能为空", 400, "FIELD_EMPTY"),
     ("filter", 400, "INVALID_FILTER"),
-    ("project_item_types", 400, "INVALID_PARAM"),
-    ("project_result_format", 400, "INVALID_PARAM"),
     ("user_id and space_ids are required", 422, "SCOPE_REQUIRED"),
     ("space_ids accepts at most", 422, "TOO_MANY_SPACES"),
     ("space_ids", 422, "INVALID_PARAM"),
