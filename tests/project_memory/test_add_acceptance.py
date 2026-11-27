@@ -185,6 +185,37 @@ def test_preserves_assistant_tool_link_and_full_original_output(add_store):
     assert output["content"] == raw_output
 
 
+def test_accepts_nul_in_tool_output_and_detects_changed_source(add_store):
+    _spaces(add_store, "space-a")
+    accept = AddAcceptance(add_store)
+    request = _request("task-a", "message-a", conversation_id=None)
+    call = {"id": "call", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+    output = {
+        "role": "tool",
+        "message_id": "output-message",
+        "tool_call_id": "call",
+        "content": "prefix\x00suffix",
+    }
+    request.messages.extend([{"role": "assistant", "tool_calls": [call]}, output])
+
+    receipt = accept.accept(request)
+    episode = add_store.load_episode(receipt.closed_episode_ids[0])
+    saved = episode["messages"][-1]
+    assert saved["message_id"] == "output-message"
+    assert saved["tool_call_id"] == "call"
+    assert saved["content"] == r"prefix\x00suffix"
+    assert accept.accept(request).duplicate
+
+    output["content"] = saved["content"]
+    with pytest.raises(AddRequestError, match="output-message") as error:
+        accept.accept(request)
+    assert error.value.reason == "MESSAGE_ID_CONFLICT"
+
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT COUNT(*) AS count FROM messages")
+        assert cursor.fetchone()["count"] == 2
+
+
 def test_keeps_system_source_without_turn_or_anchor_authority(add_store):
     from memos.project_memory.add_extraction import extract_episode
 
