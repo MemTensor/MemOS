@@ -810,44 +810,26 @@ class ProjectMemoryService:
     # ═════════════════════════════════ 读取 ══════════════════════════════════
 
     def search(self, req: Any) -> list[dict[str, Any]]:
-        """按主题返回（`topic_detail_list` 的内容）。"""
-        return self.search_result(req).get("topic_detail_list", [])
+        return self.search_result(req)["project_item_list"]
 
     def search_result(self, req: Any) -> dict[str, Any]:
-        """search/memory：`project_result_format` 为 topic（默认）时返回 `topic_detail_list`，
-        为 item 时返回平铺的 `project_item_list`（一个组件一项）；`project_item_types` 限定组件类别。"""
+        """Graph-backed project searches can provide only the topic lane."""
         # 没显式传就用项目记忆自己的默认值：企业版请求模型里这个字段默认 10、上限 30，
         # 是给个人记忆用的，不能直接拿来当主题条数
         explicit = "memory_limit_number" in (getattr(req, "model_fields_set", None) or set())
         given = getattr(req, "memory_limit_number", None) if explicit else None
         limit = max(1, min(int(given or DEFAULT_LIMIT), MAX_LIMIT))
-        types = _item_types(req)
-        fmt = getattr(req, "project_result_format", None) or "topic"
-        if fmt not in ("topic", "item"):
-            raise ValueError("project_result_format 只支持 topic / item")
         query = req.query
         conv = getattr(req, "conversation_id", None) or getattr(req, "session_id", None)
         scored = self._scored_topics(req, query, conv, limit)
-        if fmt == "topic":
-            return {
-                "topic_detail_list": [
-                    self.topic_detail(t, query=query, relativity=min(1.0, s), types=types)
-                    for s, t in scored[:limit]
-                ]
-            }
-        items: dict[str, dict[str, Any]] = {}
-        for s, t in scored:
-            for it in self._topic_items(t, query, min(1.0, s), types):
-                if it["id"] not in items or it["relativity"] > items[it["id"]]["relativity"]:
-                    items[it["id"]] = it
-        ranked = sorted(items.values(), key=lambda x: x["relativity"], reverse=True)
-        return {"project_item_list": ranked[:limit]}
+        return {
+            "project_item_list": [
+                self.topic_detail(t, query=query, relativity=min(1.0, s)) for s, t in scored[:limit]
+            ]
+        }
 
     def check_search(self, req: Any) -> None:
         """只做校验（Space 存在、领域已登记、组件参数合法），混合检索在核心链路里真正检索前调。"""
-        _item_types(req)
-        if (getattr(req, "project_result_format", None) or "topic") not in ("topic", "item"):
-            raise ValueError("project_result_format 只支持 topic / item")
         domains = as_list(getattr(req, "domains", None))
         for space_id in as_list(req.space_ids):
             space = self.get_space(space_id)
@@ -884,19 +866,6 @@ class ProjectMemoryService:
             out["relativity"] = round(rel, 4)
         return out
 
-    def _topic_base(self, t: Topic, full: bool) -> dict[str, Any]:
-        out = {
-            "id": t.id,
-            "content": t.summary,
-            "time": t.update_time,
-            "user_ids": sorted(t.related_user_ids()),
-            "topic_description": t.description,
-        }
-        if full:
-            out["sources"] = t.sources
-            out["create_time"] = t.create_time
-        return out
-
     @staticmethod
     def _timeline_base(x: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -905,30 +874,6 @@ class ProjectMemoryService:
             "time": x.get("time", ""),
             "user_ids": x.get("user_ids", []),
         }
-
-    def _topic_items(self, t: Topic, query: str, rel: float, types: list[str]) -> list[dict]:
-        out: list[dict[str, Any]] = []
-        if "topic" in types:
-            out.append(self._item("topic", t, self._topic_base(t, False), rel))
-        if "decision" in types:
-            ds = self.store.list_decisions(t.space_id, t.id)
-            for s, d in self._scored(query, ds, lambda d: d.index_text):
-                out.append(self._item("decision", t, self._decision_out(d, False), s))
-        if "experience" in types:
-            es = [
-                e
-                for e in self.store.list_experiences(t.space_id)
-                if t.id in e.topic_ids and exp.lifecycle(e) != "archived"
-            ]
-            for s, e in self._scored(
-                query, es, lambda e: e.memory_text, weight=lambda e: e.confidence
-            ):
-                out.append(self._item("experience", t, self._experience_out(e, False), s))
-        if "timeline" in types:
-            tl = [x for x in t.timeline if x.get("id")]
-            for s, x in self._scored(query, tl, lambda x: x.get("content", "")):
-                out.append(self._item("timeline", t, self._timeline_base(x), s))
-        return out
 
     def get_by_id(self, memory_id: str) -> dict[str, Any] | None:
         """主题 ID → `topic_detail_list`；决策、经验、进展条目的 ID → `project_item_list`（完整
@@ -982,7 +927,6 @@ class ProjectMemoryService:
         query: str | None = None,
         user_id: str = "",
         relativity: float | None = None,
-        types: list[str] | None = None,
     ) -> dict[str, Any]:
         """query 为 None：完整返回（get/memory）；否则只带与 query 相关的条目、不带来源（search/memory）。"""
         full = query is None
@@ -1006,10 +950,6 @@ class ProjectMemoryService:
             experiences.sort(
                 key=lambda e: (e.exp_status != EXP_VERIFIED, -e.confidence, _newest(e.time))
             )
-        if types is not None:  # project_item_types：只带要的那几类条目
-            decisions = decisions if "decision" in types else []
-            experiences = experiences if "experience" in types else []
-            timeline = timeline if "timeline" in types else []
         out = {
             "id": t.id,
             "space_id": t.space_id,
@@ -1257,17 +1197,6 @@ _TIME_OPS = {
     "lt": lambda a, b: a < b,
     "eq": lambda a, b: a == b,
 }
-
-
-ITEM_TYPES = ("topic", "decision", "experience", "timeline")
-
-
-def _item_types(req: Any) -> list[str]:
-    raw = as_list(getattr(req, "project_item_types", None))
-    bad = [x for x in raw if x not in ITEM_TYPES]
-    if bad:
-        raise ValueError(f"project_item_types 不支持：{bad}，可选 {list(ITEM_TYPES)}")
-    return raw or list(ITEM_TYPES)
 
 
 def _newest(value: Any) -> float:

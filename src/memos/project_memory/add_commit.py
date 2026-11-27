@@ -34,7 +34,6 @@ from .add_layout import aware_time, current_schema, load_topics, mark_topics
 from .add_layout import topic_create as build_create
 from .add_layout import topic_update as build_update
 from .add_merge import VersionConflictError
-from .add_publish import publish_topics, sync_space
 from .add_store import KEEP_PERSISTENT, PERSISTENT_KEYS, json_value, load_episode, read_space
 from .add_store import record_event as add_event
 from .types import time_key
@@ -398,9 +397,6 @@ def commit_changeset(
         # Formation merges several Episodes: the change set is as old as the earliest.
         accepted = min((row["accept_time"] for row in scoped.values()), key=time_key)
         ids, created = _write_topics(cursor, changeset, scoped, accepted, key)
-        if store.retrieval_index:
-            sync_space(cursor, scope["project_id"], space)
-            publish_topics(cursor, scope["project_id"], space, sorted(set(ids.values())), now)
         _write_staged_updates(cursor, changeset, scoped, ids, now, skip=current["id"])
         if formation:
             _advance_formation(cursor, space, now)
@@ -429,9 +425,6 @@ def commit_formation(store: PostgresAddStore, changeset: dict) -> dict:
         if changeset["topics"]:
             accepted = min((row["accept_time"] for row in scoped.values()), key=time_key)
             ids, created = _write_topics(cursor, changeset, scoped, accepted, key)
-        if store.retrieval_index:
-            sync_space(cursor, scope["project_id"], space)
-            publish_topics(cursor, scope["project_id"], space, sorted(set(ids.values())), now)
         _write_staged_updates(cursor, changeset, scoped, ids, now)
         _advance_formation(cursor, space, now)
     return {

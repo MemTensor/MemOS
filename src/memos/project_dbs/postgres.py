@@ -140,6 +140,10 @@ def install_schema(cursor: Any, ddl: str, schema: str = SCHEMA) -> str:
         if is_legacy_layout(cur, schema):
             migrate_legacy_layout(cur, ddl, schema)
             return "migrated"
+        cur.execute("SELECT to_regclass(%s)", (f"{schema}.turns",))
+        if cur.fetchone()[0] is None:
+            cur.execute(ddl)
+            return "updated"
     return "current"
 
 

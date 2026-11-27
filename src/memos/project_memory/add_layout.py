@@ -258,12 +258,14 @@ _TOPIC_SELECT = """SELECT t.id, t.space_id, t.domain_id, d.domain, t.topic_name,
   JOIN domains d ON d.space_id = t.space_id AND d.id = t.domain_id"""
 
 
-def load_topics(cursor: Any, where: str, params: tuple) -> list[dict[str, Any]]:
+def load_topics(
+    cursor: Any, where: str, params: tuple, *, entry_ids: list[str] | None = None
+) -> list[dict[str, Any]]:
     """Topics matching `where` (over `topics t`, `spaces s`, `domains d`) as Add dicts.
 
     Entries are the ACTIVE rows plus retired (ARCHIVED) experiences in chat-time order;
-    decisions carry their history and conflicts. Topics come in get/memory order: the
-    importance key first (topics.extra.rank_time, see project_dbs.ranking), then update time."""
+    decisions carry their history and conflicts. Retrieval can restrict entries to matched IDs.
+    Topics use the shared get/memory importance order."""
     cursor.execute(f"{_TOPIC_SELECT} WHERE {where} ORDER BY {TOPIC_ORDER}", params)
     topics = cursor.fetchall()
     if not topics:
@@ -283,13 +285,17 @@ def load_topics(cursor: Any, where: str, params: tuple) -> list[dict[str, Any]]:
             **{key: extra.get(key) for key in TOPIC_EXTRA_FIELDS},
             **{field: [] for _, field in ENTRY_FIELDS},
         }
+    if entry_ids == []:
+        return list(by_id.values())
+    entry_filter = "AND e.id = ANY(%s)" if entry_ids is not None else ""
     with tuple_cursor(cursor) as cur:
         cur.execute(
             f"""SELECT {_ENTRY_COLS} FROM project_entries e
                 WHERE e.topic_id = ANY(%s) AND e.parent_decision_id IS NULL
                   AND (e.status = %s OR (e.entry_type = 'experience' AND e.status = %s))
-                ORDER BY e.chat_time, e.id COLLATE "C" """,
-            (list(by_id), int(EntryStatus.ACTIVE), int(EntryStatus.ARCHIVED)),
+                {entry_filter} ORDER BY e.chat_time, e.id COLLATE "C" """,
+            (list(by_id), int(EntryStatus.ACTIVE), int(EntryStatus.ARCHIVED))
+            + ((entry_ids,) if entry_ids is not None else ()),
         )
         entries = entries_from_rows(cur, cur.fetchall(), with_children=True, schema=schema)
     fields = dict(ENTRY_FIELDS)

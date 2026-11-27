@@ -17,7 +17,6 @@ from .add_entry_fields import experience_version
 from .add_layout import import_topics
 from .add_legacy import LegacyArchive, read_legacy_postgres, read_legacy_sqlite
 from .add_legacy_episodes import rebuild_legacy_trajectories, recorded_time
-from .add_publish import publish_topics, sync_space
 from .add_store import PostgresAddStore, json_value
 from .config import postgres_config
 from .types import (
@@ -254,18 +253,6 @@ def apply_migration(store: PostgresAddStore, plan: MigrationPlan) -> None:
                 import_topics(cursor, plan.topics)
             else:
                 _insert_rows(cursor, table, getattr(plan, table))
-        if store.retrieval_index:
-            cursor.execute("SELECT clock_timestamp() AS now")
-            now = cursor.fetchone()["now"]
-            for space in plan.spaces:
-                sync_space(cursor, project_id, space["id"])
-                publish_topics(
-                    cursor,
-                    project_id,
-                    space["id"],
-                    [topic["id"] for topic in plan.topics if topic["space_id"] == space["id"]],
-                    now,
-                )
         for source in plan.messages:
             cursor.execute(
                 """SELECT content_sha256 FROM messages WHERE project_id = %s AND

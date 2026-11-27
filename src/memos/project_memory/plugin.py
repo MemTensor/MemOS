@@ -33,16 +33,6 @@ logger = get_logger(__name__)
 PROJECT_RESULT_KIND = "project_mem"  # 项目记忆在核心检索结果里的类别名
 
 
-class _PluginMessages:
-    """Message store adapter for `memos.project_memory.messages.read_messages`."""
-
-    def __init__(self, plugin: Any) -> None:
-        self.plugin = plugin
-
-    def list_messages(self, space_id: str, conversation_id: str) -> list:
-        return self.plugin.service.store.list_messages(space_id, conversation_id)
-
-
 class CommunityProjectMemoryPlugin(MemOSPlugin):
     name = "project_memory"
     version = "0.2.0"
@@ -107,8 +97,6 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             shared.get("project_embedder") or pm_config.build_embedder() or shared.get("embedder")
         )
         self._service = None
-        # The retrieval service's /get_message reads the messages this plugin stored.
-        context.setdefault("project_message_store", _PluginMessages(self))
 
     def init_app(self) -> None:
         from fastapi.responses import JSONResponse
@@ -204,6 +192,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
                 legacy_status=view.legacy_task_status if archive else None,
             )
             self._runtime.start()
+            shared["project_add_store"] = postgres
             return ProjectMemoryService(view, hub, lock=self._lock)
         except Exception:
             postgres.close()
@@ -270,7 +259,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         只要项目记忆：插件直接回答（同样按请求的 `relativity` 过门槛）。同时要个人记忆：这里只做
         校验（报错要在这里抛，钩子里的异常会被吞掉），检索交给核心链路：`search.memory_results`
         把项目记忆的候选作为 `project_mem` 一类加进结果，核心照常过门槛，`after_rerank` 再组成
-        `topic_detail_list` / `project_item_list`。
+        `project_item_list`。
         """
         from memos.api.handlers.project_view import (
             _fill_readable_cube_ids,
@@ -291,6 +280,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             raise from_service(e) from e
         rel = float(getattr(request, "relativity", 0) or 0)
         found = {k: [x for x in v if x.get("relativity", 1.0) >= rel] for k, v in found.items()}
+        found.update(degraded=["trajectory", "episode"], truncated=False)
         return {"code": 200, "message": "Search completed successfully", "data": found}
 
     def _search_add_bucket(
@@ -328,10 +318,13 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         """search.results.after_rerank：把过完门槛的 `project_mem` 组成对外的列表。"""
         if not isinstance(results, dict):
             return results
-        buckets = results.pop(PROJECT_RESULT_KIND, None)
-        if not buckets:
+        buckets = results.get(PROJECT_RESULT_KIND)
+        # Only the plugin's own bucket needs conversion. The relational retrieval
+        # adapter reads its ranked project keys after personal search returns.
+        if not buckets or "list_key" not in buckets[0]:
             return results
-        key = buckets[0].get("list_key") or "topic_detail_list"
+        del results[PROJECT_RESULT_KIND]
+        key = buckets[0]["list_key"]
         results[key] = [
             m["payload"] for b in buckets for m in b.get("memories") or [] if m.get("payload")
         ]

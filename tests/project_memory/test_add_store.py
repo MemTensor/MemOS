@@ -36,6 +36,7 @@ def test_schema_and_rollback(add_store):
             "spaces",
             "domains",
             "topics",
+            "turns",
             "project_entries",
             "add_jobs",
             "add_episode_events",

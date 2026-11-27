@@ -261,8 +261,10 @@ def test_search_get_and_delete(app):
         "relativity": 0,  # 替身向量的分数偏低，这里只看结构；门槛另有用例
     }
     data = client.post("/product/search", json=body).json()["data"]
-    assert list(data) == ["topic_detail_list"], "只要 project 时不走个人记忆"
-    topic = data["topic_detail_list"][0]
+    assert set(data) == {"project_item_list", "degraded", "truncated"}, (
+        "只要 project 时不走个人记忆"
+    )
+    topic = data["project_item_list"][0]
     for k in (
         "id",
         "space_id",

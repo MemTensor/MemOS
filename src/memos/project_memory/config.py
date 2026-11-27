@@ -171,8 +171,6 @@ def postgres_config(embedding_dimension: int | None = None) -> dict[str, Any]:
         "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
         .strip()
         .lower(),
-        # Publish the search index in the same transaction as the PostgreSQL Add.
-        "retrieval_index": True,
     }
 
 

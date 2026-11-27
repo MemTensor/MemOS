@@ -187,3 +187,16 @@ CREATE INDEX IF NOT EXISTS idx_episodes_topic        ON project_memory.episodes 
 CREATE INDEX IF NOT EXISTS idx_episodes_search_tsv   ON project_memory.episodes USING gin (search_tsv);
 -- 摘要向量检索
 CREATE INDEX IF NOT EXISTS idx_episodes_embedding    ON project_memory.episodes USING hnsw (embedding vector_cosine_ops);
+
+-- One semantic search document per Turn. Messages are shared between Spaces;
+-- visibility is derived from the containing Episode at read time.
+CREATE TABLE IF NOT EXISTS project_memory.turns (
+    project_id        TEXT NOT NULL,
+    conversation_key  TEXT NOT NULL,
+    turn_id           TEXT NOT NULL,
+    msg_ids           TEXT[] NOT NULL CHECK (cardinality(msg_ids) > 0),
+    content           TEXT NOT NULL,
+    embedding         vector({embedding_dimension}),
+    PRIMARY KEY (project_id, conversation_key, turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_turns_embedding ON project_memory.turns USING hnsw (embedding vector_cosine_ops);

@@ -47,6 +47,7 @@ from .add_extraction import extract_episode, jsonable
 from .add_index import index_changeset, ranked_topics
 from .add_merge import VersionConflictError, prepare_merge, rebase_append_only, rewrite_metadata
 from .judge import ModelError
+from .turns import evidence_vectors
 
 
 if TYPE_CHECKING:
@@ -571,6 +572,17 @@ class EpisodeAddRuntime:
             "warnings": warnings,
         }
         summary = {"episode_summary": result["episode_summary"] or None}
+        try:
+            summary["embedding"], turns = evidence_vectors(
+                episode["messages"], summary["episode_summary"], self.embedder, self.store.dim
+            )
+        except ModelError:
+            if lease.data.get("retries", 0) < 3:
+                raise
+            warnings.append("EVIDENCE_EMBEDDING_UNAVAILABLE")
+            summary["embedding"], turns = evidence_vectors(
+                episode["messages"], summary["episode_summary"], None, self.store.dim
+            )
         if result["drafts"]:
             self._advance(
                 lease,
@@ -579,6 +591,7 @@ class EpisodeAddRuntime:
                 organize_result={"queued": True},
                 persist=persist,
                 episode=summary,
+                turns=turns,
             )
         else:
             self._advance(
@@ -589,6 +602,7 @@ class EpisodeAddRuntime:
                 organize_result={},
                 persist=persist,
                 episode=summary,
+                turns=turns,
             )
 
     def _judge_boundary(self, lease: StageLease, episode: dict, warnings: list[str]) -> dict:

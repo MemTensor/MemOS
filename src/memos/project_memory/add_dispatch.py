@@ -64,7 +64,7 @@ TERMINAL_OUTCOMES = ("committed", "staged", "skipped", "failed")
 # add_jobs columns `advance` may set; `persist` and `episode` are handled apart.
 _JOB_FIELDS = {"stage", "outcome", "attempt", "drafts", "error", "next_retry_time", "topic_ids"}
 _JSON_FIELDS = {"drafts", "error"}
-_EPISODE_FIELDS = {"episode_summary", "topic_id"}
+_EPISODE_FIELDS = {"episode_summary", "topic_id", "embedding"}
 
 
 def label_for(episode: dict[str, Any]) -> str | None:
@@ -178,6 +178,7 @@ class EpisodeDispatch:
         *,
         persist: dict[str, Any] | None = None,
         episode: dict[str, Any] | None = None,
+        turns: list[tuple] | None = None,
         **fields: Any,
     ) -> bool:
         """Hand the Episode on if this lease still owns its stage.
@@ -222,6 +223,16 @@ class EpisodeDispatch:
                 cursor.execute(
                     sql.SQL("UPDATE episodes SET {} WHERE id = %s").format(columns),
                     (*episode.values(), lease.episode_id),
+                )
+            if applied and turns:
+                cursor.executemany(
+                    """INSERT INTO turns AS t (project_id, conversation_key, turn_id, msg_ids, content, embedding)
+                       SELECT project_id, conversation_key, %s, %s, %s, %s::vector
+                       FROM add_jobs WHERE episode_id = %s
+                       ON CONFLICT (project_id, conversation_key, turn_id) DO UPDATE
+                       SET msg_ids = EXCLUDED.msg_ids, content = EXCLUDED.content, embedding = EXCLUDED.embedding
+                       WHERE t.msg_ids <@ EXCLUDED.msg_ids""",
+                    [(*turn, lease.episode_id) for turn in turns],
                 )
             error = fields.get("error") or (persist or {}).get("last_error") or {}
             retrying = fields.get("next_retry_time") is not None

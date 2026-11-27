@@ -176,7 +176,7 @@ def check_migrated(cur, s: str) -> None:
         (s,),
     )
     assert {r[0] for r in tables} == {
-        "spaces", "domains", "topics", "project_entries", "messages", "episodes",
+        "spaces", "domains", "topics", "project_entries", "messages", "episodes", "turns",
         "add_space_state", "add_episode_events",
         "legacy_messages_v1", "legacy_episodes_v1", "legacy_episode_turns_v1",
     }  # fmt: skip

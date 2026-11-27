@@ -13,13 +13,15 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request
 
-from memos.api.product_models import APISearchRequest, ProjectListRequest, ProjectMessagesRequest
+from memos.api.product_models import (
+    APISearchRequest,
+    ProjectEntryListRequest,
+    ProjectListRequest,
+    ProjectMessagesRequest,
+)
 from memos.log import get_logger
-from memos.plugins.hook_defs import H
-from memos.plugins.hooks import register_hook
 from memos.project_memory.index import Vector
-from memos.project_memory.messages import read_messages
-from memos.project_memory.retrieval import PERSONAL_GROUPS, PROJECT_GROUPS, ProjectRetrieval
+from memos.project_memory.retrieval import PERSONAL_GROUPS, ProjectRetrieval
 from memos.project_memory.store import (
     AmbiguousMemoryError,
     Hit,
@@ -28,7 +30,7 @@ from memos.project_memory.store import (
     Scope,
     UnknownDomainError,
 )
-from memos.project_memory.views import ITEM_TYPES, budget
+from memos.project_memory.views import budget
 
 
 logger = get_logger(__name__)
@@ -49,7 +51,7 @@ class ProjectReadError(HTTPException):
 _project_candidates: ContextVar[Future | None] = ContextVar("project_candidates", default=None)
 
 
-def _add_project_bucket(results: dict, **kwargs) -> dict:
+def add_project_candidates(results: dict) -> dict:
     ready = _project_candidates.get()
     if ready is not None:
         hits = ready.result(timeout=budget(0.30))
@@ -68,9 +70,6 @@ def _add_project_bucket(results: dict, **kwargs) -> dict:
             }
         ]
     return results
-
-
-register_hook(H.SEARCH_MEMORY_RESULTS, _add_project_bucket)
 
 
 @dataclass(frozen=True)
@@ -100,7 +99,7 @@ def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]
         yield
         return
 
-    project_db = components.get("project_db")
+    project_db = components.get("project_db") or components.get("project_add_store")
     with ExitStack() as cleanup:
         if project_db is not None:
             pool = project_db.pool
@@ -119,7 +118,13 @@ def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]
 
         embedder = components.get("project_embedder") or components.get("embedder")
         service = ProjectRetrieval(
-            RetrievalStore(pool), _query_embedder(embedder), components.get("project_message_store")
+            RetrievalStore(
+                pool,
+                getattr(project_db, "schema_name", None)
+                or os.getenv("PROJECT_MEMORY_POSTGRES_SCHEMA")
+                or "project_memory",
+            ),
+            _query_embedder(embedder),
         )
         cleanup.callback(service.close)
         app.state.project_retrieval = service
@@ -211,18 +216,13 @@ async def search_project(
     request: Request, req: APISearchRequest, personal_handler: Callable
 ) -> dict:
     views = list(dict.fromkeys(req.include_memory_view or []))
-    if set(views) - PROJECT_GROUPS.keys() - PERSONAL_GROUPS.keys():
+    if set(views) - {"project"} - PERSONAL_GROUPS.keys():
         raise ProjectReadError(400, "INVALID_PARAM", "Unsupported memory view")
     if not req.query.strip() or not req.user_id.strip():
         raise ProjectReadError(422, "SCOPE_REQUIRED", "query and user_id must be non-empty")
     spaces = _names(req.space_ids, "space_ids")
     domains = _names(req.domains, "domains") if "domains" in req.model_fields_set else []
     limit = min(25, max(1, req.memory_limit_number or 9))
-    types = tuple(dict.fromkeys(req.project_item_types or ITEM_TYPES))
-    if set(types) - set(ITEM_TYPES) or req.project_result_format not in {"topic", "item"}:
-        raise ProjectReadError(
-            400, "INVALID_PARAM", "Invalid project component type or result format"
-        )
     if req.conversation_id and req.session_id and req.conversation_id != req.session_id:
         raise HTTPException(422, "Conflicting session identifiers")
     scope = _scope(request, spaces, domains)
@@ -236,8 +236,6 @@ async def search_project(
             views,
             limit,
             partial(_personal_search, personal_handler, req, personal_views, limit),
-            item_types=types,
-            result_format=req.project_result_format,
             threshold=req.relativity,
         )
     except MissingSpaceError as exc:
@@ -251,32 +249,44 @@ async def search_project(
 
 
 async def get_project(
-    request: Request, memory_id: str, space_id: str | None, view: str | None
+    request: Request,
+    memory_id: str,
+    space_id: str | None,
+    view: str | None,
+    kind: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict | None:
     scope = _scope(request, _names(space_id, "space_ids") if space_id is not None else None, [])
     service = _service(request)
     try:
         data = await asyncio.wait_for(
-            asyncio.to_thread(service.store.get, scope, memory_id, view == "metadata"), budget(0.45)
+            asyncio.to_thread(
+                service.store.get, scope, memory_id, view == "metadata", kind, conversation_id
+            ),
+            budget(0.45),
         )
     except AmbiguousMemoryError as exc:
         raise HTTPException(
-            409, "Memory ID exists in multiple readable spaces; supply space_id"
+            409, "Ambiguous memory ID; specify space_id, kind and conversation_id"
         ) from exc
     except Exception as exc:
         logger.warning("Project lookup failed (%s)", type(exc).__name__)
         raise HTTPException(500, "Project retrieval unavailable") from exc
     if data is None:
-        if space_id is None and view is None:
+        if space_id is None and view is None and kind is None:
             return None
         raise HTTPException(404, "Memory not found")
-    if view is None and data["kind"] != "trajectory":
-        key = "topic_detail_list" if data["kind"] == "topic" else "project_item_list"
-        item = {k: v for k, v in data.items() if k not in {"kind", "cache_policy"}}
-        if data["kind"] == "topic":
-            item.pop("topic_id", None)
-        data = {key: [item]}
     return {"code": 200, "message": "Memory retrieved successfully", "data": data}
+
+
+async def list_project_entries(request: Request, req: ProjectEntryListRequest) -> dict:
+    scope = _scope(request, None, [])
+    data = await asyncio.to_thread(
+        _service(request).store.list_entries, scope, req.topic_id, req.type, req.page, req.size
+    )
+    if data is None:
+        raise ProjectReadError(404, "MEMORY_NOT_FOUND", "Topic not found")
+    return {"code": 200, "message": "ok", "data": data}
 
 
 async def list_project(request: Request, req: ProjectListRequest) -> dict:
@@ -290,7 +300,7 @@ async def list_project(request: Request, req: ProjectListRequest) -> dict:
             _service(request).store.list_topics,
             scope,
             req.page,
-            req.page_size or req.size,
+            req.page_size or req.size or 10,
             req.filter or {},
         )
     except MissingSpaceError as exc:
@@ -305,24 +315,14 @@ async def project_messages(request: Request, req: ProjectMessagesRequest) -> dic
         request, _names(req.space_id, "space_ids") if req.space_id is not None else None, []
     )
     service = _service(request)
-    by_tenant = await asyncio.to_thread(service.store.spaces_by_tenant, scope)
-    if req.space_id is not None and not by_tenant:
-        raise ProjectReadError(404, "SPACE_NOT_FOUND", "Space not found")
-    if service.message_store is None:
-        raise HTTPException(500, "Project message store is not configured")
-    msgs = []
-    for spaces in by_tenant.values():
-        batch = await asyncio.to_thread(
-            read_messages,
-            service.message_store,
-            spaces,
-            req.conversation_id,
-            req.message_limit_number,
+    try:
+        msgs = await asyncio.to_thread(
+            service.store.messages, scope, req.conversation_id, req.message_limit_number
         )
-        if batch:
-            if msgs:
-                raise HTTPException(
-                    409, "Conversation ID exists in multiple tenants; supply space_id"
-                )
-            msgs = batch
+    except MissingSpaceError as exc:
+        raise ProjectReadError(404, "SPACE_NOT_FOUND", "Space not found") from exc
+    except AmbiguousMemoryError as exc:
+        raise HTTPException(
+            409, "Conversation ID exists in multiple tenants; supply space_id"
+        ) from exc
     return {"code": 200, "message": "ok", "data": {"message_detail_list": msgs}}

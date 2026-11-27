@@ -636,3 +636,82 @@ def test_a_switch_drops_the_previous_topic_from_recall(store, monkeypatch):
     # First Episode: nothing before it; second: a switch; third: continues the second.
     assert seen[0] is None and seen[1] is None
     assert seen[2]["outcome"] == "staged"
+
+
+def test_extraction_indexes_turn_members_and_episode_summary(store):
+    from memos.project_memory.index import Vector
+    from memos.project_memory.store import RetrievalStore, Scope
+
+    work = []
+    hub = Mock()
+    hub.write.return_value = {"episode_summary": "release succeeded", "drafts": []}
+    runtime = EpisodeAddRuntime(
+        store, hub, work.extend, Mock(), embedder=lambda texts: [[1, 0, 0] for _ in texts]
+    )
+    runtime.accept(
+        SimpleNamespace(
+            user_id="member",
+            space_ids=["test"],
+            messages=[
+                {"role": "user", "message_id": "q", "content": "run checks"},
+                {
+                    "role": "tool",
+                    "message_id": "t",
+                    "tool_call_id": "call",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "id": "call",
+                            "function": {"name": "check", "arguments": "{}"},
+                        }
+                    ],
+                    "content": "verbose result",
+                },
+                {"role": "assistant", "message_id": "a", "content": "all green"},
+            ],
+        )
+    )
+    task = work.pop()
+    runtime.handle([task])
+    runtime.handle([task])
+    reader = RetrievalStore(store.pool, store.schema_name)
+    scope = Scope("project", ("test",))
+    vector = Vector(model="fixture", values=[1, 0, 0])
+    hits, partial = reader.recall(scope, "trajectory", "unmatched", vector, None, 9)
+    assert not partial and len(hits) == 1
+    assert hits[0].data["message_ids"] == ["q", "t", "a"]
+    assert "verbose" not in hits[0].data["content"]
+    hits, _ = reader.recall(scope, "episode", "unmatched", vector, None, 9)
+    assert [h.data["content"] for h in hits] == ["release succeeded"]
+
+
+def test_transient_embedding_failure_retries_without_partial_turns(store):
+    work = []
+    hub = Mock()
+    hub.write.return_value = {"episode_summary": "release ready", "drafts": []}
+    embed = Mock(side_effect=[ConnectionError("provider unavailable"), [[1, 0, 0], [0, 1, 0]]])
+    clock = [datetime.now(timezone.utc)]
+    runtime = EpisodeAddRuntime(
+        store, hub, work.extend, Mock(), clock=lambda: clock[0], embedder=embed
+    )
+    runtime.accept(
+        SimpleNamespace(
+            user_id="member",
+            space_ids=["test"],
+            messages=[{"role": "user", "content": "verify release"}],
+        )
+    )
+    runtime.handle([work.pop()])
+    with store.transaction(readonly=True) as cur:
+        cur.execute("SELECT count(*) AS n FROM turns")
+        assert cur.fetchone()["n"] == 0
+        cur.execute("SELECT episode_summary,embedding FROM episodes")
+        assert cur.fetchone() == {"episode_summary": None, "embedding": None}
+    clock[0] += timedelta(seconds=5)
+    runtime.recover()
+    runtime.handle([work.pop()])
+    with store.transaction(readonly=True) as cur:
+        cur.execute("SELECT content FROM turns")
+        assert [row["content"] for row in cur] == ["verify release"]
+        cur.execute("SELECT episode_summary,embedding::text FROM episodes")
+        assert cur.fetchone() == {"episode_summary": "release ready", "embedding": "[0,1,0]"}

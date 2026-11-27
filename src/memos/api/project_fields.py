@@ -65,7 +65,7 @@ class ProjectSearchFields(BaseModel):
     include_memory_view: list[str] | None = Field(
         None,
         description=(
-            "Memory views to search. Include 'project' to search project memory; "
+            "The project view searches topics and entries, messages or turn skeletons, and episode summaries. "
             "'project' is never included by default."
         ),
     )
@@ -84,26 +84,10 @@ class ProjectSearchFields(BaseModel):
     memory_limit_number: int | None = Field(
         None,
         description=(
-            "Max topics returned (project memory). "
+            "Maximum results across the requested project and personal views. "
             "Default 9; silently capped at 25. "
-            "Does not affect other memory view quotas."
         ),
     )
-    project_item_types: list[str] | None = Field(
-        None,
-        description=(
-            "Project memory components to return: topic / decision / experience / timeline. "
-            "Default all."
-        ),
-    )
-    project_result_format: str = Field(
-        "topic",
-        description=(
-            "'topic' (default): topic_detail_list; "
-            "'item': flat project_item_list, one entry per component."
-        ),
-    )
-
     # Internal flags computed from the view list by the before-validator (client input is
     # overwritten); hidden from the OpenAPI schema and excluded from serialization.
     project_view_flag: SkipJsonSchema[bool] = Field(default=False, exclude=True)

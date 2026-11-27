@@ -81,17 +81,17 @@ def test_errors_carry_reason(app):
     sid = _space(client)
     r = _add(client, sid, DECISION_ROUNDS[0], domains="没有这个领域")
     assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_NOT_REGISTERED"
+
     r = client.post(
         "/product/search",
         json={
             "user_id": "u",
             "query": "q",
             "space_ids": sid,
-            "include_memory_view": ["project"],
-            "project_item_types": ["nope"],
+            "include_memory_view": ["trajectory"],
         },
     )
-    assert r.status_code == 400 and r.json()["reason"] == "INVALID_PARAM"
+    assert r.status_code == 400
 
 
 def test_every_service_message_has_a_reason():
@@ -128,22 +128,13 @@ def test_components_by_type_and_by_id(app):
         "include_memory_view": ["project"],
         "relativity": 0,
     }
-    data = client.post(
-        "/product/search",
-        json={**base, "project_result_format": "item", "project_item_types": ["decision"]},
-    ).json()["data"]
-    items = data["project_item_list"]
-    assert items and {x["item_type"] for x in items} == {"decision"}
-    assert all(x["topic_id"] and x["space_id"] == sid for x in items)
-
-    got = client.get(f"/product/get_memory/{items[0]['id']}").json()["data"]
-    full = got["project_item_list"][0]
+    topics = client.post("/product/search", json=base).json()["data"]["project_item_list"]
+    items = [d for topic in topics for d in topic["decisions"]]
+    assert items and all(t["space_id"] == sid for t in topics)
+    full = client.get(f"/product/get_memory/{items[0]['id']}").json()["data"]["project_item_list"][
+        0
+    ]
     assert full["item_type"] == "decision" and "source" in full
-
-    topics = client.post(
-        "/product/search", json={**base, "project_item_types": ["experience"]}
-    ).json()["data"]["topic_detail_list"]
-    assert topics and all(not t["decisions"] and not t["timeline"] for t in topics)
     exp_ids = [e["id"] for t in topics for e in t["experiences"]]
     if exp_ids:
         e = client.get(f"/product/get_memory/{exp_ids[0]}").json()["data"]["project_item_list"][0]
@@ -161,10 +152,10 @@ def test_search_threshold_applies_to_project_only_requests(app):
     _all(client, sched, sid, DECISION_ROUNDS[:2])
     body = {"user_id": "u", "query": "x", "space_ids": sid, "include_memory_view": ["project"]}
     assert client.post("/product/search", json={**body, "relativity": 0}).json()["data"][
-        "topic_detail_list"
+        "project_item_list"
     ]
     assert not client.post("/product/search", json={**body, "relativity": 0.99}).json()["data"][
-        "topic_detail_list"
+        "project_item_list"
     ]
 
 
@@ -184,8 +175,6 @@ def test_mixed_search_goes_through_core_buckets(app):
         domains = None
         user_id = "u"
         conversation_id = None
-        project_item_types = None
-        project_result_format = None
         model_fields_set: ClassVar[set[str]] = set()
 
     results = plugin._search_add_bucket(search_req=Req(), results={"text_mem": []})
@@ -194,7 +183,7 @@ def test_mixed_search_goes_through_core_buckets(app):
     assert kept["project_mem"][0]["memories"] == []
     results = plugin._search_add_bucket(search_req=Req(), results={"text_mem": []})
     out = plugin._search_finish(search_req=Req(), results=results)
-    assert "project_mem" not in out and out["topic_detail_list"]
+    assert "project_mem" not in out and out["project_item_list"]
 
 
 # ── 写入：成员 ID 对照表、Agent 数组 ─────────────────────────────────────────

@@ -128,6 +128,70 @@ def _tool_calls(value: Any) -> list[dict[str, Any]] | None:
     return calls
 
 
+def _project_messages(raw_messages):
+    """A tool result owns its invocation. Preserve the caller's result ID and input order."""
+    pending = {}
+    matched = set()
+    inputs = {}
+    for pos, msg in enumerate(raw_messages):
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "user":
+            pending.clear()
+        elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+            _tool_calls(msg["tool_calls"])
+            for call in msg["tool_calls"]:
+                pending[call["id"]] = (pos, call)
+        elif (
+            msg.get("role") == "tool"
+            and isinstance(cid := msg.get("tool_call_id"), str)
+            and cid in pending
+        ):
+            owner, inputs[pos] = pending.pop(cid)
+            matched.add((owner, cid))
+
+    for position, raw in enumerate(raw_messages):
+        if isinstance(raw, dict) and raw.get("role") == "assistant" and raw.get("tool_calls"):
+            if raw.get("content") or raw.get("experience_notes"):
+                yield position, {**raw, "tool_calls": None}
+            for index, call in enumerate(raw["tool_calls"]):
+                if (position, call["id"]) in matched:
+                    continue
+                # Calls without an output still constitute a tool message with empty content.
+                single = (
+                    len(raw["tool_calls"]) == 1
+                    and not raw.get("content")
+                    and not raw.get("experience_notes")
+                )
+                yield (
+                    f"{position}:tool:{index}",
+                    {
+                        **raw,
+                        "role": "tool",
+                        "id": None,
+                        "message_id": (raw.get("message_id") or raw.get("id")) if single else None,
+                        "content": "",
+                        "tool_calls": [call],
+                        "tool_call_id": call["id"],
+                    },
+                )
+            continue
+        elif isinstance(raw, dict) and raw.get("role") == "tool":
+            cid = raw.get("tool_call_id")
+            if position in inputs and not raw.get("tool_calls"):
+                raw = {**raw, "tool_calls": [inputs[position]]}
+            if not raw.get("tool_calls"):
+                raise AddRequestError(
+                    "INVALID_PARAMS", "tool message requires the invocation name and arguments"
+                )
+            own = _tool_calls(raw["tool_calls"])
+            if len(own) != 1 or own[0]["id"] != cid:
+                raise AddRequestError(
+                    "INVALID_PARAMS", "tool message must contain its own single invocation"
+                )
+        yield position, raw
+
+
 def normalize_turns(
     raw_messages: Any, task_id: str, user_id: str, member_map: dict[str, str], now: datetime
 ) -> list[list[dict[str, Any]]]:
@@ -137,7 +201,7 @@ def normalize_turns(
     turns: list[list[dict[str, Any]]] = []
     leading_system: list[dict[str, Any]] = []
     message_ids: set[str] = set()
-    for position, raw in enumerate(raw_messages):
+    for position, raw in _project_messages(raw_messages):
         if not isinstance(raw, dict):
             raise AddRequestError("INVALID_PARAMS", "message must be an object")
         role = raw.get("role")
