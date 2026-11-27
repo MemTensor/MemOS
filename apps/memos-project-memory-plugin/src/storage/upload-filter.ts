@@ -4,6 +4,7 @@ import { uploadMessages } from '../adapters/_shared/message-content.ts';
 import type { Message } from '../adapters/types.ts';
 import { object } from '../adapters/_shared/transcript.ts';
 import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
+import { filterAdapterSkills } from '../adapters/skill-filters.ts';
 
 type Trace = { sourceId?: unknown; message?: unknown; raw?: unknown; originSessionId?: unknown; nativeSessionId?: unknown; sessionId?: unknown; nativeTurnId?: unknown; conversationId?: unknown };
 type Call = { id: string; name: string; args: unknown };
@@ -39,10 +40,10 @@ function command(args: Record<string, unknown>): string | undefined {
     return undefined;
 }
 function executionCommands(code: string): string[] {
-    return [...code.matchAll(/\b(?:cmd|command)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g)].map(match => unquote(match[1]!));
+    return [...code.matchAll(/(?:\b(?:cmd|command)|"(?:cmd|command)"|'(?:cmd|command)')\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g)].map(match => unquote(match[1]!));
 }
 /** Upload-only projection. Original rows, visible thinking and business bodies are never modified. */
-export function filterUploadTraces<T extends Trace>(rows: T[]): T[] {
+export function filterUploadTraces<T extends Trace>(rows: T[], agentType = '', skills?: ReadonlySet<string>): T[] {
     const omitted = new Set<string>(), results = new Map<string, number>();
     const messages = rows.map(row => normalizeTaskTrace('', { sourceId: '', raw: parse(row.raw), message: object(row.message) as Message })?.message ?? { role: '', content: '' });
     for (let index = 0; index < rows.length; index++) {
@@ -85,9 +86,14 @@ export function filterUploadTraces<T extends Trace>(rows: T[]): T[] {
         if (!remaining.length) omitted.add(key(rows[index]!, call.id));
         else if (remaining.length !== content.length) replacements.set(end, { ...messages[end]!, content: JSON.stringify(remaining) });
     }
-    const bindingFiltered = filterBindRecords(rows.map((row, index) => ({ ...row, raw: row.raw, sourceId: typeof row.sourceId === 'string' ? row.sourceId : '', nativeTurnId: typeof (row.nativeTurnId ?? row.conversationId) === 'string' ? String(row.nativeTurnId ?? row.conversationId) : undefined, message: replacements.get(index) ?? messages[index]! })));
+    const filtered = filterAdapterSkills(agentType, filterBindRecords(rows.map((row, index) => ({
+        ...row, raw: parse(row.raw), sourceId: typeof row.sourceId === 'string' ? row.sourceId : '',
+        nativeSessionId: typeof (row.nativeSessionId ?? row.sessionId) === 'string' ? String(row.nativeSessionId ?? row.sessionId) : undefined,
+        nativeTurnId: typeof (row.nativeTurnId ?? row.conversationId) === 'string' ? String(row.nativeTurnId ?? row.conversationId) : undefined,
+        message: replacements.get(index) ?? messages[index]!,
+    }))), skills);
     return rows.flatMap((row, index) => {
-        const message = bindingFiltered[index]!.message!;
+        const message = filtered[index]!.message!;
         if (!['user', 'assistant', 'tool'].includes(message.role)) return [];
         if (typeof message.tool_call_id === 'string' && omitted.has(key(row, message.tool_call_id))) return [];
         const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls.filter(value => !omitted.has(key(row, String(object(value).id)))) : message.tool_calls;

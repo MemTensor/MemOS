@@ -44,7 +44,7 @@ async function harness() {
   runInNewContext(source + `
     let reloadCount = 0;
     reload = async () => { reloadCount++; };
-    globalThis.app = { setProjectSpaceMode, get reloadCount() { return reloadCount; },
+    globalThis.app = { setProjectSpaceMode, loadProjectOptions, setBindings(bindings) { state.bindings = bindings; }, get reloadCount() { return reloadCount; },
       select() { window.location.hash='#projects'; adapters=[{agentId:'codex-cli',name:'Codex CLI',installed:true}]; projectOptions=[{name:'First',root:'/first'}]; }
     };`, context);
   context.app.select(); form.elements.agentType.value = 'codex-cli'; form.elements.root.value = '/first';
@@ -69,4 +69,21 @@ test('a known created Space ID survives binding failure and retry uses only exis
   assert.deepEqual(body(h.requests[1]!), { name: 'First', root: '/first', agentType: 'codex-cli', spaceId: 'created-space' });
   h.requests[1]!.finish({ id: 'project', scopeId: 'scope' }); await retry;
   assert.equal(h.app.reloadCount, 1);
+});
+
+test('refresh displays the current Doubao name and keeps the selected directory with an older binding label', async () => {
+  const h = await harness();
+  h.form.elements.agentType.value = 'doubao-work';
+  h.app.setBindings([{ agentType: 'doubao-work', root: '/first', name: 'Old', spaceIds: ['space'] }]);
+  const initial = h.app.loadProjectOptions();
+  h.requests[0]!.finish([{ name: 'Old', root: '/first' }, { name: 'Archived', root: '/second' }]);
+  await initial;
+  h.form.elements.root.value = '/first';
+  const refreshed = h.app.loadProjectOptions(true);
+  assert.equal(h.requests[1]!.path, '/api/projects?agentType=doubao-work&refresh=1');
+  h.requests[1]!.finish([{ name: 'Renamed', root: '/first' }]);
+  await refreshed;
+  assert.deepEqual(h.form.elements.root.children.map(option => option.value), ['', '/first']);
+  assert.match(h.form.elements.root.children[1]!.textContent, /Renamed/);
+  assert.equal(h.form.elements.root.value, '/first');
 });

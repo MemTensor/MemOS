@@ -20,7 +20,8 @@ export class MemoryScopes {
     private store: Store;
     constructor(store: Store, path: string) {
         this.store = store;
-        const migrated = store.rows('PRAGMA table_info(project_agents)').some(column => column.name === 'id');
+        const columns = store.rows('PRAGMA table_info(project_agents)');
+        const migrated = columns.some(column => column.name === 'id');
         if (!migrated && path !== ':memory:' && (store.row('SELECT id FROM sessions LIMIT 1') || store.row('SELECT objectId FROM bindings LIMIT 1'))) {
             const backup = `${path}.before-agent-bindings-${Date.now()}.sqlite`;
             store.db.prepare('VACUUM INTO ?').run(backup); chmodSync(backup, 0o600);
@@ -28,6 +29,7 @@ export class MemoryScopes {
         store.db.exec('BEGIN');
         try {
             if (!migrated) store.db.exec('ALTER TABLE project_agents ADD COLUMN id TEXT');
+            if (!columns.some(column => column.name === 'localName')) store.db.exec('ALTER TABLE project_agents ADD COLUMN localName TEXT');
             if (!store.rows('PRAGMA table_info(bindings)').some(column => column.name === 'boundAt'))
                 store.db.exec('ALTER TABLE bindings ADD COLUMN boundAt TEXT');
             store.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS project_agent_scope ON project_agents(id);
@@ -63,8 +65,19 @@ ON CONFLICT(projectId,agentType) DO UPDATE SET id=excluded.id`).run(projectId, a
         return id;
     }
 
+    syncDoubaoNames(projects: { root: string; name: string }[]) {
+        // A complete snapshot may rename an existing association, never create one.
+        this.store.db.prepare(`WITH known AS (
+            SELECT root, MIN(a.id) AS id FROM project_agents a JOIN projects p ON p.id=a.projectId
+            WHERE a.agentType='doubao-work' GROUP BY root HAVING COUNT(*)=1
+        )
+        UPDATE project_agents AS a SET localName=s.value->>'$.name'
+        FROM json_each(?) AS s JOIN known ON known.root=s.value->>'$.root'
+        WHERE a.id=known.id AND a.localName IS NOT (s.value->>'$.name')`).run(JSON.stringify(projects));
+    }
+
     get(id: string): MemoryScope | undefined {
-        const scope = this.store.row('SELECT a.id,a.projectId,a.agentType,p.name,p.root FROM project_agents a JOIN projects p ON p.id=a.projectId WHERE a.id=?', id);
+        const scope = this.store.row('SELECT a.id,a.projectId,a.agentType,COALESCE(a.localName,p.name) AS name,p.root FROM project_agents a JOIN projects p ON p.id=a.projectId WHERE a.id=?', id);
         if (!scope) return undefined;
         const binding = this.store.binding(id);
         const open = this.store.row('SELECT startedAt FROM capture_windows WHERE scopeId=? AND endedAt IS NULL', id);

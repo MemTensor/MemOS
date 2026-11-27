@@ -50,7 +50,7 @@ export interface CodexParserState {
     historyStartOrdinal?: number;
 }
 export interface CodexReaderState {
-    version: 2 | 3;
+    version: 2 | 3 | 4;
     byteOffset: number;
     fileIdentity: string;
     observedSize: number;

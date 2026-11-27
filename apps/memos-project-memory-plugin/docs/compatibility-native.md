@@ -1,6 +1,6 @@
 # Native adapter verification
 
-Six native extensions and one native Skill integration. `npm run build` preserves extension entries under `dist/adapters/<id>/extension/index.js`; Prime uses `dist/adapters/prime-agent/skill-runner.js` and the local service capture loop.
+Six native extensions and two native Skill integrations. Compiled extension entry points are under `dist/adapters/<id>/extension/index.js`. Prime Agent and Doubao Work invoke their own `dist/adapters/<id>/skill-runner.js` for project-memory queries.
 
 | Adapter | Protocol baseline (not a live compatibility certification) | Session / user turn | Delivery / capture |
 |---|---|---|---|
@@ -10,15 +10,20 @@ Six native extensions and one native Skill integration. `npm run build` preserve
 | Cline CLI | 3.0.74 research baseline; source inspected at `146894b6a42a7a554c6ff37f7bb33fe5122cc33d` | setup core `sessionId` / beforeRun `snapshot.runId` | native AgentPlugin capabilities/hooks; beforeRun appendContext persists; afterModel/afterTool/onEvent and final messages captured |
 | Pi | 1.5.2 | sessionManager ID / accepted input boundary UUID | before_agent_start persistent custom message; final idle replay uses agent_settled; message and tool events retain raw data |
 | Prime Agent | Rust 0.10.5 | `RLM_SESSION_ID` / parent-linked native user entry | native Skills resolve current identity; local capture reads JSONL and requires `prime-agent list --all --json` to confirm completion |
+| Doubao Work | macOS 2.38.3 | `MCP_VM_CONVERSATION_ID` and `DOUBAO_OFFICE_ANSWER_MESSAGE_ID` from the current local shell tool | the service checks the exact native turn and workspace for search and observes `on_message_session_end` for capture |
 | DeepSeek Harness | `dsh-v0.2.2-rc.3` research baseline; local `0.2.2-rc.4` previously inspected | session.id / identified source.kind=user message ID | blocking pre-step prepares IDs for a named runtime context; host admission refresh materializes the current snapshot; initial overview commits separately to history |
 
 History hosts acknowledge first overview delivery using `/api/context-delivery`; later user rounds carry current identifiers only. Request-view hosts remount cached context without repeating cloud calls. Local service owns persisted session/turn mapping, upload, retries, and search.
 
 ## Installation and startup
 
-Installer writes a small host-specific loader plus the shared Skill and its reference document. Content hashes protect unrelated/user-edited files. OpenCode v1/v2 profiles are mutually exclusive. Cline discovers a `.ts` loader; Pi/OpenCode/Kilo use native extension discovery.
+For native extensions, the installer writes a small host-specific loader plus the shared Skill and its reference document. Content hashes protect unrelated/user-edited files. OpenCode v1/v2 profiles are mutually exclusive. Cline discovers a `.ts` loader; Pi/OpenCode/Kilo use native extension discovery.
 
 Prime: install or update its integration in Viewer, then restart the host or run `/reload`. Use the normal terminal TUI with the local plugin service running. Five Skills provide search, creation, binding, space listing and unbinding; background capture verifies complete native rounds. The old controlled RPC runner has been removed. Prime requires its native daemon to confirm session completion; a quiet file or a closed terminal alone is insufficient.
+
+For Doubao Work, install the integration in Viewer and bind the selected project to a Space. Restart the desktop app and use `memos-doubao-project-memory` inside the project conversation. The installed file is `~/DoubaoWork/skills/memos-doubao-project-memory/SKILL.md`. Its command takes one shell-quoted question. The local service matches the tool's conversation and answer IDs against host records. Keep the service running for background capture. The host identity probe ran in Doubao's local tool on macOS 2.38.3. Automated upload verification uses a mock cloud endpoint. Live acceptance still includes the app invoking the installed Skill and retrieval and upload against a real Space.
+
+On macOS 2.38.3, read-only replay matched the session, answer, question and workspace at both entry and return of two real shell calls, including one executed from `/`. Of 12 retained successful turns, 10 still had complete native traces. Two lacked a verifiable final reply. The integration test uses synthetic host events, an installed Skill and a loopback mock to cover explicitly selected workspaces, concurrent conversations, a delayed old search result, out-of-order completion and delivery deduplication after restart. The real client sample contained no overlapping conversations.
 
 DeepSeek: installer adds a marked `insert` block to `$DSH_HOME/cordis.patch.yml` (default `~/.dsh/cordis.patch.yml`), shared by all profiles. Skill files use the same DSH home. Plugin entry paths are derived at installation time from the current user's home and the installed package location; no developer machine paths are hardcoded. Restart the selected profile normally, for example `dsh web`; no extra launch overlay is required. Repair upgrades the former standalone-overlay installation and removes its unchanged installer-owned overlay. Uninstall removes only the managed block and owned files, preserving other configuration. The shared YAML file is never part of the whole-file deletion manifest. Installation status checks the managed block and owned files; it does not certify a live model/cloud session. The installer preserves existing block-list YAML text (including Cordis tags and comments), supports empty lists, and reports unsupported YAML layouts without rewriting them.
 

@@ -4,7 +4,6 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { TraceInput } from '../types.ts';
 import { object } from '../_shared/transcript.ts';
 import { executionMessage, normalizeTaskTrace } from '../_shared/task-trace.ts';
-import { filterPrimeSkills } from './skill-filter.ts';
 
 export function primePaths(home?: string, env: NodeJS.ProcessEnv = process.env) {
   const userHome = home ?? homedir();
@@ -108,6 +107,5 @@ export async function readPrimeSession(path: string): Promise<PrimeSession> {
       if (!pending.size && typeof raw.timestamp === 'string') turn.completedAt = raw.timestamp;
     }
   }
-  for (const turn of session.turns) turn.records = filterPrimeSkills(turn.records);
   return session;
 }

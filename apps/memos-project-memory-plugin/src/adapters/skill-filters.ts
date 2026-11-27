@@ -17,12 +17,12 @@ function skillFilter(agent: string) {
 export function hasSkillFilter(agent: string): boolean { return !!skillFilter(agent); }
 
 /** Routing only: host-specific recognition stays in its adapter. */
-export function filterAdapterSkills<T extends TraceInput>(agent: string, records: T[]): T[] {
+export function filterAdapterSkills<T extends TraceInput>(agent: string, records: T[], skills?: ReadonlySet<string>): T[] {
   const filter = skillFilter(agent);
   if (!filter) return records;
   // Preserve native completion evidence until the adapter has projected it.
   return filter(records.map(record => {
     const normalized = normalizeTaskTrace(agent, record);
     return normalized ? { ...record, ...normalized, raw: record.raw } : record;
-  }));
+  }), skills);
 }

@@ -395,6 +395,7 @@ const english = {
   "MemOS get/status 响应缺少处理状态": "MemOS get/status: response is missing the processing status",
   "上传缺少接收确认或task_id": "The upload response is missing confirmation or task_id.",
   "MemOS 云端任务处理失败": "MemOS cloud task processing failed.",
+  "未能读取豆包工作完整的本地项目列表，请在豆包工作中打开项目列表后刷新。": "Open the project list in Doubao Work, then refresh. The complete local project list could not be read.",
   "项目名称与目录不能为空": "Project name and directory cannot be empty.",
   "请选择 Agent": "Select an Agent.",
   "请选择 Agent，并提供项目名称、绝对目录与 Space ID": "Select an Agent and provide a project name, absolute directory and Space ID.",

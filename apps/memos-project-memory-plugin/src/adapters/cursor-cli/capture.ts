@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { cursorToolEvidence, readKey } from './tool-evidence.ts';
+import type { Stats } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { AgentEvent, Message, TraceInput } from '../types.ts';
-import { asMessage, messagePart, object, textField } from '../_shared/transcript.ts';
+import { asMessage, object, textField } from '../_shared/transcript.ts';
 import { normalizeTaskTrace } from '../_shared/task-trace.ts';
-import { hasTaskContent } from '../_shared/message-content.ts';
-import type { Store } from '../../storage/store.ts';
-import { cursorSource, cursorTranscript, cursorReadSource, type CursorSource } from './source.ts';
+import type { Store, Session } from '../../storage/store.ts';
+import { conflict, cursorText, parseTurn, waiting, type ParsedTurn, type TurnIssue } from './turn-transcript.ts';
+import { cursorSource, cursorTranscript, cursorReadSource, CursorSourceConflict, type CursorSource } from './source.ts';
 
 type Receipt = { sessionId: string; conversationId: string; nativeSessionId: string; nativeTurnId: string; scopeId: string; enabledAt: string; submittedAt: string; path?: string; source?: CursorSource; observed?: { dev: number; ino: number; size: number }; stopped?: boolean; stoppedAt?: string; parentNativeTurnId?: string };
+
+type ExistingTrace = { sourceId: string; message: Message; raw: Record<string, unknown> };
 
 /** Cursor completion is proven by its own transcript, never by a timer or Hook arrival order. */
 export class CursorCapture {
@@ -95,6 +98,7 @@ export class CursorCapture {
         }
       }
       await this.collect();
+      if (this.closed) return;
       const current = this.store.session(session.id)!;
       return { sessionId: current.id, conversationId: current.currentTurnId };
     });
@@ -133,7 +137,7 @@ export class CursorCapture {
     if (typeof args.command !== 'string' || Object.keys(args).some(key => !['command', 'cwd', 'timeout', 'description'].includes(key))) return;
     return { key: JSON.stringify([args.command, args.cwd ?? '']), timeout: args.timeout };
   }
-  private reconcileCalls(records: TraceInput[], existing: { sourceId: string; message: Message; raw: Record<string, unknown> }[], receipt: Receipt, cwd: string) {
+  private reconcileCalls(records: TraceInput[], existing: ExistingTrace[], receipt: Receipt, cwd: string) {
     const replacements = new Set<string>();
     const candidates = records.flatMap(record => {
       const call = this.calls(record.message!)[0], fn = object(call?.function);
@@ -169,7 +173,11 @@ export class CursorCapture {
       } else if (!hook && !match) {
         const key = readKey(name, input);
         if (key && candidates.filter(c => readKey(c.name, c.input) === key).length === 1) {
-          const possible = existing.filter(row => row.raw.cursorReadKey === key && row.sourceId.startsWith(prefix));
+          const possible = existing.filter(row => {
+            if (!row.sourceId.startsWith(prefix)) return false;
+            const call = this.calls(row.message)[0], fn = object(call?.function);
+            return (readKey(call?.name ?? fn.name, call?.input ?? fn.arguments ?? call?.arguments) ?? row.raw.cursorReadKey) === key;
+          });
           if (possible.length === 1) hook = possible[0];
         }
       }
@@ -197,167 +205,146 @@ export class CursorCapture {
     }
     return replacements;
   }
-  private text(content: unknown): string {
-    if (typeof content === 'string') return content;
-    return Array.isArray(content) ? content.flatMap(block => ['text', 'input_text', 'output_text'].includes(String(object(block).type)) && typeof object(block).text === 'string' ? [String(object(block).text)] : []).join('') : '';
+
+  private async readTranscript(path: string, receipt: Receipt) {
+    if (!receipt.source && receipt.observed) receipt.source = await cursorSource(path, receipt.observed);
+    const file = await open(path, 'r');
+    try {
+      const metadata = await file.stat();
+      return { metadata, data: await file.readFile() };
+    } finally { await file.close(); }
   }
-  private prompt(message: Message): string {
-    const text = this.text(message.content);
-    const match = /^(?:<timestamp>[^]*?<\/timestamp>\s*)?<user_query>\s*\n?([^]*?)\n?\s*<\/user_query>\s*$/.exec(text);
-    return (match ? match[1] : text).trim();
+
+  private checkpointSource(id: string, receipt: Receipt, metadata: Stats, data: Buffer, previousError: unknown) {
+    // Without submission evidence, only an explicit native generation can
+    // recover an interval. Matching prompt text or file recency is insufficient.
+    if (!receipt.source) {
+      const matches: number[] = [];
+      let at = 0;
+      for (const line of data.subarray(0, data.lastIndexOf(10) + 1).toString('utf8').split('\n')) {
+        try {
+          const raw = object(JSON.parse(line));
+          if (asMessage(raw)?.role === 'user' && textField(raw, 'generation_id', 'turn_id', 'prompt_id') === receipt.nativeTurnId) matches.push(at);
+        } catch { /* Invalid or incomplete lines cannot prove a boundary. */ }
+        at += Buffer.byteLength(line, 'utf8') + 1;
+      }
+      if (matches.length !== 1) return conflict(String(previousError ?? 'Cursor 缺少提交时来源边界，原生记录也没有唯一轮次标识'));
+      const offset = matches[0]!;
+      receipt.source = { dev: metadata.dev, ino: metadata.ino, offset, size: offset, prefixHash: createHash('sha256').update(data.subarray(0, offset)).digest('hex') };
+    }
+    if (receipt.source.dev !== undefined && receipt.source.dev !== metadata.dev || receipt.source.ino !== undefined && receipt.source.ino !== metadata.ino)
+      return conflict('Cursor 原生文件身份或已有内容发生变化，等待核对来源');
+    const { source, offset: readOffset } = cursorReadSource(receipt.source, data);
+    receipt.source = source;
+    this.store.db.prepare('UPDATE cursor_receipts SET event=? WHERE id=?').run(JSON.stringify(receipt), id);
+    const competing = this.store.rows('SELECT id,event FROM cursor_receipts WHERE id<>?', id).some(other => {
+      const pending = JSON.parse(String(other.event)) as Receipt;
+      if (pending.path !== receipt.path || !pending.source) return false;
+      try { return cursorReadSource(pending.source, data).offset === readOffset; } catch { return false; }
+    });
+    if (competing) return conflict('Cursor 多个轮次共享来源边界，无法唯一关联');
+    return { kind: 'boundary' as const, readOffset };
   }
+
+  private prepareCompletion(receipt: Receipt, cwd: string, turn: ParsedTurn, existing: ExistingTrace[]) {
+    const { records, terminal, readOffset } = turn;
+    if (this.claimed(receipt.sessionId, receipt.nativeTurnId, readOffset)) return conflict('Cursor 来源区间已归属另一轮次，无法重复关联');
+    if (!['success', 'completed', 'cancelled', 'canceled', 'failed', 'error', 'aborted', 'interrupted'].includes(String(terminal.status))) return waiting('Cursor 原生结束状态尚无法确认');
+    const cancelled = ['cancelled', 'canceled', 'failed', 'error', 'aborted', 'interrupted'].includes(String(terminal.status));
+    if (!cancelled && !records.some(record => record.message?.role === 'assistant' && cursorText(record.message.content).trim())) return waiting('Cursor 等待本轮最终回答');
+    const replacements = this.reconcileCalls(records, existing, receipt, cwd);
+    const messages = [...existing.map(record => record.message), ...records.map(record => record.message!)];
+    const pendingCalls = new Set(messages.flatMap(message => this.calls(message).flatMap(call => typeof call.id === 'string' ? [call.id] : [])));
+    for (const message of messages) {
+      if (typeof message.tool_call_id === 'string') pendingCalls.delete(message.tool_call_id);
+      if (Array.isArray(message.content)) for (const block of message.content.map(object)) if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') pendingCalls.delete(block.tool_use_id);
+    }
+    if (pendingCalls.size && !cancelled) return waiting('Cursor 等待已知工具调用结束');
+    const children = this.store.rows("SELECT s.id FROM sessions s JOIN turns t ON t.sessionId=s.id LEFT JOIN cursor_receipts r ON r.id=t.id WHERE s.agentType='cursor-cli' AND s.parentNativeSessionId=? AND t.completedAt IS NULL AND (json_extract(r.event,'$.parentNativeTurnId') IS NULL OR json_extract(r.event,'$.parentNativeTurnId')=?)", receipt.nativeSessionId, receipt.nativeTurnId);
+    if (children.length) return waiting('Cursor 等待已登记子任务结束');
+    return { kind: 'ready' as const, replacements };
+  }
+
+  private commitTurn(id: string, receipt: Receipt, turn: ParsedTurn, replacements: Set<string>) {
+    const { records, prose, terminal, readOffset } = turn;
+    this.store.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const hook of this.store.rows("SELECT id,message FROM traces WHERE sessionId=? AND conversationId=? AND batchId IS NULL AND json_extract(raw,'$.hook_event_name')='afterAgentResponse' ORDER BY id", receipt.sessionId, receipt.conversationId)) {
+        const message = JSON.parse(String(hook.message)) as Message;
+        if (message.role !== 'assistant' || this.calls(message).length) continue;
+        const text = cursorText(message.content);
+        const matched = text && prose.some((_, start) => {
+          let projection = '';
+          for (let at = start; at < prose.length; at++) {
+            projection += prose[at];
+            if (projection === text) return true;
+            if (!text.startsWith(projection)) break;
+          }
+          return false;
+        });
+        if (!matched) continue; // Unmatched task text must not be discarded.
+        this.store.db.prepare('DELETE FROM traces WHERE id=?').run(Number(hook.id));
+      }
+      this.store.capture(receipt.sessionId, records, replacements);
+      for (const record of records) this.store.db.prepare("UPDATE traces SET raw=json_set(raw,'$.sourceOrdinal',?,'$.sourcePart',?) WHERE sessionId=? AND conversationId=? AND sourceId=?")
+        .run(Number(object(record.raw).sourceOrdinal), Number(object(record.raw).sourcePart), receipt.sessionId, receipt.conversationId, record.sourceId);
+      this.store.db.prepare("UPDATE traces SET raw=json_set(raw,'$.sourceOrdinal',?,'$.sourcePart',-1) WHERE sessionId=? AND conversationId=? AND json_extract(message,'$.role')='user'").run(readOffset, receipt.sessionId, receipt.conversationId);
+      const unresolved = records.flatMap(record => this.calls(record.message!).filter(call => !call.id)
+        .map(call => String(call.name ?? object(call.function).name ?? 'unknown')));
+      if (unresolved.length) this.store.diagnostic(`Cursor 本轮缺少可唯一关联的工具调用 ID：${[...new Set(unresolved)].join('、')}（${receipt.nativeTurnId}）`);
+      this.store.finalizeTurn(receipt.sessionId, receipt.nativeTurnId, this.store.memory.recordTime(terminal) ?? receipt.stoppedAt);
+      this.store.db.prepare('DELETE FROM cursor_receipts WHERE id=?').run(id);
+      this.store.db.exec('COMMIT');
+    } catch (error) { if (this.store.db.isTransaction) this.store.db.exec('ROLLBACK'); throw error; }
+  }
+
+  private collectTranscript(id: string, receipt: Receipt, session: Session, file: { metadata: Stats; data: Buffer }, previousError: unknown): TurnIssue | undefined {
+    const boundary = this.checkpointSource(id, receipt, file.metadata, file.data, previousError);
+    if (boundary.kind !== 'boundary') return boundary;
+    const endAt = file.data.lastIndexOf(10);
+    if (endAt < boundary.readOffset) return waiting('Cursor 等待原生消息完整落盘');
+    const existing = this.store.rows("SELECT sourceId,message,raw FROM traces WHERE sessionId=? AND conversationId=? ORDER BY id", receipt.sessionId, receipt.conversationId)
+      .map(item => ({ sourceId: String(item.sourceId), raw: object(JSON.parse(String(item.raw))), message: JSON.parse(String(item.message)) as Message }));
+    const expected = existing.find(record => record.message.role === 'user')?.message;
+
+    const completeLines = file.data.subarray(boundary.readOffset, endAt + 1);
+    const turn = parseTurn(completeLines, boundary.readOffset, receipt, expected, Boolean(session.parentNativeSessionId));
+    if (turn.kind !== 'parsed') return turn;
+    const completion = this.prepareCompletion(receipt, session.cwd, turn, existing);
+    if (completion.kind !== 'ready') return completion;
+    this.commitTurn(id, receipt, turn, completion.replacements);
+  }
+
   private async collect() {
     for (const row of this.store.rows('SELECT id,event,error FROM cursor_receipts ORDER BY rowid')) {
       if (this.closed) return;
       const receipt = JSON.parse(String(row.event)) as Receipt;
       const session = this.store.session(receipt.sessionId), scope = session && this.store.memory.forSession(session);
-      if (!scope || scope.id !== receipt.scopeId || scope.enabledAt !== receipt.enabledAt || !this.store.memory.allows(scope.id, receipt.submittedAt)) {
+      if (!session || !scope || scope.id !== receipt.scopeId || scope.enabledAt !== receipt.enabledAt || !this.store.memory.allows(scope.id, receipt.submittedAt)) {
         this.store.db.prepare('DELETE FROM cursor_receipts WHERE id=?').run(String(row.id)); continue;
       }
+
+      if (!receipt.stopped) continue;
+      let issue: TurnIssue | { kind: 'error'; message: string } | undefined;
       try {
-        if (!receipt.stopped) continue;
-        if (!receipt.path) receipt.path = cursorTranscript(this.home, session!.cwd, receipt.nativeSessionId);
-        if (!receipt.path) throw new Error(String(row.error ?? 'Cursor 尚未定位本轮原生文件'));
-        if (!receipt.source && receipt.observed) receipt.source = await cursorSource(receipt.path, receipt.observed);
-        const file = await open(receipt.path, 'r');
-        let metadata, data: Buffer;
-        try { metadata = await file.stat(); data = await file.readFile(); }
-        finally { await file.close(); }
-        if (this.closed) return;
-        if (this.store.memory.forSession(session!)?.enabledAt !== receipt.enabledAt) continue;
-        // Without submission evidence, only an explicit native generation can
-        // recover an interval. Matching prompt text or file recency is insufficient.
-        if (!receipt.source) {
-          const matches: number[] = [];
-          let at = 0;
-          for (const line of data.subarray(0, data.lastIndexOf(10) + 1).toString('utf8').split('\n')) {
-            try {
-              const raw = object(JSON.parse(line));
-              if (asMessage(raw)?.role === 'user' && textField(raw, 'generation_id', 'turn_id', 'prompt_id') === receipt.nativeTurnId) matches.push(at);
-            } catch { /* Invalid or incomplete lines cannot prove a boundary. */ }
-            at += Buffer.byteLength(line, 'utf8') + 1;
-          }
-          if (matches.length !== 1) throw new Error(String(row.error ?? 'Cursor 缺少提交时来源边界，原生记录也没有唯一轮次标识'));
-          const offset = matches[0]!;
-          receipt.source = { dev: metadata.dev, ino: metadata.ino, offset, size: offset, prefixHash: createHash('sha256').update(data.subarray(0, offset)).digest('hex') };
+        // Persist synchronous lookup failures before a queued close can interrupt the receipt.
+        if (!receipt.path) receipt.path = cursorTranscript(this.home, session.cwd, receipt.nativeSessionId);
+        if (receipt.path) {
+          const file = await this.readTranscript(receipt.path, receipt);
+          if (this.closed) return;
+          if (this.store.memory.forSession(session)?.enabledAt !== receipt.enabledAt) continue;
+          issue = this.collectTranscript(String(row.id), receipt, session, file, row.error);
+        } else {
+          issue = waiting(String(row.error ?? 'Cursor 尚未定位本轮原生文件'));
         }
-        if (receipt.source.dev !== undefined && receipt.source.dev !== metadata.dev || receipt.source.ino !== undefined && receipt.source.ino !== metadata.ino)
-          throw new Error('Cursor 原生文件身份或已有内容发生变化，等待核对来源');
-        const { source, offset: readOffset } = cursorReadSource(receipt.source, data);
-        receipt.source = source;
-        this.store.db.prepare('UPDATE cursor_receipts SET event=? WHERE id=?').run(JSON.stringify(receipt), String(row.id));
-        const competing = this.store.rows('SELECT id,event FROM cursor_receipts WHERE id<>?', String(row.id)).some(other => {
-          const pending = JSON.parse(String(other.event)) as Receipt;
-          if (pending.path !== receipt.path || !pending.source) return false;
-          try { return cursorReadSource(pending.source, data).offset === readOffset; } catch { return false; }
-        });
-        if (competing) throw new Error('Cursor 多个轮次共享来源边界，无法唯一关联');
-        const endAt = data.lastIndexOf(10);
-        if (endAt < readOffset) throw new Error('Cursor 等待原生消息完整落盘');
-        const records: TraceInput[] = [];
-        const prose: string[] = [];
-        let userSeen = false, terminal: Record<string, unknown> | undefined, offset = readOffset;
-        const existing = this.store.rows("SELECT sourceId,message,raw FROM traces WHERE sessionId=? AND conversationId=? ORDER BY id", receipt.sessionId, receipt.conversationId)
-          .map(item => ({ sourceId: String(item.sourceId), raw: object(JSON.parse(String(item.raw))), message: JSON.parse(String(item.message)) as Message }));
-        const expected = existing.find(record => record.message.role === 'user')?.message;
-        for (const line of data.subarray(readOffset, endAt + 1).toString('utf8').split('\n')) {
-          const at = offset; offset += Buffer.byteLength(line, 'utf8') + 1;
-          if (!line.trim()) continue;
-          let raw: Record<string, unknown>;
-          try { raw = object(JSON.parse(line)); } catch { throw new Error('Cursor 原生记录格式无效，等待核对来源'); }
-          const nativeKey = textField(raw, 'generation_id', 'turn_id', 'prompt_id');
-          if (nativeKey && nativeKey !== receipt.nativeTurnId) throw new Error('Cursor 原生轮次标识与通知不一致');
-          if (raw.type === 'turn_ended') { terminal = raw; break; }
-          const message = normalizeTaskTrace('cursor-cli', { sourceId: String(at), raw, message: asMessage(raw) })?.message;
-          if (!message) continue;
-          if (message.role === 'user' && !(Array.isArray(message.content) && message.content.every(block => object(block).type === 'tool_result'))) {
-            if (userSeen || expected && this.prompt(message) !== this.prompt(expected) || !expected && !session!.parentNativeSessionId) throw new Error('Cursor 原生用户轮次无法唯一关联');
-            userSeen = true;
-            if (expected) continue; // The submitted input already has its stable Hook identity.
-            message.content = this.prompt(message); // A proven child source owns its delegated input.
-          }
-          if (!userSeen) throw new Error('Cursor 等待本轮原生用户输入');
-          // The generation's persisted source interval proves these are new task
-          // records. Its admission timestamp is provenance, not a replay-time guess.
-          const record: TraceInput = { sourceId: `cursor:${receipt.nativeSessionId}:${receipt.nativeTurnId}:${at}`, nativeTurnId: receipt.nativeTurnId, raw: { ...raw, occurredAt: receipt.submittedAt }, message };
-          const append = (body: Message, part: number, sourceId = `${record.sourceId}:${part}`) => records.push({ ...record, sourceId,
-            raw: { ...object(record.raw), sourceOrdinal: at, sourcePart: part }, message: messagePart(body, part, message) });
-          if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
-            append(message, 0, `hook:${receipt.nativeSessionId}:tool-result:${message.tool_call_id}`);
-          } else if (message.role === 'tool' && Array.isArray(message.content) && message.content.some(block => object(block).type === 'tool_result' && typeof object(block).tool_use_id === 'string')) {
-            for (const [part, block] of message.content.entries()) {
-              const id = object(block).type === 'tool_result' ? object(block).tool_use_id : undefined;
-              append({ ...message, ...(typeof id === 'string' ? { tool_call_id: id } : {}), content: [block] }, part,
-                typeof id === 'string' ? `hook:${receipt.nativeSessionId}:tool-result:${id}` : `${record.sourceId}:${part}`);
-            }
-          } else if (message.role === 'assistant') {
-            // Match a Hook response against a whole native message before its
-            // blocks are split for ordering; never collapse repeated native text.
-            const response = this.text(message.content);
-            if (response) prose.push(response);
-            const { tool_calls: calls, thinking, reasoning, reasoning_content, ...body } = message;
-            const prefix: Message = { ...body, content: '', thinking, reasoning, reasoning_content };
-            if (hasTaskContent(prefix)) append(prefix, -1);
-            const content = Array.isArray(message.content) ? message.content : [message.content];
-            for (const [part, block] of content.entries()) {
-              const id = ['tool_use', 'tool-call', 'function_call'].includes(String(object(block).type)) ? object(block).id : undefined;
-              const item: Message = { ...body, content: typeof block === 'string' ? block : [block] };
-              if (hasTaskContent(item)) append(item, part, typeof id === 'string' ? `hook:${receipt.nativeSessionId}:tool-call:${id}` : `${record.sourceId}:${part}`);
-            }
-            for (const [part, call] of (calls ?? []).entries()) append({ role: 'assistant', content: '', tool_calls: [call] }, content.length + part,
-              typeof object(call).id === 'string' ? `hook:${receipt.nativeSessionId}:tool-call:${object(call).id}` : `${record.sourceId}:${content.length + part}`);
-          } else append(message, 0);
-        }
-        if (!userSeen || !terminal) throw new Error('Cursor 等待本轮 turn_ended 完整落盘');
-        if (this.claimed(receipt.sessionId, receipt.nativeTurnId, readOffset)) throw new Error('Cursor 来源区间已归属另一轮次，无法重复关联');
-        if (!['success', 'completed', 'cancelled', 'canceled', 'failed', 'error', 'aborted', 'interrupted'].includes(String(terminal.status))) throw new Error('Cursor 原生结束状态尚无法确认');
-        const cancelled = ['cancelled', 'canceled', 'failed', 'error', 'aborted', 'interrupted'].includes(String(terminal.status));
-        if (!cancelled && !records.some(record => record.message?.role === 'assistant' && this.text(record.message.content).trim())) throw new Error('Cursor 等待本轮最终回答');
-        const replacements = this.reconcileCalls(records, existing, receipt, session!.cwd);
-        const messages = [...existing.map(record => record.message), ...records.map(record => record.message!)];
-        const pendingCalls = new Set(messages.flatMap(message => this.calls(message).flatMap(call => typeof call.id === 'string' ? [call.id] : [])));
-        for (const message of messages) {
-          if (typeof message.tool_call_id === 'string') pendingCalls.delete(message.tool_call_id);
-          if (Array.isArray(message.content)) for (const block of message.content.map(object)) if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') pendingCalls.delete(block.tool_use_id);
-        }
-        if (pendingCalls.size && !cancelled) throw new Error('Cursor 等待已知工具调用结束');
-        const children = this.store.rows("SELECT s.id FROM sessions s JOIN turns t ON t.sessionId=s.id LEFT JOIN cursor_receipts r ON r.id=t.id WHERE s.agentType='cursor-cli' AND s.parentNativeSessionId=? AND t.completedAt IS NULL AND (json_extract(r.event,'$.parentNativeTurnId') IS NULL OR json_extract(r.event,'$.parentNativeTurnId')=?)", receipt.nativeSessionId, receipt.nativeTurnId);
-        if (children.length) throw new Error('Cursor 等待已登记子任务结束');
-        this.store.db.exec('BEGIN IMMEDIATE');
-        try {
-          for (const hook of this.store.rows("SELECT id,message FROM traces WHERE sessionId=? AND conversationId=? AND batchId IS NULL AND json_extract(raw,'$.hook_event_name')='afterAgentResponse' ORDER BY id", receipt.sessionId, receipt.conversationId)) {
-            const message = JSON.parse(String(hook.message)) as Message;
-            if (message.role !== 'assistant' || this.calls(message).length) continue;
-            const text = this.text(message.content);
-            const matched = text && prose.some((_, start) => {
-              let projection = '';
-              for (let at = start; at < prose.length; at++) {
-                projection += prose[at];
-                if (projection === text) return true;
-                if (!text.startsWith(projection)) break;
-              }
-              return false;
-            });
-            if (!matched) continue; // Unmatched task text must not be discarded.
-            this.store.db.prepare('DELETE FROM traces WHERE id=?').run(Number(hook.id));
-          }
-          this.store.capture(receipt.sessionId, records, replacements);
-          for (const record of records) this.store.db.prepare("UPDATE traces SET raw=json_set(raw,'$.sourceOrdinal',?,'$.sourcePart',?) WHERE sessionId=? AND conversationId=? AND sourceId=?")
-            .run(Number(object(record.raw).sourceOrdinal), Number(object(record.raw).sourcePart), receipt.sessionId, receipt.conversationId, record.sourceId);
-          this.store.db.prepare("UPDATE traces SET raw=json_set(raw,'$.sourceOrdinal',?,'$.sourcePart',-1) WHERE sessionId=? AND conversationId=? AND json_extract(message,'$.role')='user'").run(readOffset, receipt.sessionId, receipt.conversationId);
-          const unresolved = records.flatMap(record => this.calls(record.message!).filter(call => !call.id)
-            .map(call => String(call.name ?? object(call.function).name ?? 'unknown')));
-          if (unresolved.length) this.store.diagnostic(`Cursor 本轮缺少可唯一关联的工具调用 ID：${[...new Set(unresolved)].join('、')}（${receipt.nativeTurnId}）`);
-          this.store.finalizeTurn(receipt.sessionId, receipt.nativeTurnId, this.store.memory.recordTime(terminal) ?? receipt.stoppedAt);
-          this.store.db.prepare('DELETE FROM cursor_receipts WHERE id=?').run(String(row.id));
-          this.store.db.exec('COMMIT');
-        } catch (error) { if (this.store.db.isTransaction) this.store.db.exec('ROLLBACK'); throw error; }
       } catch (error) {
-        if (this.closed) return;
-        const message = error instanceof Error ? error.message : String(error);
-        this.store.db.prepare('UPDATE cursor_receipts SET error=? WHERE id=?').run(message, String(row.id));
-        if (row.error !== message) this.store.diagnostic(`Cursor 轨迹补读: ${message}`);
+        issue = error instanceof CursorSourceConflict ? error : { kind: 'error', message: error instanceof Error ? error.message : String(error) };
       }
+      if (this.closed) return;
+      if (!issue) continue;
+      const { message } = issue;
+      this.store.db.prepare('UPDATE cursor_receipts SET error=? WHERE id=?').run(message, String(row.id));
+      if (row.error !== message) this.store.diagnostic(`Cursor 轨迹补读: ${message}`);
     }
   }
 }

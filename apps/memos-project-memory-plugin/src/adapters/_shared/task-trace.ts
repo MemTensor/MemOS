@@ -47,7 +47,9 @@ export function normalizeTaskTrace(agentType: string, record: TraceInput): Trace
   if (agentType === 'prime-agent' && message.role === 'user') {
     message = { ...message, content: withoutPrimeContext(message.content) };
   }
-  message = messageMetadata(message, raw);
+  // Doubao's journal has no per-tool clock. Its occurredAt is the request
+  // admission time for the whole turn, not a timestamp on individual messages.
+  message = messageMetadata(message, raw.type === 'doubao-work.trajectory' ? { ...raw, occurredAt: undefined } : raw);
   // Keep only source evidence needed for identity, ordering and replay. A second
   // unfiltered body in raw would bypass the same boundary applied to message.
   const retainedRaw: Record<string, unknown> = {};
@@ -64,6 +66,7 @@ export function normalizeTaskTrace(agentType: string, record: TraceInput): Trace
     if (Object.keys(metadata).length) retainedRaw[key] = metadata;
   }
   if (agentType === 'cursor-cli' && typeof raw.cursorReadKey === 'string' && /^[a-f0-9]{64}$/.test(raw.cursorReadKey)) retainedRaw.cursorReadKey = raw.cursorReadKey;
+  if (Array.isArray(raw.bindCallIds)) retainedRaw.bindCallIds = raw.bindCallIds.filter((id: unknown) => typeof id === 'string');
   retainedRaw.message = message;
   if (agentType === 'workbuddy' && typeof raw.parentId === 'string') retainedRaw.parentId = raw.parentId;
   if (agentType === 'workbuddy' && typeof raw.status === 'string') retainedRaw.status = raw.status;

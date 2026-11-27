@@ -8,6 +8,10 @@ import { object } from '../_shared/transcript.ts';
 
 export type CursorSource = { dev?: number; ino?: number; offset: number; prefixHash: string; size: number; sourceHash?: string; terminal?: string };
 
+export class CursorSourceConflict extends Error {
+  readonly kind = 'conflict' as const;
+}
+
 function sourceBoundary(bytes: Buffer): CursorSource {
   let offset = 0, start = 0, terminal: string | undefined;
   for (let end = bytes.indexOf(10); end >= 0; end = bytes.indexOf(10, start)) {
@@ -53,7 +57,7 @@ export function cursorReadSource(source: CursorSource, data: Buffer): { source: 
   }
   if (data.length < source.size || createHash('sha256').update(data.subarray(0, source.offset)).digest('hex') !== source.prefixHash
     || source.sourceHash !== undefined && createHash('sha256').update(data.subarray(0, source.size)).digest('hex') !== source.sourceHash)
-    throw new Error('Cursor 原生文件身份或已有内容发生变化，等待核对来源');
+    throw new CursorSourceConflict('Cursor 原生文件身份或已有内容发生变化，等待核对来源');
   let offset = source.offset;
   if (source.terminal !== undefined) {
     const terminal = Buffer.from(source.terminal);
@@ -77,7 +81,7 @@ export function cursorTranscript(home: string, cwd: string, sessionId: string): 
     catch { /* Exact session ID lookup also works for older workspaces without trust metadata. */ }
     if (typeof workspace === 'string' ? resolve(workspace) === resolve(cwd) : existsSync(path)) candidates.push(path);
   }
-  if (candidates.length > 1) throw new Error('Cursor 会话文件存在多个候选路径，无法唯一定位');
+  if (candidates.length > 1) throw new CursorSourceConflict('Cursor 会话文件存在多个候选路径，无法唯一定位');
   return candidates[0];
 }
 
@@ -120,12 +124,12 @@ export async function cursorSource(path: string, observed?: Pick<Stats, 'dev' | 
   const file = await open(path, 'r');
   try {
     const current = await file.stat();
-    if (current.dev !== observed.dev || current.ino !== observed.ino || current.size < observed.size) throw new Error('Cursor 会话文件在提交期间发生变化');
+    if (current.dev !== observed.dev || current.ino !== observed.ino || current.size < observed.size) throw new CursorSourceConflict('Cursor 会话文件在提交期间发生变化');
     const bytes = Buffer.alloc(observed.size);
     let read = 0;
     while (read < bytes.length) {
       const result = await file.read(bytes, read, bytes.length - read, read);
-      if (!result.bytesRead) throw new Error('Cursor 会话文件在提交期间被截断');
+      if (!result.bytesRead) throw new CursorSourceConflict('Cursor 会话文件在提交期间被截断');
       read += result.bytesRead;
     }
     return { dev: observed.dev, ino: observed.ino, ...sourceBoundary(bytes) };

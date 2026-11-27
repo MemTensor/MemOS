@@ -3,9 +3,13 @@ import { uploadValidationError } from '../adapters/_shared/message-content.ts';
 import { ClaudeCapture } from '../adapters/claude-code/capture.ts';
 import { CursorCapture } from '../adapters/cursor-cli/capture.ts';
 import { CopilotCapture } from '../adapters/copilot-cli/capture.ts';
+import { DoubaoRuntime } from '../adapters/doubao-work/runtime.ts';
 import { PrimeCapture } from '../adapters/prime-agent/capture.ts';
+import { workbuddyConfigDir } from '../adapters/workbuddy/paths.ts';
+import { profile as workbuddyProfile } from '../adapters/workbuddy/profile.ts';
 import { readSessionTitles } from '../adapters/session-titles.ts';
 import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
+import { isTraceControl } from '../adapters/_shared/bind-records.ts';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { Configuration, connectionError, connectionIdentity } from '../config/config.ts';
 import { Store, type Session } from '../storage/store.ts';
@@ -16,7 +20,7 @@ import { CodexCapture, type CodexCaptureOptions } from './codex-capture.ts';
 import { HistoryService } from './history.ts';
 import { Deliveries } from '../storage/deliveries.ts';
 import { discoverProjects, type Project } from '../adapters/projects.ts';
-import { adapterInstalled, listInstalledAgents } from '../adapters/installer.ts';
+import { adapterInstalled, installAdapter, listInstalledAgents, uninstallAdapter } from '../adapters/installer.ts';
 import { profiles } from '../adapters/registry.ts';
 import type { CreationIdentity } from '../storage/create-contexts.ts';
 export type SearchStatus = 'FOUND' | 'EMPTY' | 'INVALID_QUERY' | 'CONTEXT_MISSING' | 'UNAVAILABLE';
@@ -64,6 +68,7 @@ export class PluginService {
     readonly cursor: CursorCapture;
     readonly copilot: CopilotCapture;
     readonly prime: PrimeCapture;
+    readonly doubao: DoubaoRuntime;
     readonly history: HistoryService;
     readonly deliveries: Deliveries;
     private historyUploads = new Map<string, { steps: AsyncGenerator<string>; error?: string; batchId?: string }>();
@@ -73,10 +78,12 @@ export class PluginService {
     private creations = new Map<string, Promise<CreateResult>>();
     constructor(dataDir: string, options: CodexCaptureOptions & { home?: string } = {}) {
         this.home = options.home;
-        this.config = new Configuration(dataDir); this.store = new Store(join(dataDir, 'memory.sqlite'), this.config); this.cloud = new CloudClient(this.config, failure => this.store.cloudDiagnostics.record(failure));
+        this.config = new Configuration(dataDir); this.store = new Store(join(dataDir, 'memory.sqlite'), this.config, options.home); this.cloud = new CloudClient(this.config, failure => this.store.cloudDiagnostics.record(failure));
         this.claude = new ClaudeCapture(this.store);
         this.cursor = new CursorCapture(this.store, options.home);
         this.copilot = new CopilotCapture(this.store);
+        this.doubao = new DoubaoRuntime(this.store, options.home);
+        void this.doubao.configure();
         this.prime = new PrimeCapture(this.store, options.home);
         this.codex = new CodexCapture(this.store, options); this.history = new HistoryService(this.store, options); this.deliveries = new Deliveries(this.store);
     }
@@ -92,21 +99,29 @@ export class PluginService {
         return this.cloudContext(this.store.session(String(delivery.sessionId)), { conversationId: turns.length === 1 ? String(turns[0]) : null,
             batchId: String(delivery.batchId), spaceId: String(delivery.spaceId), ...(delivery.taskId ? { taskId: String(delivery.taskId) } : {}) });
     }
-    close() { this.closed = true; this.history.close(); this.claude.close(); this.cursor.close(); this.copilot.close(); this.prime.close(); this.codex.close(); this.store.close(); }
+    close() { this.closed = true; this.doubao.close(); this.history.close(); this.claude.close(); this.cursor.close(); this.copilot.close(); this.prime.close(); this.codex.close(); this.store.close(); }
     async captureCodex(forceDiscovery = false) {
         await this.codex.flush(forceDiscovery);
-        await this.refreshSessionTitles();
+        if (!this.closed) await this.refreshSessionTitles();
     }
     async refreshSessionTitles() {
-        for (const agentType of ['codex-cli', 'deepseek-harness']) {
-            const sessions = this.store.rows('SELECT id,nativeSessionId FROM sessions WHERE agentType=?', agentType);
+        this.doubao.refreshSessionTitles();
+        for (const agentType of ['codex-cli', 'deepseek-harness', 'workbuddy']) {
+            const sessions = this.store.rows('SELECT id,nativeSessionId,cwd,objectId FROM sessions WHERE agentType=?', agentType)
+                .filter(row => this.store.memory.forSession({agentType, objectId: String(row.objectId)}))
+                .map(row => ({id: String(row.id), nativeSessionId: String(row.nativeSessionId), cwd: String(row.cwd), objectId: String(row.objectId)}));
             if (!sessions.length) continue;
-            const directory = agentType === 'codex-cli' && this.codex.roots[0] ? dirname(this.codex.roots[0]) : undefined;
-            const titles = await readSessionTitles(agentType, directory);
+            let directory = agentType === 'codex-cli' && this.codex.roots[0] ? dirname(this.codex.roots[0]) : undefined;
+            if (agentType === 'workbuddy') {
+                if (!await adapterInstalled(workbuddyProfile, {home:this.home})) continue;
+                directory = await workbuddyConfigDir(this.home);
+            }
+            const titles = await readSessionTitles(agentType, directory, sessions);
+            if (this.closed) return;
             for (const session of sessions) {
-                if (!this.store.memory.forSession(this.store.session(String(session.id))!)) continue;
-                const title = titles.get(String(session.nativeSessionId));
-                if (title) this.store.setSessionTitle(String(session.id), title.title, title.titleRevision);
+                const title = titles.get(session.nativeSessionId);
+                if (title && this.store.memory.forSession({agentType, objectId:session.objectId}))
+                    this.store.setSessionTitle(session.id, title.title, title.titleRevision);
             }
         }
     }
@@ -120,6 +135,7 @@ export class PluginService {
                 if (scope.spaceIds.length && scope.connectionId === connectionIdentity(this.config.value)) this.store.memory.activate(scope.id, time);
             }
             this.store.db.exec('UPDATE sessions SET overview=NULL,overviewDelivered=0');
+            void this.doubao.configure();
         }
         return result;
     }
@@ -156,6 +172,22 @@ export class PluginService {
                 uploading, canUpload: !!scope.spaceIds.length && scan.status === 'ready' && pending > 0 && !busy && !unavailable } };
         });
     }
+    sessionPage(projectId: string | null, page: number, size: number) {
+        if (projectId && !this.store.row('SELECT id FROM projects WHERE id=?', projectId)) return undefined;
+        const sessions = this.store.orderedSessions().filter(session =>
+            (projectId ? session.projectId === projectId : !session.projectId) && this.visibleSession(String(session.id)));
+        return { projectId, sessions: sessions.slice((page - 1) * size, page * size), total: sessions.length, page, size };
+    }
+    markContextDelivered(input: { sessionId?: unknown; agentType?: unknown; nativeSessionId?: unknown }) {
+        const session = this.store.session(String(input.sessionId ?? ''));
+        if (session && this.store.memory.forSession(session)) {
+            this.store.markContextDelivered(session.id);
+        } else if (typeof input.agentType === 'string' && typeof input.nativeSessionId === 'string') {
+            const host = this.store.row('SELECT cwd FROM create_hosts WHERE agentType=? AND nativeSessionId=?', input.agentType, input.nativeSessionId);
+            if (host && this.store.memory.resolve(input.agentType, String(host.cwd)))
+                this.store.markHostContextDelivered(input.agentType, input.nativeSessionId);
+        }
+    }
     visibleSession(id: string) {
         const session = this.store.session(id);
         return !!session && (!!this.store.binding(session.objectId)
@@ -189,6 +221,11 @@ export class PluginService {
             }
         } finally { await sessions.return(undefined); }
     }
+    async changeAdapter(id: string, uninstall: boolean) {
+        const result = await (uninstall ? uninstallAdapter : installAdapter)(id, { home: this.home });
+        if (id === 'doubao-work') await this.doubao.configure();
+        return result;
+    }
     installedAdapters() { return listInstalledAgents({ home: this.home }); }
     async projects(agentType: string, refresh = false) {
         const agent = profiles.find(profile => profile.agentId === agentType);
@@ -197,7 +234,13 @@ export class PluginService {
             let loading = this.projectLoads.get(agentType);
             if (!loading) {
                 loading = discoverProjects(agentType, { home: this.home }).then(found => {
-                    const merged = new Map((this.projectCache.get(agentType) ?? []).map(project => [project.root, project]));
+                    if (agentType === 'doubao-work') {
+                        this.store.memory.syncDoubaoNames(found);
+                        this.projectCache.set(agentType, found);
+                        return found;
+                    }
+                    const prior = this.projectCache.get(agentType) ?? [];
+                    const merged = new Map(prior.map(project => [project.root, project]));
                     for (const project of found) merged.set(project.root, project);
                     const projects = [...merged.values()]; this.projectCache.set(agentType, projects); return projects;
                 }).finally(() => this.projectLoads.delete(agentType));
@@ -206,20 +249,22 @@ export class PluginService {
             await loading;
         }
         const candidates = [...this.projectCache.get(agentType)!];
-        for (const session of this.store.rows('SELECT s.cwd,t.name FROM sessions s JOIN tasks t ON t.id=s.taskId WHERE s.agentType=? ORDER BY s.createdAt', agentType))
-            candidates.push({ name: String(session.name), root: String(session.cwd) });
-        for (const project of this.store.rows('SELECT p.name,p.root FROM projects p JOIN project_agents a ON a.projectId=p.id WHERE a.agentType=? ORDER BY p.createdAt', agentType))
-            candidates.push({ name: String(project.name), root: String(project.root) });
+        if (agentType !== 'doubao-work') {
+            for (const session of this.store.rows('SELECT s.cwd,t.name FROM sessions s JOIN tasks t ON t.id=s.taskId WHERE s.agentType=? ORDER BY s.createdAt', agentType))
+                candidates.push({ name: String(session.name), root: String(session.cwd) });
+            for (const project of this.store.rows('SELECT p.name,p.root FROM projects p JOIN project_agents a ON a.projectId=p.id WHERE a.agentType=? ORDER BY p.createdAt', agentType))
+                candidates.push({ name: String(project.name), root: String(project.root) });
+        }
         const projects = new Map<string, { name: string; root: string; id?: string; spaceIds?: string[]; bindingStatus?: string }>();
         const scopes = new Map(this.store.memory.all().filter(scope => scope.agentType === agentType).map(scope => [scope.projectId, scope]));
         const registered = this.store.rows('SELECT * FROM projects ORDER BY length(root) DESC,createdAt,rowid');
         for (const candidate of candidates) {
             const directory = resolve(candidate.root);
-            const project = registered.find(project => directory === project.root || agentType !== 'prime-agent' && directory.startsWith(String(project.root).endsWith(sep) ? String(project.root) : String(project.root) + sep));
+            const project = registered.find(project => directory === project.root || !['prime-agent','doubao-work'].includes(agentType) && directory.startsWith(String(project.root).endsWith(sep) ? String(project.root) : String(project.root) + sep));
             const root = project ? String(project.root) : directory;
             const scope = project && scopes.get(String(project.id));
             const binding = scope ? this.store.binding(scope.id) : undefined;
-            projects.set(root, { name: project ? String(project.name) : candidate.name, root, ...(project ? { id: String(project.id) } : {}), ...(binding ? { spaceIds: binding.spaceIds, bindingStatus: binding.status } : {}) });
+            projects.set(root, { name: project && agentType !== 'doubao-work' ? String(project.name) : candidate.name, root, ...(project ? { id: String(project.id) } : {}), ...(binding ? { spaceIds: binding.spaceIds, bindingStatus: binding.status } : {}) });
         }
         return [...projects.values()].sort((a, b) => a.root.localeCompare(b.root));
     }
@@ -261,7 +306,9 @@ export class PluginService {
             if (this.config.revision !== revision)
                 throw new Error('云连接已变更，请重新绑定');
             const spaceName = typeof space?.space_name === 'string' ? space.space_name : creating ? value.trim() : '';
-            const project = this.store.bindProject(input.name?.trim() || basename(root) || root, root, spaceId, baseUrl, agentType, spaceName, options.nextTurnOnly);
+            const discoveredName = agentType === 'doubao-work' && this.projectCache.get(agentType)?.find(candidate => candidate.root === resolve(root))?.name;
+            const project = this.store.bindProject(discoveredName || input.name?.trim() || basename(root) || root, root, spaceId, baseUrl, agentType, spaceName, options.nextTurnOnly);
+            if (agentType === 'doubao-work') await this.doubao.configure();
             if (!known) void this.history.scan(project.scopeId).catch(() => {});
             await this.refreshOverview(project.scopeId, spaceId);
             return { ...project, spaceId, spaceName, overview: this.cachedOverview(project.scopeId) };
@@ -274,6 +321,7 @@ export class PluginService {
         }
     }
     async createContext(input: CreationIdentity) {
+        if (input.agentType === 'doubao-work') return { createContext: '', createIdentifiers: '' };
         if (input.agentType === 'codex-cli') {
             const cwd = typeof input.nativeSessionId === 'string' && await this.codex.sessionDirectory(input.nativeSessionId);
             if (!cwd) return { createContext: '', createIdentifiers: '' };
@@ -388,7 +436,7 @@ export class PluginService {
             const scope = target && this.store.memory.resolve(agentType, root, false);
             if (!target || !scope)
                 return { ok: true, status: 'NOT_BOUND', data: { agentType, root, spaceId, name: '', spaces }, error: null };
-            this.store.unbind(scope.id, spaceId);
+            this.unbind(scope.id, spaceId);
             return { ok: true, status: 'UNBOUND', data: { agentType, root, spaceId, name: target.name, spaces: this.store.spaces(scope.id) }, error: null };
         } catch (error) {
             return fail('UNAVAILABLE', this.error(error));
@@ -415,7 +463,7 @@ export class PluginService {
         return this.store.spaces(objectId);
     }
     async event(event: AgentEvent): Promise<EventResult> {
-        if (this.closed) return { sessionId: '', conversationId: null, context: '', overview: '', identifiers: '' };
+        if (this.closed || event.agentType === 'doubao-work') return { sessionId: '', conversationId: null, context: '', overview: '', identifiers: '' };
         if (!await this.activation(event)) return { sessionId: '', conversationId: null, context: '', overview: '', identifiers: '' };
         if (event.event === 'session-start') return this.sessionStarted(event);
         if (event.agentType === 'copilot-cli' && ['agentStop', 'sessionEnd'].includes(String(object(event.raw).hook_event_name))) this.copilot.enqueue(event);
@@ -436,7 +484,7 @@ export class PluginService {
         const scope = known ? this.store.memory.forSession(this.store.session(String(known.id))!)
             : parent ? this.store.memory.forSession(this.store.session(String(parent.id))!) : this.store.memory.resolve(event.agentType, event.cwd);
         if (!scope) return { sessionId: '', conversationId: null, context: '', overview: '', identifiers: '' };
-        const records = event.records?.filter(record => this.store.memory.allows(scope.id, this.store.memory.recordTime(record.raw)) && normalizeTaskTrace(event.agentType, record)?.message);
+        const records = event.records?.filter(record => this.store.memory.allows(scope.id, this.store.memory.recordTime(record.raw)) && (isTraceControl(record) || normalizeTaskTrace(event.agentType, record)?.message));
         // Lifecycle and naming notifications do not establish a task. A submitted
         // input may reserve its context before the transcript body is flushed.
         if (!known
@@ -546,21 +594,45 @@ export class PluginService {
         if (!this.store.spaceDomains(baseUrl, spaceId, connectionId)?.length) await this.loadSpaceDomains(spaceId, context);
         if (this.config.revision !== revision) throw new Error('云连接已变更，请重新绑定');
         const result = this.store.bind(objectId, spaceId, baseUrl, space?.space_name);
+        if (this.store.memory.get(objectId)?.agentType === 'doubao-work') await this.doubao.configure();
         if (!existing) void this.history.scan(objectId).catch(() => {});
         await this.refreshOverview(objectId, spaceId);
         return { ...result, overview: this.cachedOverview(objectId) };
+    }
+    unbind(scopeId: string, spaceId: string) {
+        const result = this.store.unbind(scopeId, spaceId);
+        if (this.store.memory.get(scopeId)?.agentType === 'doubao-work') void this.doubao.configure();
+        return result;
+    }
+    async searchDoubao(input: {nativeSessionId?: unknown; answerId?: unknown; query?: unknown}): Promise<SearchResult> {
+        const missing: SearchResult = {ok:false, status:'CONTEXT_MISSING', data:null, error:{message:'无法核对豆包当前会话、轮次与项目'}};
+        const {nativeSessionId,answerId,query} = input;
+        if (typeof query !== 'string' || !query.trim()) return {ok:false,status:'INVALID_QUERY',data:null,error:{message:'查询内容不能为空'}};
+        if (typeof nativeSessionId !== 'string' || typeof answerId !== 'string') return missing;
+        const turn = await this.doubao.current(nativeSessionId,answerId);
+        if (!turn) return missing;
+        const session = this.store.registerSession({agentType:'doubao-work', nativeSessionId, cwd:turn.root});
+        if (session.cwd !== turn.root || this.store.memory.forSession(session)?.root !== turn.root) return missing;
+        const existing = this.store.row('SELECT completedAt FROM turns WHERE sessionId=? AND nativeKey=?',session.id,turn.questionId);
+        if (existing?.completedAt) return missing;
+        const conversationId = this.store.startTurn(session.id,turn.questionId).id;
+        return this.search({sessionId:session.id,conversationId,query}, async () => {
+            const current = await this.doubao.current(nativeSessionId,answerId);
+            return current?.questionId === turn.questionId && current.root === turn.root && current.startedAt === turn.startedAt;
+        });
     }
     async search(input: {
         sessionId?: string;
         conversationId?: string;
         query?: string;
-    }): Promise<SearchResult> {
+    }, verifyDoubao?: () => Promise<boolean>): Promise<SearchResult> {
         const fail = (status: SearchStatus, message: string): SearchResult => ({ ok: false, status, data: null, error: { message } });
         if (typeof input.query !== 'string' || !input.query.trim())
             return fail('INVALID_QUERY', '查询内容不能为空');
         if (!input.sessionId || !input.conversationId || !this.store.validContext(input.sessionId, input.conversationId))
             return fail('CONTEXT_MISSING', '当前会话或轮次标识无效');
         const session = this.store.session(input.sessionId)!;
+        if (session.agentType === 'doubao-work' && !verifyDoubao) return fail('CONTEXT_MISSING', '需要豆包当前轮的宿主身份');
         const scope = this.store.memory.forSession(session);
         if (!scope) return fail('UNAVAILABLE', '当前 Agent 与项目未启用记忆');
         const binding = this.store.binding(session.objectId);
@@ -570,6 +642,7 @@ export class PluginService {
             const data = await this.cloud.call<{
                 topic_detail_list: Record<string, unknown>[];
             }>('search/memory', { user_id: this.config.value.userId, conversation_id: session.id, query: input.query, space_ids: binding.spaceIds, include_memory_view: ['project'] }, this.cloudContext(session, { conversationId: input.conversationId }));
+            if (verifyDoubao && !await verifyDoubao()) return fail('CONTEXT_MISSING', '豆包当前轮已变更');
             const current = this.store.binding(session.objectId);
             if (this.store.memory.forSession(session)?.enabledAt !== scope.enabledAt) return fail('UNAVAILABLE', '当前 Agent 与项目绑定已变更');
             if (current?.connectionId !== binding.connectionId || JSON.stringify(current.spaceIds) !== JSON.stringify(binding.spaceIds))
@@ -592,12 +665,12 @@ export class PluginService {
         return this.syncing;
     }
     private async runSync() {
-        await this.claude.flush();
-        await this.cursor.flush();
-        await this.copilot.flush();
-        await this.prime.flush();
+        for (const capture of [this.claude, this.cursor, this.copilot, this.prime]) {
+            if (this.closed) return;
+            await capture.flush();
+        }
         await this.captureCodex();
-        while (true) {
+        while (!this.closed) {
             let advanced = false;
             for (const [scopeId, job] of this.historyUploads) {
                 const scope = this.store.memory.get(scopeId);

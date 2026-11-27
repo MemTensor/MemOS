@@ -57,7 +57,8 @@ test('Claude captures each native message once, waits for Stop flush and retains
   assert.equal(batch.messages.filter(m => m.role === 'user').length, 1);
   assert.deepEqual(batch.messages.map(m => m.role), ['user','assistant','assistant','tool','assistant','tool','assistant','tool','assistant']);
   for (const expected of ['visible task reasoning','BUSINESS_RESULT','finished','memos-project-memory','MEMORY_RESULT','memos-pm search']) assert.ok(JSON.stringify(batch.messages).includes(expected));
-  assert.doesNotMatch(JSON.stringify({ raw, messages: batch.messages }), /SKILL_BODY/);
+  assert.match(JSON.stringify(raw), /SKILL_BODY/);
+  assert.doesNotMatch(JSON.stringify(batch.messages), /SKILL_BODY/);
   await s.hook('Stop', { last_assistant_message: 'finished' }); await s.service.sync();
   assert.equal(s.service.store.rows('SELECT * FROM claude_receipts').length, 0);
   assert.equal(s.service.store.batches().length, 1); assert.equal(s.uploads.length, 1);

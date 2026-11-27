@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Message } from '../../src/adapters/types.ts';
 
-test('historical materialization filters host blocks and Skill bodies before storage and upload', async t => {
+test('historical materialization keeps Skill bodies locally and filters them only from upload', async t => {
   const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
   const { PluginService } = await import('../../src/server/service.ts');
   const home = await mkdtemp(join(tmpdir(), 'pm-task-history-'));
@@ -35,7 +35,7 @@ test('historical materialization filters host blocks and Skill bodies before sto
   assert.doesNotMatch(JSON.stringify(rows), /HOST_/);
   assert.doesNotMatch(JSON.stringify(sent), /Actual skill contents/);
   assert.match(JSON.stringify(sent), /skill_name/);
-  assert.doesNotMatch(JSON.stringify(service.store.rows('SELECT raw,message FROM traces')), /Actual skill contents/);
+  assert.match(JSON.stringify(service.store.rows('SELECT raw,message FROM traces')), /Actual skill contents/);
   assert.equal(sent[0].messages[1].tool_calls[0].function.name, 'skill');
   assert.equal(sent[0].messages[1].tool_calls[0].id, 'read');
   assert.deepEqual(JSON.parse(sent[0].messages[1].tool_calls[0].function.arguments), { skill_name: 'demo' });

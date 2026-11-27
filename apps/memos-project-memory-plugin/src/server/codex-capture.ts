@@ -14,6 +14,36 @@ export interface CodexCaptureOptions { codexRoots?: string[] }
 type Header = { path: string; id: string; cwd: string; parent?: string; agentPath?: string; sourceKind: CodexSnapshot['sourceKind'] };
 type Source = { path: string; state: string | null; nativeSessionId: string | null; error: string | null; updatedAt: string };
 type Receipt = { id: string; event: string };
+type ReceiptEvent = { receipt: Receipt; event: AgentEvent };
+type SourceWrite = { path: string; state: CodexReaderState | null; error: string | null };
+type SourceRecovery = {
+    state?: CodexReaderState;
+    captured?: CodexSnapshot;
+    reuseUnchanged: boolean;
+    writeCheckpoint: boolean;
+};
+type SourceResult =
+    | { kind: 'ignored' }
+    | { kind: 'empty'; previouslySaved: boolean }
+    | { kind: 'readable' | 'quarantined' | 'emptied'; snapshot: CodexSnapshot; update?: SourceWrite }
+    | { kind: 'unavailable'; snapshot?: CodexSnapshot; update?: SourceWrite; retirementCandidate?: CodexSnapshot };
+
+function withGap(snapshot: CodexSnapshot, gap: string): CodexSnapshot {
+    const copy = structuredClone(snapshot);
+    copy.gaps.push(gap);
+    return copy;
+}
+
+function sourceError(path: string, state: CodexReaderState | undefined, saved: Source | undefined, error: string): SourceWrite | undefined {
+    return saved?.error === error ? undefined : { path, state: state ?? null, error };
+}
+function quarantinedSource(path: string, state: CodexReaderState, saved: Source | undefined): SourceResult {
+    return {
+        kind: 'quarantined', snapshot: withGap(state.parser.snapshot, 'source_identity_changed'),
+        update: sourceError(path, state, saved, `Codex 源身份发生变化，已隔离: ${path}`),
+    };
+}
+
 const now = () => new Date().toISOString();
 
 /** A matching session ID alone does not prove that an archive retained its history. */
@@ -45,6 +75,22 @@ function coversSource(replacement: CodexSnapshot, prior: CodexSnapshot): boolean
             return (oldStatus === 'pending' || oldStatus === newStatus) && Object.entries(evidence).every(([key, value]) => isDeepStrictEqual(value, nextEvidence[key as keyof typeof nextEvidence]));
         }));
     });
+}
+
+function reconcileSources(results: SourceResult[], startup: boolean) {
+    const readable = results.flatMap(result => result.kind === 'readable' ? [result.snapshot] : []);
+    const retired = new Set<string>();
+    for (const result of results) {
+        if (result.kind !== 'unavailable' || !result.retirementCandidate) continue;
+        const prior = result.retirementCandidate;
+        if (readable.some(next => coversSource(next, prior))) retired.add(prior.sourcePath);
+    }
+    const retained = results.flatMap(result =>
+        'snapshot' in result && result.snapshot && !retired.has(result.snapshot.sourcePath) ? [result.snapshot] : []);
+    const updates = results.flatMap(result => 'update' in result && result.update ? [result.update] : []);
+    const changedPaths = new Set(updates.map(update => update.path));
+    const changed = startup || updates.length > 0 || retired.size > 0 || results.some(result => result.kind === 'empty' && result.previouslySaved);
+    return { retired, retained, updates, changed, changedSnapshots: retained.filter(snapshot => changedPaths.has(snapshot.sourcePath)) };
 }
 
 /** Metadata discovery never follows directory symlinks or reads task bodies. */
@@ -130,32 +176,64 @@ export class CodexCapture {
         const events = receipts.map(receipt => ({ receipt, event: JSON.parse(receipt.event) as AgentEvent }));
         const previous = new Map((this.store.rows('SELECT path,state,nativeSessionId,error,updatedAt FROM codex_sources') as unknown as Source[]).map(source => [source.path, source]));
         if (!this.store.memory.all().some(scope => scope.agentType === 'codex-cli' && scope.spaceIds.length)) { this.pendingSources.clear(); return; }
-        const explicit = new Map<string, { session: string; parent?: string }>();
+        const selected = await this.selectSources(previous, events, forceDiscovery);
+        const results: SourceResult[] = [];
+        for (const path of [...selected].sort()) {
+            if (this.closed) return;
+            const saved = previous.get(path);
+            const recovery = this.recoverSource(path, saved);
+            try {
+                // A binding may have changed in another connection during recovery.
+                if (!this.scopeFor(this.headers.get(path)?.id ?? '')) {
+                    results.push(recovery.state ? quarantinedSource(path, recovery.state, saved) : { kind: 'ignored' });
+                    continue;
+                }
+                const read = await readCodexRollout(path, recovery.state);
+                if (this.closed) return;
+                // Finish the last read and commit in this continuation so a queued
+                // close cannot discard the batch after its records are admitted.
+                results.push(this.acceptRead(path, saved, recovery, read));
+            } catch (error) {
+                if (this.closed) return;
+                results.push(this.unavailableSource(path, saved, recovery.state, error));
+            }
+        }
+        if (this.closed) return;
+        const plan = reconcileSources(results, this.lastRead === 0);
+        if (plan.changed || receipts.length) this.commitSources(plan, events);
+    }
+    private async selectSources(previous: Map<string, Source>, events: ReceiptEvent[], forceDiscovery: boolean) {
+        const selected = new Set<string>();
+        const explicit = new Set<string>();
         for (const { event } of events) {
             const raw = object(event.raw);
             const main = textField(raw, 'transcript_path', 'transcriptPath');
-            if (main && isAbsolute(main)) explicit.set(resolve(main), { session: event.nativeSessionId });
+            if (main && isAbsolute(main)) explicit.add(resolve(main));
             const child = textField(raw, 'agent_transcript_path');
-            if (child && isAbsolute(child)) explicit.set(resolve(child), { session: textField(raw, 'agent_id', 'agentId') ?? '', parent: event.nativeSessionId });
+            if (child && isAbsolute(child)) explicit.add(resolve(child));
         }
-        const discover = forceDiscovery || receipts.length > 0 || Date.now() - this.lastDiscovery >= 10_000;
-        const paths = new Set([...previous.keys(), ...explicit.keys(), ...this.pendingSources.keys()]);
+        const discover = forceDiscovery || events.length > 0 || Date.now() - this.lastDiscovery >= 10_000;
+        const paths = new Set([...previous.keys(), ...explicit, ...this.pendingSources.keys()]);
         if (discover) {
-            for (const root of this.roots) for (const path of await sourceFiles(root)) paths.add(path);
+            for (const root of this.roots) {
+                const discovered = await sourceFiles(root);
+                if (this.closed) return selected;
+                for (const path of discovered) paths.add(path);
+            }
             this.lastDiscovery = Date.now();
         }
         for (const path of paths) {
-            if (this.closed) return;
             try {
                 const header = await sourceHeader(path);
+                if (this.closed) return selected;
                 if (header) this.headers.set(path, header);
             } catch (error) {
+                if (this.closed) return selected;
                 // Missing/partial newly discovered files remain retryable; known files
                 // are handled below as explicit capture gaps, not silently forgotten.
                 if (object(error).code !== 'ENOENT' && explicit.has(path)) this.store.diagnostic(`Codex 源头信息暂不可读: ${path}`);
             }
         }
-        const selected = new Set<string>();
         for (const header of this.headers.values()) if (this.scopeFor(header.id)) selected.add(header.path);
         // A replaced path must be quarantined using its header alone. Never read
         // a replacement body just because this path used to belong to a bound project.
@@ -165,95 +243,74 @@ export class CodexCapture {
             if (session && this.store.memory.forSession({ objectId: String(session.objectId), agentType: String(session.agentType) })) selected.add(path);
         }
         for (const path of this.pendingSources.keys()) if (!selected.has(path)) this.pendingSources.delete(path);
-        const snapshots: CodexSnapshot[] = [], readable: CodexSnapshot[] = [], missing: CodexSnapshot[] = [];
-        const updates: { path: string; state: CodexReaderState | null; error: string | null }[] = [];
-        // Reconcile persisted identities once after startup, even without new bytes.
-        let changed = this.lastRead === 0;
-        for (const path of [...selected].sort()) {
-            if (this.closed) return;
-            const saved = previous.get(path), state = saved?.state ? JSON.parse(saved.state) as CodexReaderState : this.pendingSources.get(path);
-            const scope = this.scopeFor(this.headers.get(path)?.id ?? '');
-            const rebound = !!saved && !!scope && (!!scope.enabledAt && scope.enabledAt > saved.updatedAt
-                || !!this.store.row('SELECT 1 FROM capture_windows WHERE scopeId=? AND endedAt>=? LIMIT 1', scope.id, saved.updatedAt));
-            const recover = this.lastRead === 0 || !!saved?.error || state?.version !== 3 || rebound;
-            const captured = recover ? this.capturedSnapshot(path) : undefined;
-            let restored = false;
-            if (state && captured) {
-                const turns = new Map(state.parser.snapshot.turns.map(turn => [turn.nativeTurnId, turn]));
-                for (const turn of captured.turns) {
-                    const prior = turns.get(turn.nativeTurnId), ids = new Set(prior?.records.map(record => record.sourceId) ?? []);
-                    if (turn.records.some(record => !ids.has(record.sourceId))) { turns.set(turn.nativeTurnId, turn); restored = true; }
-                }
-                if (restored) state.parser.snapshot.turns = [...turns.values()];
+        return selected;
+    }
+    private recoverSource(path: string, saved: Source | undefined): SourceRecovery {
+        const state = saved?.state ? JSON.parse(saved.state) as CodexReaderState : this.pendingSources.get(path);
+        const scope = this.scopeFor(this.headers.get(path)?.id ?? '');
+        const rebound = !!saved && !!scope && (!!scope.enabledAt && scope.enabledAt > saved.updatedAt
+            || !!this.store.row('SELECT 1 FROM capture_windows WHERE scopeId=? AND endedAt>=? LIMIT 1', scope.id, saved.updatedAt));
+        const recover = this.lastRead === 0 || !!saved?.error || state?.version !== 4 || rebound;
+        const captured = recover ? this.capturedSnapshot(path) : undefined;
+        let restored = false;
+        if (state && captured) {
+            const turns = new Map(state.parser.snapshot.turns.map(turn => [turn.nativeTurnId, turn]));
+            for (const turn of captured.turns) {
+                const prior = turns.get(turn.nativeTurnId), ids = new Set(prior?.records.map(record => record.sourceId) ?? []);
+                if (turn.records.some(record => !ids.has(record.sourceId))) { turns.set(turn.nativeTurnId, turn); restored = true; }
             }
-            try {
-                if (!this.scopeFor(this.headers.get(path)?.id ?? '')) {
-                    if (state) {
-                        const snapshot = structuredClone(state.parser.snapshot);
-                        snapshot.gaps.push('source_identity_changed'); snapshots.push(snapshot);
-                        const error = `Codex 源身份发生变化，已隔离: ${path}`;
-                        if (saved?.error !== error) { updates.push({ path, state, error }); changed = true; }
-                    }
-                    continue;
-                }
-                const read = await readCodexRollout(path, state);
-                if (!read.changed && saved && !recover) {
-                    // The verified reader already contains this binding window's
-                    // admitted records. Keep it available for archive/receipt
-                    // resolution without rebuilding or refiltering history.
-                    read.snapshot.turns = read.snapshot.turns.filter(turn => turn.records.length);
-                    snapshots.push(read.snapshot); readable.push(read.snapshot);
-                    continue;
-                }
-                const scope = this.scopeFor(read.snapshot.nativeSessionId);
-                if (!scope) continue;
-                this.filter(read.snapshot, scope.id, false, captured ?? state?.parser.snapshot);
-                this.filter(read.state.parser.snapshot, scope.id, true, captured ?? state?.parser.snapshot);
-                read.state.parser.pending = read.state.parser.pending.filter(item => this.store.memory.allows(scope.id, this.store.memory.recordTime(item.raw)));
-                const prior = state?.parser.snapshot;
-                if (prior && (read.snapshot.nativeSessionId !== prior.nativeSessionId || read.snapshot.cwd !== prior.cwd && !read.directoryUpgrade || read.snapshot.parentNativeSessionId !== prior.parentNativeSessionId)) {
-                    const quarantined = structuredClone(prior);
-                    quarantined.gaps.push('source_identity_changed'); snapshots.push(quarantined);
-                    const error = `Codex 源身份发生变化，已隔离: ${path}`;
-                    if (saved?.error !== error) { updates.push({ path, state: state!, error }); changed = true; }
-                    continue;
-                }
-                if (!read.snapshot.turns.some(turn => turn.records.length)) {
-                    if (prior && prior.turns.some(turn => turn.records.length)) {
-                        const snapshot = structuredClone(prior);
-                        snapshot.gaps.push(`source_empty_after_capture:${path}`); snapshots.push(snapshot);
-                        const error = `Codex 原有轨迹已变为空源，保留已有记录: ${path}`;
-                        if (saved?.error !== error) { updates.push({ path, state: state!, error }); changed = true; }
-                    } else {
-                        // Keep only the reader in memory: a later user submission
-                        // can populate this file without creating an empty SQLite session.
-                        this.pendingSources.set(path, read.state);
-                        if (saved) changed = true;
-                    }
-                    continue;
-                }
-                snapshots.push(read.snapshot);
-                readable.push(read.snapshot);
-                if (read.changed || restored || !saved || saved.error || rebound) { updates.push({ path, state: read.state, error: null }); changed = true; }
-            } catch (error) {
-                if (!saved && state && !state.parser.snapshot.turns.some(turn => turn.records.length) && object(error).code === 'ENOENT') {
-                    this.pendingSources.delete(path); this.headers.delete(path); continue;
-                }
-                const message = `Codex 源暂不可读: ${path} (${String(object(error).code ?? 'read_error')})`;
-                if (state) {
-                    const snapshot = structuredClone(state.parser.snapshot);
-                    snapshot.gaps.push(`source_unavailable:${path}`); snapshots.push(snapshot);
-                    // Unparsed bytes or unattributed pending records are evidence
-                    // that snapshot comparison alone cannot establish coverage.
-                    if (object(error).code === 'ENOENT' && state.byteOffset === state.observedSize && !state.parser.pending.length) missing.push(state.parser.snapshot);
-                }
-                if (!saved || saved.error !== message) { updates.push({ path, state: state ?? null, error: message }); changed = true; }
-            }
+            if (restored) state.parser.snapshot.turns = [...turns.values()];
         }
-        if (this.closed) return;
-        const retired = new Set(missing.filter(prior => readable.some(next => coversSource(next, prior))).map(prior => prior.sourcePath));
-        if (retired.size) changed = true;
-        if (!changed && !receipts.length) return;
+        return { state, captured, reuseUnchanged: !!saved && !recover,
+            writeCheckpoint: restored || !saved || !!saved.error || rebound };
+    }
+    private acceptRead(path: string, saved: Source | undefined, recovery: SourceRecovery,
+        read: Awaited<ReturnType<typeof readCodexRollout>>): SourceResult {
+        const { state, captured } = recovery;
+        if (!read.changed && recovery.reuseUnchanged) {
+            // The binding window has already admitted these records. Retain
+            // the snapshot for archive and receipt checks without rewriting it.
+            read.snapshot.turns = read.snapshot.turns.filter(turn => turn.records.length);
+            return { kind: 'readable', snapshot: read.snapshot };
+        }
+        const readScope = this.scopeFor(read.snapshot.nativeSessionId);
+        if (!readScope) return { kind: 'ignored' };
+        this.filter(read.snapshot, readScope.id, false, captured ?? state?.parser.snapshot);
+        this.filter(read.state.parser.snapshot, readScope.id, true, captured ?? state?.parser.snapshot);
+        read.state.parser.pending = read.state.parser.pending.filter(item => this.store.memory.allows(readScope.id, this.store.memory.recordTime(item.raw)));
+        const prior = state?.parser.snapshot;
+        if (state && prior && (read.snapshot.nativeSessionId !== prior.nativeSessionId || read.snapshot.cwd !== prior.cwd && !read.directoryUpgrade || read.snapshot.parentNativeSessionId !== prior.parentNativeSessionId)) {
+            return quarantinedSource(path, state, saved);
+        }
+        if (!read.snapshot.turns.some(turn => turn.records.length)) {
+            if (prior?.turns.some(turn => turn.records.length)) {
+                return { kind: 'emptied', snapshot: withGap(prior, `source_empty_after_capture:${path}`),
+                    update: sourceError(path, state, saved, `Codex 原有轨迹已变为空源，保留已有记录: ${path}`) };
+            }
+            // Keep the reader in memory until a user submission populates the file.
+            this.pendingSources.set(path, read.state);
+            return { kind: 'empty', previouslySaved: !!saved };
+        }
+        const update = read.changed || recovery.writeCheckpoint
+            ? { path, state: read.state, error: null } : undefined;
+        return { kind: 'readable', snapshot: read.snapshot, update };
+    }
+    private unavailableSource(path: string, saved: Source | undefined, state: CodexReaderState | undefined, error: unknown): SourceResult {
+        const code = object(error).code;
+        if (!saved && state && !state.parser.snapshot.turns.some(turn => turn.records.length) && code === 'ENOENT') {
+            this.pendingSources.delete(path);
+            this.headers.delete(path);
+            return { kind: 'ignored' };
+        }
+        const message = `Codex 源暂不可读: ${path} (${String(code ?? 'read_error')})`;
+        // Unread bytes and unattributed events prevent proving archive coverage.
+        const retirementCandidate = code === 'ENOENT' && state && state.byteOffset === state.observedSize && !state.parser.pending.length
+            ? state.parser.snapshot : undefined;
+        return { kind: 'unavailable', snapshot: state && withGap(state.parser.snapshot, `source_unavailable:${path}`),
+            retirementCandidate, update: sourceError(path, state, saved, message) };
+    }
+    private commitSources(plan: ReturnType<typeof reconcileSources>, events: ReceiptEvent[]) {
+        const { retired, updates, changed } = plan;
         this.store.db.exec('BEGIN');
         try {
             // Remove only source associations. Canonical traces and sent payloads
@@ -262,11 +319,9 @@ export class CodexCapture {
                 for (const table of ['codex_execution_sources', 'codex_event_sources', 'codex_source_meta']) this.store.db.prepare(`DELETE FROM ${table} WHERE sourcePath=?`).run(path);
                 this.store.db.prepare('DELETE FROM codex_sources WHERE path=?').run(path);
             }
-            const retainedSnapshots = snapshots.filter(snapshot => !retired.has(snapshot.sourcePath));
-            const changedPaths = new Set(updates.map(update => update.path));
             // Unchanged sources already exist in canonical storage. Reconcile all
             // identities, but do not rewrite every historical event on each append.
-            if (changed) this.store.applyCodexSnapshots(retainedSnapshots.filter(snapshot => changedPaths.has(snapshot.sourcePath)), { prepareUploads: false, requireBinding: true });
+            if (changed) this.store.applyCodexSnapshots(plan.changedSnapshots, { prepareUploads: false, requireBinding: true });
             for (const update of updates) {
                 if (retired.has(update.path)) continue;
                 this.store.db.prepare(`INSERT INTO codex_sources(path,state,nativeSessionId,error,updatedAt) VALUES(?,?,?,?,?)
@@ -280,7 +335,7 @@ export class CodexCapture {
                     this.store.db.prepare('DELETE FROM codex_receipts WHERE id=?').run(receipt.id);
                     continue;
                 }
-                const sources = retainedSnapshots.filter(snapshot => snapshot.nativeSessionId === event.nativeSessionId);
+                const sources = plan.retained.filter(snapshot => snapshot.nativeSessionId === event.nativeSessionId);
                 const found = sources.find(snapshot => snapshot.sourceKind !== 'unknown');
                 const resolved = found?.sourceKind === 'background' || !!found && (!event.nativeTurnId || sources.some(snapshot => snapshot.turns.some(turn => turn.nativeTurnId === event.nativeTurnId)));
                 this.store.db.prepare('UPDATE codex_receipts SET status=?,error=? WHERE id=?').run(resolved ? found!.sourceKind === 'background' ? 'filtered' : 'processed' : 'pending', resolved ? null : '等待原始会话和对应执行轮落盘', receipt.id);
@@ -324,9 +379,16 @@ export class CodexCapture {
         return undefined;
     }
     async activation(input: { agentType: string; cwd: string; nativeSessionId?: string; parentNativeSessionId?: string }): Promise<boolean> {
-        if (!input.nativeSessionId) return false;
-        for (const root of this.roots) for (const path of await sourceFiles(root)) {
-            try { const header = await sourceHeader(path); if (header) this.headers.set(path, header); } catch { /* A partial header is retried on the next hook. */ }
+        if (this.closed || !input.nativeSessionId) return false;
+        for (const root of this.roots) {
+            const paths = await sourceFiles(root);
+            if (this.closed) return false;
+            for (const path of paths) {
+                let header;
+                try { header = await sourceHeader(path); } catch { /* A partial header is retried on the next hook. */ }
+                if (this.closed) return false;
+                if (header) this.headers.set(path, header);
+            }
         }
         return !!this.scopeFor(input.nativeSessionId);
     }
@@ -367,9 +429,10 @@ export class CodexCapture {
         });
     }
     async context(event: AgentEvent) {
-        if (!await this.activation(event)) return undefined;
+        if (!await this.activation(event) || this.closed) return undefined;
         this.enqueue(event);
         await this.flush(true);
+        if (this.closed) return undefined;
         const known = this.store.contextForCodex(event.nativeSessionId, event.nativeTurnId);
         if (known) return known;
         if (event.event === 'turn-start' && event.nativeTurnId) {

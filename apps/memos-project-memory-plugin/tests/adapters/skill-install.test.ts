@@ -15,8 +15,8 @@ async function fixture(t: test.TestContext) {
   return { home, cwd: home };
 }
 
-test('every registered adapter deploys all five Skills with its native commands and uninstalls owned files', async t => {
-  for (const profile of profiles) {
+test('adapters supporting Space management deploy all five Skills with its native commands and uninstalls owned files', async t => {
+  for (const profile of profiles.filter(profile => profile.id !== 'doubao-work')) {
     const options = await fixture(t), result = await installAdapter(profile.id, options);
     const paths = result.files.filter(path => path.endsWith('.md'));
     assert.deepEqual(paths.filter(path => path.endsWith('/SKILL.md')).map(path => /\/(memos-[^/]+)\/SKILL.md$/.exec(path)![1]).sort(), skills.map(name => `memos-${name}`).sort(), profile.id);

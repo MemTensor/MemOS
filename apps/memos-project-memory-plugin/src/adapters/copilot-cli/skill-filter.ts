@@ -16,6 +16,6 @@ function identify(tool: string, value: unknown): SkillRead | undefined {
   return undefined;
 }
 
-export function filterCopilotSkills<T extends TraceInput>(records: T[]): T[] {
-  return filterSkillRecords(records, identify);
+export function filterCopilotSkills<T extends TraceInput>(records: T[], skills?: ReadonlySet<string>): T[] {
+  return filterSkillRecords(records, identify, skills);
 }

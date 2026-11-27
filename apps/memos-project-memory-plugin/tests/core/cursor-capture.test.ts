@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile, appendFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, appendFile, stat, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
@@ -134,6 +134,11 @@ test('Cursor reconciles a unique Skill read without a chat store and leaves repe
     assert.equal(f.uploads.length, matched ? 1 : 0);
     if (!matched) assert.match(batch.error ?? '', /工具调用缺少可靠 id.*skill/);
     assert.doesNotMatch(JSON.stringify(batch.messages), /private|SKILL\.md/);
+    const stored = f.service.store.rows('SELECT sourceId,message FROM traces').map(row => ({ sourceId: String(row.sourceId), message: JSON.parse(String(row.message)) }));
+    const hookCall = stored.find(row => row.sourceId === 'hook:cursor-session:tool-call:known')?.message.tool_calls?.[0];
+    assert.equal(hookCall?.function.name, 'Read');
+    assert.deepEqual(JSON.parse(hookCall?.function.arguments), input);
+    assert.equal(stored.find(row => row.message.tool_call_id === 'known')?.message.content, 'private');
   }
 });
 
@@ -217,3 +222,84 @@ test('Cursor keeps ambiguous native calls and calls found only in other turns bl
     assert.equal(f.uploads.length, 0);
   }
 });
+
+test('Cursor checkpoints a recovered native boundary while waiting for the end and reuses it after restart', async t => {
+  const f = await fixture(t);
+  const oldEnd = line({ type: 'turn_ended', status: 'success' });
+  const offset = (await stat(f.path)).size - Buffer.byteLength(oldEnd);
+  await f.hook('beforeSubmitPrompt', { prompt: 'recovered task' });
+  // A receipt from a submission without file evidence must recover its boundary from the native generation.
+  f.service.store.db.exec("UPDATE cursor_receipts SET event=json_remove(event,'$.source','$.observed')");
+  await appendFile(f.path, line({ ...native('user', 'recovered task'), generation_id: 'turn-1' }));
+  await f.hook('stop');
+  const receipt = () => f.service.store.row("SELECT json_extract(event,'$.source.offset') AS offset,json_extract(event,'$.source.terminal') AS terminal,error FROM cursor_receipts");
+  assert.equal(receipt()?.offset, offset);
+  assert.equal(receipt()?.terminal, oldEnd);
+  assert.equal(receipt()?.error, 'Cursor 等待本轮 turn_ended 完整落盘');
+  assert.equal(f.service.store.batches().length, 0);
+
+  f.restart();
+  assert.equal(receipt()?.offset, offset);
+  await appendFile(f.path, line(native('assistant', 'recovered answer')) + line({ type: 'turn_ended', status: 'success' }));
+  await f.service.sync();
+  assert.deepEqual(f.uploads.flatMap(upload => upload.messages.map(message => message.content)), ['recovered task', 'recovered answer']);
+  assert.equal(receipt(), undefined);
+});
+
+test('Cursor rolls back a failed finalization including Hook replacement and retries the same receipt once', async t => {
+  const f = await fixture(t);
+  await f.hook('beforeSubmitPrompt', { prompt: 'retry task' });
+  await f.hook('afterAgentResponse', { text: 'retry answer' });
+  const store = f.service.store;
+  const traces = () => store.rows('SELECT id,sourceId,message,raw,batchId FROM traces ORDER BY id');
+  const before = traces();
+  assert.ok(before.some(row => JSON.parse(String(row.raw)).hook_event_name === 'afterAgentResponse'));
+  await appendFile(f.path, [native('user', 'retry task'), native('assistant', 'retry answer'), { type: 'turn_ended', status: 'success' }].map(line).join(''));
+  store.db.exec("CREATE TEMP TRIGGER reject_cursor_commit BEFORE DELETE ON cursor_receipts BEGIN SELECT RAISE(ABORT, 'injected commit failure'); END");
+  await f.hook('stop');
+  assert.deepEqual(traces(), before);
+  assert.equal(store.row('SELECT completedAt FROM turns')?.completedAt, null);
+  assert.equal(store.row('SELECT error FROM cursor_receipts')?.error, 'injected commit failure');
+  assert.equal(store.batches().length, 0);
+  assert.equal(f.uploads.length, 0);
+
+  store.db.exec('DROP TRIGGER reject_cursor_commit');
+  await f.service.sync();
+  await f.service.sync();
+  assert.deepEqual(f.uploads.map(upload => upload.messages.map(message => message.content)), [['retry task', 'retry answer']]);
+  assert.equal(store.batches().length, 1);
+  assert.equal(store.row('SELECT id FROM cursor_receipts'), undefined);
+  assert.equal(traces().filter(row => JSON.parse(String(row.raw)).hook_event_name === 'afterAgentResponse').length, 0);
+});
+
+for (const [scenario, expectedError] of [
+  ['missing', 'Cursor 尚未定位本轮原生文件'],
+  ['ambiguous', 'Cursor 会话文件存在多个候选路径，无法唯一定位'],
+] as const) {
+  test(`Cursor persists the ${scenario} transcript lookup error before a queued shutdown`, async t => {
+    const f = await fixture(t), home = dirname(f.path);
+    const identity = { agentType: 'cursor-cli', nativeSessionId: 'cursor-session', nativeTurnId: 'turn-1', cwd: home };
+    if (scenario === 'ambiguous') {
+      for (const name of ['one', 'two']) {
+        const folder = join(home, '.cursor/projects', name);
+        await mkdir(folder, { recursive: true });
+        await writeFile(join(folder, '.workspace-trusted'), JSON.stringify({ workspacePath: home }));
+      }
+    }
+    const raw = { timestamp: new Date().toISOString() };
+    const turn = await f.service.cursor.context({ ...identity, event: 'turn-start', raw });
+    assert.ok(turn?.conversationId);
+    const stop = f.service.cursor.context({ ...identity, event: 'turn-end', raw });
+    // The queued stop gets one synchronous turn to locate its transcript before shutdown.
+    queueMicrotask(() => f.restart());
+    await stop;
+
+    const receiptError = () => f.service.store.row('SELECT error FROM cursor_receipts WHERE id=?', turn.conversationId)?.error;
+    const diagnostics = () => f.service.store.rows('SELECT id FROM diagnostics WHERE message=?', `Cursor 轨迹补读: ${expectedError}`);
+    assert.equal(receiptError(), expectedError);
+    assert.equal(diagnostics().length, 1);
+    await f.service.cursor.flush();
+    assert.equal(receiptError(), expectedError);
+    assert.equal(diagnostics().length, 1);
+  });
+}
